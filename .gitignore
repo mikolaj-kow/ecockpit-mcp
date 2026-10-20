@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ecockpit-mcp: file-protocol work dir (cmd/result/heartbeat/logs) + scratch
+tmp/
+tmp_*
+
+# ZCode session artifacts
+.zcode/
