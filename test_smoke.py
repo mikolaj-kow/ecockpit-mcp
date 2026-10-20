@@ -67,9 +67,28 @@ async def main():
             print("[smoke] download refused without confirm: {}".format(
                 refused.get("refused")))
 
+            res = await session.call_tool("ecockpit_write",
+                                          {"values": {"GVL.x": True}})
+            refused = json.loads(res.content[0].text)
+            print("[smoke] write refused without confirm: {}".format(
+                refused.get("refused")))
+
             if not status.get("armed"):
                 print("[smoke] server not armed - skipping build test")
                 return
+
+            res = await session.call_tool("ecockpit_clear_messages", {})
+            print("[smoke] clear_messages ok={}".format(
+                json.loads(res.content[0].text).get("ok")))
+
+            try:
+                res = await session.call_tool("ecockpit_state", {})
+                st = json.loads(res.content[0].text)
+                print("[smoke] state ok={} value={}".format(
+                    st.get("ok"), st.get("value")))
+            except Exception as exc:
+                print("[smoke] state failed (PLC reachable?): {e}".format(
+                    e=str(exc)[:80]))
             print("[smoke] calling ecockpit_build (this compiles, ~30-60 s)...")
             res = await session.call_tool("ecockpit_build", {"timeout_s": 900})
             data = json.loads(res.content[0].text)

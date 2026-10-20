@@ -93,20 +93,55 @@ Client config (ZCode / any MCP client):
 
 ## Tools
 
+Build & project:
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_build(skip_import?, all_messages?)` | re-import + cleanup + compile; structured diagnostics (`harvest`: C-code, severity, POU, line) |
+| `ecockpit_rebuild(all_messages?)` | FULL rebuild (`app.rebuild()`) — scripted Build → Clean; fixes C0106 on grown GVL arrays |
+| `ecockpit_import` / `ecockpit_compile` | halves of build, standalone |
+| `ecockpit_export(dir?)` | PLCopen XML export (reverse of import; defaults to `<project root>/plcopensrc-export`) |
+| `ecockpit_snapshot(version?)` | project copy to `<snapshots>/<project>_<version>.ecp` |
+| `ecockpit_save_archive(path?)` | single-file `.projectarchive` backup |
+| `ecockpit_status` | project/application/device info (no PLC login) |
+
+Online (PLC):
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_read(variable, device?)` | online variable read (`.env` PLC creds) |
+| `ecockpit_write(values, force?, confirm)` | **destructive** — write/force values on the RUNNING PLC; confirm-gated, reads back after write |
+| `ecockpit_unforce_all` | release all forced values |
+| `ecockpit_state(device?)` | login/application/operation state readout |
+| `ecockpit_download(confirm)` | **destructive** — replaces the RUNNING PLC app; `confirm=true` only on explicit owner request |
+| `ecockpit_stop(confirm)` | **destructive** — stops the running PLC application |
+| `ecockpit_disconnect(force?)` | PLC logout (`force=true` → forced_disconnect) |
+
+PLC file system:
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_plc_ls(directory?)` | list a PLC directory |
+| `ecockpit_plc_get(remote, local)` | download a file from the PLC |
+| `ecockpit_plc_put(local, remote, confirm)` | **destructive** — upload a file onto the PLC |
+| `ecockpit_plc_rm(remote, confirm)` | **destructive** — delete a PLC file |
+| `ecockpit_upload_source(path?)` | read the source project archive back from the PLC |
+
+Diagnostics:
+
 | Tool | Notes |
 |---|---|
 | `ecockpit_server_status` | armed? heartbeat age, last result |
-| `ecockpit_build(skip_import?, all_messages?)` | re-import + cleanup + compile; structured diagnostics (`harvest`: C-code, severity, POU, line) |
-| `ecockpit_import` / `ecockpit_compile` | halves of build, standalone |
-| `ecockpit_status` | project/application/device info |
-| `ecockpit_read(variable, device?)` | online variable read (`.env` PLC creds on the e!COCKPIT machine) |
 | `ecockpit_messages` / `ecockpit_probe` | scripting-API debugging aids |
-| `ecockpit_snapshot(version?)` | project copy to `<snapshots>/<project>_<version>.ecp` |
-| `ecockpit_disconnect` | PLC logout |
-| `ecockpit_download(confirm)` | **destructive** — replaces the RUNNING PLC app; only on explicit owner request, `confirm=true` |
+| `ecockpit_clear_messages()` | wipe the message store — call before a build for a fresh harvest |
 
-`build`/`compile` return `harvest` (structured compiler messages) and
-`log_tail` inline on failure, so the model usually needs no second read.
+All destructive tools (`download`, `write`, `stop`, `plc_put`, `plc_rm`)
+are confirm-gated at BOTH the MCP layer and the executor and carry
+`destructiveHint` annotations.
+
+`build`/`compile`/`rebuild` return `harvest` (structured compiler messages)
+and `log_tail` inline on failure, so the model usually needs no second
+read.
 
 ## Prerequisite
 
@@ -117,8 +152,11 @@ file -> select it). Without it, tools fail with a structured
 
 ## ScriptEngine API reference
 
-`docs/SCRIPTENGINE_API.md` — distilled + live-verified reference for the
-e!COCKPIT ScriptEngine (IScriptApplication.build/rebuild, IScriptMessage
-structured fields, the getattr()-fails-on-interop-objects gotcha, project
-save/save_as semantics, online APIs). Source: the installed
-`ScriptEngine.chm`.
+- `docs/SCRIPTENGINE_API.md` — distilled + live-verified reference for the
+  e!COCKPIT ScriptEngine (IScriptApplication.build/rebuild, IScriptMessage
+  structured fields, the getattr()-fails-on-interop-objects gotcha, project
+  save/save_as semantics, online APIs). Source: the installed
+  `ScriptEngine.chm`.
+- `docs/SCRIPTENGINE_NOT_EXPOSED.md` — what the CHM documents but these
+  tools deliberately do not expose (full-audit inventory: 217 interfaces,
+  ~580 methods / ~830 properties), with candidates for future tools.

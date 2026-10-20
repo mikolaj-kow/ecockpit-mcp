@@ -109,13 +109,23 @@ _TIMEOUTS = {
     "build": 900,
     "import": 600,
     "compile": 900,
+    "rebuild": 1200,
     "status": 120,
     "read": 180,
+    "write": 180,
+    "unforce": 120,
     "download": 600,
     "disconnect": 120,
+    "stop": 120,
+    "state": 120,
     "probe": 300,
     "messages": 300,
     "snapshot": 300,
+    "export": 600,
+    "plcfs": 300,
+    "upload_source": 600,
+    "save_archive": 300,
+    "clear_messages": 60,
 }
 _DEFAULT_TIMEOUT = 300
 
@@ -222,9 +232,11 @@ mcp = MCPServer(
         "instance via its command server - it must be armed (FILE -> "
         "Scripting -> Execute script file -> ecockpit_cmd_server.py). "
         "Build results include the structured compiler diagnostics "
-        "(harvest: C-code, severity, POU, line). ecockpit_download replaces "
-        "the RUNNING application on the live PLC - only call it on an "
-        "explicit owner request, with confirm=true."))
+        "(harvest: C-code, severity, POU, line). Destructive operations "
+        "(ecockpit_download, ecockpit_write, ecockpit_stop, "
+        "ecockpit_plc_put, ecockpit_plc_rm) touch the RUNNING PLC and are "
+        "confirm-gated - only call them on an explicit owner request, with "
+        "confirm=true."))
 
 
 @mcp.tool(
@@ -271,11 +283,35 @@ def ecockpit_import(timeout_s: int = 600) -> str:
 
 
 @mcp.tool(
+    description="Export the application objects of the open project back "
+                "to PLCopen XML (reverse of import; IExportReporter "
+                "captures export errors). dir defaults to "
+                "<project root>/plcopensrc-export - point it at your "
+                "plcopensrc source tree only when you intentionally want "
+                "to update the sources.")
+def ecockpit_export(dir: str = "", timeout_s: int = 600) -> str:
+    args = {"dir": dir} if dir else {}
+    return json.dumps(_run("export", args, timeout_s), indent=2)
+
+
+@mcp.tool(
     description="Compile only (no XML re-import). Same diagnostics and "
                 "IGNORE_CODES filtering as build (all_messages=true "
                 "bypasses).")
 def ecockpit_compile(all_messages: bool = False, timeout_s: int = 900) -> str:
     return json.dumps(_run("compile", {"all_messages": bool(all_messages)},
+                           timeout_s), indent=2)
+
+
+@mcp.tool(
+    description="FULL rebuild (app.rebuild() - scripted Build -> Clean): "
+                "compile from scratch without XML re-import. Fixes grown "
+                "GVL arrays failing incremental builds with C0106 'out of "
+                "global data memory'. Slower than compile (~1-3 min). Same "
+                "diagnostics and IGNORE_CODES filtering as build.")
+def ecockpit_rebuild(all_messages: bool = False,
+                     timeout_s: int = 1200) -> str:
+    return json.dumps(_run("rebuild", {"all_messages": bool(all_messages)},
                            timeout_s), indent=2)
 
 
@@ -300,11 +336,80 @@ def ecockpit_read(variable: str, device: str = "") -> str:
     return json.dumps(_run("read", args), indent=2)
 
 
+def _iec_literal(value):
+    """Format a JSON value as an IEC 61131 literal string."""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    return str(value)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request. Write "
+                "values to variables on the RUNNING PLC (logs in, "
+                "prepares values, writes, reads back, disconnects). "
+                "values maps application-relative paths to IEC literals: "
+                "booleans as true/false, numbers as-is, strings passed "
+                "through verbatim (quote STRING values yourself, e.g. "
+                "\"'hello'\"). force=true forces the values (they stay "
+                "forced until ecockpit_unforce_all). Pass confirm=true, "
+                "never without an explicit owner instruction.")
+def ecockpit_write(values: dict, device: str = "", force: bool = False,
+                   confirm: bool = False, timeout_s: int = 180) -> str:
+    if not isinstance(values, dict) or not values:
+        raise ValueError("values must be a non-empty {variable: value} map")
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "write refused - it changes values on the RUNNING "
+                     "PLC application; call again with confirm=true only "
+                     "on an explicit owner request",
+        }, indent=2)
+    prepared = {str(k): _iec_literal(v) for k, v in values.items()}
+    args = {"values": prepared, "force": bool(force), "confirm": True}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("write", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    description="Release ALL forced values on the PLC (unforce_all_values). "
+                "Safe direction: restores normal variable writes.")
+def ecockpit_unforce_all(device: str = "") -> str:
+    args = {"device": device} if device else {}
+    return json.dumps(_run("unforce", args), indent=2)
+
+
+@mcp.tool(
+    description="Online state readout of the PLC (logs in briefly, then "
+                "disconnects): login state, application_state, "
+                "operation_state, device connection. CAUTION: if the PLC "
+                "is unreachable this can block the in-instance command "
+                "server on a GUI dialog (symptom: heartbeat goes stale, "
+                "tools report not-armed until the dialog is dismissed).")
+def ecockpit_state(device: str = "") -> str:
+    args = {"device": device} if device else {}
+    return json.dumps(_run("state", args), indent=2)
+
+
 @mcp.tool(
     description="Dump the message-store category map (scripting API "
                 "debugging aid) and the active IGNORE_CODES filter list.")
 def ecockpit_messages() -> str:
     return json.dumps(_run("messages", {}), indent=2)
+
+
+@mcp.tool(
+    description="Clear the e!COCKPIT scripting message store. Call before "
+                "a build/compile to guarantee the harvest contains ONLY "
+                "that run's diagnostics (no stale messages from earlier "
+                "builds or GUI actions).")
+def ecockpit_clear_messages() -> str:
+    return json.dumps(_run("clear_messages", {}), indent=2)
 
 
 @mcp.tool(
@@ -321,9 +426,35 @@ def ecockpit_snapshot(version: str = "") -> str:
 
 @mcp.tool(
     description="Log out of the PLC (releases the login that blocks XML "
-                "imports).")
-def ecockpit_disconnect() -> str:
-    return json.dumps(_run("disconnect", {}), indent=2)
+                "imports). force=true uses forced_disconnect when a plain "
+                "logout hangs.")
+def ecockpit_disconnect(force: bool = False) -> str:
+    return json.dumps(_run("disconnect", {"force": bool(force)}), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request. STOP the "
+                "running application on the live PLC and report the "
+                "resulting operation state. Pass confirm=true, never "
+                "without an explicit owner instruction.")
+def ecockpit_stop(confirm: bool = False, device: str = "",
+                  timeout_s: int = 120) -> str:
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "stop refused - it STOPS the running PLC "
+                     "application; call again with confirm=true only on "
+                     "an explicit owner request",
+        }, indent=2)
+    args = {"confirm": True}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("stop", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -331,6 +462,108 @@ def ecockpit_disconnect() -> str:
                 "tmp/logs/ecockpit_api_probe.txt for API discovery.")
 def ecockpit_probe() -> str:
     return json.dumps(_run("probe", {}), indent=2)
+
+
+@mcp.tool(
+    description="List a directory on the PLC file system (logs in, lists, "
+                "disconnects). Entries carry name, is_directory, size, "
+                "last_modification_time.")
+def ecockpit_plc_ls(directory: str = "/", device: str = "",
+                    timeout_s: int = 300) -> str:
+    args = {"op": "ls", "remote": directory or "/"}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    description="Download a file FROM the PLC to this machine (read-only "
+                "on the PLC). remote is the PLC path, local the host "
+                "destination (overwrites).")
+def ecockpit_plc_get(remote: str, local: str, device: str = "",
+                     timeout_s: int = 300) -> str:
+    if not remote or not local:
+        raise ValueError("remote (PLC path) and local (host path) required")
+    args = {"op": "get", "remote": remote, "local": local}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request. Upload a "
+                "file from this machine ONTO the PLC file system "
+                "(overwrites). Pass confirm=true, never without an "
+                "explicit owner instruction.")
+def ecockpit_plc_put(local: str, remote: str, device: str = "",
+                     confirm: bool = False, timeout_s: int = 300) -> str:
+    if not local or not remote:
+        raise ValueError("local (host path) and remote (PLC path) required")
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "plc_put refused - it writes a file onto the PLC; "
+                     "call again with confirm=true only on an explicit "
+                     "owner request",
+        }, indent=2)
+    args = {"op": "put", "local": local, "remote": remote, "confirm": True}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request. DELETE a "
+                "file on the PLC file system. Pass confirm=true, never "
+                "without an explicit owner instruction.")
+def ecockpit_plc_rm(remote: str, device: str = "", confirm: bool = False,
+                    timeout_s: int = 300) -> str:
+    if not remote:
+        raise ValueError("remote (PLC path) required")
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "plc_rm refused - it deletes a file on the PLC; "
+                     "call again with confirm=true only on an explicit "
+                     "owner request",
+        }, indent=2)
+    args = {"op": "rm", "remote": remote, "confirm": True}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    description="Read the source project archive back from the PLC "
+                "(upload_source; useful to recover what is actually "
+                "running). path defaults to "
+                "<work dir>/plc_source_upload.projectarchive.")
+def ecockpit_upload_source(path: str = "", device: str = "",
+                           timeout_s: int = 600) -> str:
+    args = {"path": path} if path else {}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("upload_source", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    description="Save the open project as a single-file .projectarchive "
+                "(backup; the .ecp snapshot stays the plain-project "
+                "counterpart). path defaults to "
+                "<snapshots>/<project>_<timestamp>.projectarchive.")
+def ecockpit_save_archive(path: str = "", timeout_s: int = 300) -> str:
+    args = {"path": path} if path else {}
+    return json.dumps(_run("save_archive", args, timeout_s), indent=2)
 
 
 @mcp.tool(

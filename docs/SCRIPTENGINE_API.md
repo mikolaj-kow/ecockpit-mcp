@@ -54,6 +54,10 @@ applications in the primary project.
   in the store and must be filtered out when harvesting.
 - `system.process_messageloop()` — UI-loop pump; not needed for message
   visibility.
+- `system.clear_messages(category_guid)` — clears ONE category (probed
+  live: the 0-arg call raises TypeError; iterate `get_message_categories()`
+  to wipe the store). Exposed as the MCP `ecockpit_clear_messages` tool —
+  call before a build to guarantee a fresh harvest.
 - There is **no** `get_message_log` / `get_messages_count` (web articles
   claiming so are wrong for this build).
 
@@ -80,6 +84,14 @@ Build log rendering used by the executor:
 - `save_as(path, password=None)` — saves under a **new filename**
   (RETARGETS the open project; password optional, re-encrypts when given).
   Avoid for snapshots — copy the file instead.
+- `save_archive(path)` — single-file `.projectarchive` backup
+  (→ `ecockpit_save_archive`).
+- `export_xml(reporter, objects, path, recursive)` — PLCopen XML export
+  (→ `ecockpit_export`); the IScriptProject2 overload adds a 5th
+  `export_folder_structure` bool. `objects` takes a Python list of script
+  objects (e.g. `[application]`, recursive). IExportReporter callbacks:
+  `error(message)`, `warning(message)`, `nonexportable(obj)`, `aborting`
+  property.
 - `path` — the on-disk project path (prefer over disk-searching).
 - `active_application`, `devices`, `find(name, recursive=True)`,
   `get_device(name)`, `get_children(...)`.
@@ -94,9 +106,41 @@ Build log rendering used by the executor:
 - `device.connect()` / `disconnect()` / `start()` / `stop()` /
   `is_simulated` / `ip_address` / `read_parameter(...)` /
   `write_parameter(...)`; `project.active_application` for the online app.
+- `forced_disconnect()` (IScriptOnlineDevice2) — logout that cannot hang;
+  exposed as `ecockpit_disconnect(force=true)`.
 - `IScriptOnlineApplication.login(OnlineChangeOption, delete_foreign_apps)`
   exists per docs (richer than the WAGO samples show) — candidate for
   explicit online-change control later.
+
+### Prepared values — online writes (→ `ecockpit_write` / `ecockpit_unforce_all`)
+
+`set_prepared_value(expression, value)` stages a write (value is an IEC
+literal STRING: `"TRUE"`, `"42"`, `"'text'"`); then exactly one of:
+
+- `write_prepared_values()` — one-shot write,
+- `force_prepared_values()` — values stay forced,
+- `unforce_all_values()` — release all forces.
+
+Readbacks: `get_prepared_value(expression)`, `get_prepared_expressions()`.
+State properties: `is_logged_in`, `application_state` (ApplicationState),
+`operation_state` (OperatingState), `timeout` (→ `ecockpit_state`).
+`source_download()` writes the source project to the PLC (NOT exposed —
+`ecockpit_download` covers the app-deployment case).
+
+### PLC file system (IScriptOnlineDevice4 → `ecockpit_plc_ls/get/put/rm`)
+
+MIND THE ARGUMENT ORDER (from the CHM):
+
+- `download_file(local_file, remote_file, force_overwrite)` — PLC → host
+  (local first!)
+- `upload_file(remote_file, local_file, force_overwrite)` — host → PLC
+  (remote first!)
+- `get_file_list_of_directory(remote_dir)` → `IScriptDirectoryInfo[]`
+  (`name`, `is_directory`, `is_file`, `size`, `last_modification_time`)
+- `delete_file(remote_file)`
+
+`upload_source(archive_path)` (IScriptOnlineDevice3) reads the source
+project archive back from the PLC (→ `ecockpit_upload_source`).
 
 ## Not in this build (probed live — do not retry)
 
@@ -106,3 +150,7 @@ Build log rendering used by the executor:
 `project.get_name` (but `Application.get_name` EXISTS).
 The widely-copied "CODESYS V3.5 scripting" web article describing
 `build.execute()`/`has_errors()` does not match this API.
+
+The full CHM surface (217 interfaces, ~580 methods / ~830 properties) vs
+what this toolset deliberately exposes is inventoried in
+[SCRIPTENGINE_NOT_EXPOSED.md](SCRIPTENGINE_NOT_EXPOSED.md).

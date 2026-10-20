@@ -14,15 +14,29 @@ Commands (request = {"id": ..., "cmd": ..., "args": {...}}):
     build      re-import XMLs + stale-POU cleanup + compile (default)
     import     re-import XMLs + cleanup only, no compile
     compile    compile only, no import (old --skip-import)
+    rebuild    FULL rebuild (app.rebuild(); scripted Build -> Clean)
     status     project/application/device names, ip, simulated flag
     read       read one variable online.  args: {"path": "GVL.var"}
                (optional "device": name). Requires PLC credentials.
+    write      write/force values online. args: {"values": {expr: literal},
+               "force": bool, "confirm": true}. DANGEROUS - confirm-gated.
+    unforce    release all forced values. args: {} (optional "device")
     download   connect, create boot application ON the PLC (replaces the
                running app!), start it, disconnect. args: {"confirm": true}
                and optional "device". Requires PLC credentials + confirm.
-    disconnect log out of the PLC (optional "device").
+    disconnect log out of the PLC (optional "device", "force": true for
+               forced_disconnect).
+    stop       STOP the running PLC application. args: {"confirm": true}
+    state      online state readout (login/app/operation state, device)
     messages   dump the message-store category map (scripting API debugging)
     snapshot   save + copy the open project to <snapshots>/<project>_<v>.ecp
+    export     export the application to PLCopen XML. args: {"dir": ...}
+    plcfs      PLC file system: args {"op": "ls"|"get"|"put"|"rm", ...};
+               put/rm need "confirm": true (modify PLC files)
+    upload_source  read the source project archive back from the PLC.
+               args: {"path": host archive}
+    save_archive   save the project as .projectarchive. args: {"path": ...}
+    clear_messages  wipe the scripting message store (fresh-harvest aid)
     probe      dump dir() of the scripting API objects to
                tmp/logs/ecockpit_api_probe.txt (API-surface discovery).
 
@@ -1036,6 +1050,40 @@ def make_import_reporter(xml_path, summary):
     return AgentImportReporter()
 
 
+def make_export_reporter(summary):
+    """Build an IExportReporter funneling callbacks into our logfile.
+
+    Factory (same pattern as make_import_reporter) so plain CPython can
+    import this module offline; IExportReporter only exists inside
+    e!COCKPIT. Callbacks per ScriptEngine.chm: error/warning(message),
+    nonexportable(obj), aborting property.
+    """
+
+    class AgentExportReporter(IExportReporter):
+        def __init__(self):
+            self.file_errors = 0
+            self.file_warnings = 0
+
+        def error(self, message):
+            self.file_errors += 1
+            summary["errors"] += 1
+            log("ERROR", "export: {m}".format(m=message))
+
+        def warning(self, message):
+            self.file_warnings += 1
+            summary["warnings"] += 1
+            log("WARN", "export: {m}".format(m=message))
+
+        def nonexportable(self, obj):
+            log("WARN", "export: nonexportable {o}".format(o=_short_name(obj)))
+
+        @property
+        def aborting(self):
+            return False
+
+    return AgentExportReporter()
+
+
 # --------------------------------------------------------------------------
 # Import + cleanup
 # --------------------------------------------------------------------------
@@ -1215,13 +1263,16 @@ def _format_structured_messages(entries, ignored_codes=None):
     return lines, errors, warnings, ignored_counts
 
 
-def compile_project(app, project, summary, args=None):
+def compile_project(app, project, summary, args=None, rebuild=False):
     """Compile the application via the DOCUMENTED script API.
 
     Primary: IScriptApplication.build() (ScriptEngine.chm) - builds the
     application and posts the full compile narrative + structured
     IScriptMessage diagnostics (prefix/number/text/severity/object/
     position_text) into the message store, which we read right after.
+    rebuild=True uses IScriptApplication.rebuild() instead - a full rebuild
+    from scratch, the scripted equivalent of the GUI Build -> Clean + Build
+    (fixes "out of global data memory" C0106 on grown GVL arrays).
     Fallback: create_boot_application(path) - legacy vehicle whose final
     step dies with a content-free NullReferenceException on compile errors.
 
@@ -1229,19 +1280,24 @@ def compile_project(app, project, summary, args=None):
     (.env) for this run; otherwise ignored codes drop out of the harvest
     and the counts, replaced by a one-line summary.
     """
-    log("INFO", "compiling (app.build() - documented IScriptApplication API)")
+    verb = "rebuild" if rebuild else "build"
+    log("INFO", "compiling (app.{v}() - documented IScriptApplication API)"
+        .format(v=verb))
     build_raised = None
     build_available = True
     try:
-        app.build()
-        log("OK", "app.build() returned without exception")
+        if rebuild:
+            app.rebuild()
+        else:
+            app.build()
+        log("OK", "app.{v}() returned without exception".format(v=verb))
     except AttributeError:
         build_available = False
-        log("WARN", "app.build() not available on this object - falling "
-                    "back to create_boot_application")
+        log("WARN", "app.{v}() not available on this object - falling "
+                    "back to create_boot_application".format(v=verb))
     except Exception as exc:
         build_raised = exc
-        log("ERROR", "app.build() raised: {e}".format(e=exc))
+        log("ERROR", "app.{v}() raised: {e}".format(v=verb, e=exc))
         log("ERROR", "traceback:\n{tb}".format(tb=traceback.format_exc()))
 
     # Structured diagnostics from the message store (always read fresh).
@@ -1276,15 +1332,16 @@ def compile_project(app, project, summary, args=None):
     if build_available:
         if build_raised is None and s_errors == 0:
             summary["ok"] = True
-            log("OK", "compile OK (app.build(), {e} errors / {w} warnings "
-                      "in message store)".format(e=s_errors, w=s_warnings))
+            log("OK", "compile OK (app.{v}(), {e} errors / {w} warnings "
+                      "in message store)".format(v=verb, e=s_errors,
+                                                 w=s_warnings))
         else:
             summary["ok"] = False
             if build_raised is None:
                 summary["errors"] += 1 if s_errors == 0 else 0
-            log("ERROR", "compile FAILED (app.build(); store counts: "
+            log("ERROR", "compile FAILED (app.{v}(); store counts: "
                          "{e} errors / {w} warnings)".format(
-                             e=s_errors, w=s_warnings))
+                             v=verb, e=s_errors, w=s_warnings))
         # Boot application file: only meaningful on a clean compile.
         if summary["ok"]:
             try:
@@ -1440,7 +1497,290 @@ def cmd_download(project, args):
 def cmd_disconnect(project, args):
     """Explicit logout from the PLC."""
     device = get_device(project, args.get("device", ""))
+    if args.get("force"):
+        try:
+            device.forced_disconnect()
+            log("OK", "forced disconnect done")
+            return
+        except AttributeError:
+            log("WARN", "forced_disconnect not available - plain disconnect")
+        except Exception as exc:
+            log("WARN", "forced_disconnect raised: {e}".format(e=exc))
     _online_disconnect(device)
+
+
+def cmd_write(project, args):
+    """Write (or force) PLC variable values via prepared values.
+
+    args: {"values": {expr: iec_literal}, "force": bool, "confirm": true}.
+    force=true uses force_prepared_values (values stay forced), otherwise
+    write_prepared_values (one-shot write). Requires confirm - this changes
+    values on the RUNNING application.
+    """
+    if not args.get("confirm"):
+        raise RuntimeError("write REFUSED - requires args.confirm=true. It "
+                           "changes variable values on the RUNNING PLC "
+                           "application.")
+    values = args.get("values") or {}
+    if not isinstance(values, dict) or not values:
+        raise RuntimeError('write needs args.values, e.g. '
+                           '{"values": {"GVLName.bFlag": "TRUE"}}')
+    device, onlineapp = _online_connect(project, args)
+    try:
+        for expr in sorted(values):
+            onlineapp.set_prepared_value(expr, str(values[expr]))
+            log("INFO", "prepared {p} := {v}".format(p=expr, v=values[expr]))
+        if args.get("force"):
+            onlineapp.force_prepared_values()
+            log("OK", "forced {n} value(s) on the device".format(
+                n=len(values)))
+        else:
+            onlineapp.write_prepared_values()
+            log("OK", "wrote {n} value(s) to the device".format(
+                n=len(values)))
+        readback = {}
+        for expr in sorted(values):
+            try:
+                readback[expr] = str(onlineapp.read_value(expr))
+            except Exception:
+                readback[expr] = "<read back failed>"
+        return readback
+    finally:
+        _online_disconnect(device)
+
+
+def cmd_unforce(project, args):
+    """Release all forced values on the PLC."""
+    device, onlineapp = _online_connect(project, args)
+    try:
+        onlineapp.unforce_all_values()
+        log("OK", "unforced all values")
+        return "unforced all"
+    finally:
+        _online_disconnect(device)
+
+
+def cmd_stop(project, args):
+    """Stop the running application on the PLC. Requires confirm."""
+    if not args.get("confirm"):
+        raise RuntimeError("stop REFUSED - requires args.confirm=true. It "
+                           "STOPS the running PLC application.")
+    device, onlineapp = _online_connect(project, args)
+    try:
+        stopped_via = ""
+        try:
+            onlineapp.stop()
+            stopped_via = "onlineapp.stop"
+        except AttributeError:
+            device.stop()
+            stopped_via = "device.stop"
+        log("OK", "application stopped (via {v})".format(v=stopped_via))
+        state = {}
+        try:
+            state["operation_state"] = str(onlineapp.operation_state)
+        except Exception:
+            pass
+        state["stopped_via"] = stopped_via
+        return state
+    finally:
+        _online_disconnect(device)
+
+
+def cmd_state(project, args):
+    """Online state readout: login/app/operation state + device info.
+
+    Direct-syntax attribute access throughout - getattr() fails on these
+    .NET interop objects even for members that work via direct access.
+    """
+    device, onlineapp = _online_connect(project, args)
+    try:
+        info = {}
+        try:
+            info["is_logged_in"] = str(onlineapp.is_logged_in)
+        except Exception:
+            pass
+        try:
+            info["application_state"] = str(onlineapp.application_state)
+        except Exception:
+            pass
+        try:
+            info["operation_state"] = str(onlineapp.operation_state)
+        except Exception:
+            pass
+        try:
+            info["device_connected"] = str(device.connected)
+        except Exception:
+            pass
+        try:
+            info["device"] = _display_name(device)
+        except Exception:
+            pass
+        log("OK", "state: {j}".format(j=json.dumps(info)))
+        return info
+    finally:
+        _online_disconnect(device)
+
+
+def cmd_export(project, args, summary):
+    """Export the application objects to PLCopen XML.
+
+    args: {"dir": target} (default <project root>/plcopensrc-export).
+    Uses IScriptProject.export_xml(reporter, objects, path, recursive);
+    the IScriptProject2 overload adds export_folder_structure. Reporter
+    errors/warnings count into the command summary (import parity).
+    """
+    out_dir = args.get("dir") or ""
+    if not out_dir and PROJECT_ROOT:
+        out_dir = os.path.join(PROJECT_ROOT, "plcopensrc-export")
+    if not out_dir:
+        raise RuntimeError("export needs args.dir (or ECP_PROJECT_ROOT for "
+                           "the default location)")
+    if not os.path.isdir(out_dir):
+        os.makedirs(out_dir)
+    app = get_application(project)
+    reporter = make_export_reporter(summary)
+    result = ""
+    try:
+        result = project.export_xml(reporter, [app], out_dir, True)
+    except TypeError:
+        log("INFO", "retrying export_xml with folder-structure arg "
+                    "(IScriptProject2 overload)")
+        result = project.export_xml(reporter, [app], out_dir, True, True)
+    files = sorted(glob.glob(os.path.join(out_dir, "*.xml")))
+    log("OK", "export wrote {n} XML file(s) to {d} ({e} error(s))".format(
+        n=len(files), d=out_dir, e=summary["errors"]))
+    return {"dir": out_dir, "xml_files": len(files),
+            "result": str(result), "first_files": files[:10]}
+
+
+def cmd_plcfs(project, args):
+    """File operations on the PLC's file system (IScriptOnlineDevice4).
+
+    args: {"op": "ls"|"get"|"put"|"rm", "remote": ..., "local": ...,
+           "device": ..., "confirm": true for put/rm}.
+    NOTE the argument order quirk from ScriptEngine.chm:
+    download_file(local, remote, force) - PLC -> host;
+    upload_file(remote, local, force)   - host -> PLC.
+    """
+    op = args.get("op", "")
+    if op not in ("ls", "get", "put", "rm"):
+        raise RuntimeError('plcfs needs args.op of "ls", "get", "put" or '
+                           '"rm"')
+    if op in ("put", "rm") and not args.get("confirm"):
+        raise RuntimeError("plcfs {o} REFUSED - requires args.confirm=true "
+                           "(it modifies files on the PLC)".format(o=op))
+    device, onlineapp = _online_connect(project, args)
+    try:
+        if op == "ls":
+            remote_dir = args.get("remote", "/")
+            infos = device.get_file_list_of_directory(remote_dir)
+            out = []
+            for fi in infos:
+                entry = {"name": ""}
+                for attr in ("name", "is_directory", "is_file", "size",
+                             "last_modification_time"):
+                    try:
+                        if attr == "name":
+                            entry["name"] = str(fi.name)
+                        elif attr == "is_directory":
+                            entry["is_directory"] = bool(fi.is_directory)
+                        elif attr == "is_file":
+                            entry["is_file"] = bool(fi.is_file)
+                        elif attr == "size":
+                            entry["size"] = str(fi.size)
+                        elif attr == "last_modification_time":
+                            entry["last_modification_time"] = \
+                                str(fi.last_modification_time)
+                    except Exception:
+                        continue
+                out.append(entry)
+            log("OK", "plcfs ls {d}: {n} entries".format(
+                d=remote_dir, n=len(out)))
+            return {"dir": remote_dir, "entries": out}
+        if op == "get":
+            remote = args.get("remote", "")
+            local = args.get("local", "")
+            if not remote or not local:
+                raise RuntimeError('plcfs get needs args.remote (PLC path) '
+                                   'and args.local (host path)')
+            d = os.path.dirname(local)
+            if d and not os.path.isdir(d):
+                os.makedirs(d)
+            device.download_file(local, remote, True)
+            log("OK", "plcfs get {r} -> {l}".format(r=remote, l=local))
+            return {"remote": remote, "local": local,
+                    "bytes": os.path.getsize(local) if
+                    os.path.isfile(local) else None}
+        if op == "put":
+            remote = args.get("remote", "")
+            local = args.get("local", "")
+            if not remote or not local:
+                raise RuntimeError('plcfs put needs args.local (host path) '
+                                   'and args.remote (PLC path)')
+            if not os.path.isfile(local):
+                raise RuntimeError("local file not found: {l}".format(
+                    l=local))
+            device.upload_file(remote, local, True)
+            log("OK", "plcfs put {l} -> {r}".format(l=local, r=remote))
+            return {"local": local, "remote": remote}
+        if op == "rm":
+            remote = args.get("remote", "")
+            if not remote:
+                raise RuntimeError("plcfs rm needs args.remote (PLC path)")
+            device.delete_file(remote)
+            log("OK", "plcfs rm {r}".format(r=remote))
+            return {"deleted": remote}
+    finally:
+        _online_disconnect(device)
+
+
+def cmd_upload_source(project, args):
+    """Upload (read back) the source project archive from the PLC.
+
+    args: {"path": host archive path} (default <work dir>/
+    plc_source_upload.projectarchive). IScriptOnlineDevice3.
+    """
+    path = args.get("path", "")
+    if not path:
+        path = os.path.join(WORK_DIR, "plc_source_upload.projectarchive")
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d)
+    device, onlineapp = _online_connect(project, args)
+    try:
+        device.upload_source(path)
+        log("OK", "source archive written to {p}".format(p=path))
+        return {"path": path, "bytes": os.path.getsize(path) if
+                os.path.isfile(path) else None}
+    finally:
+        _online_disconnect(device)
+
+
+def cmd_save_archive(project, args):
+    """Save the project as a .projectarchive (single-file backup).
+
+    args: {"path": host path} (default <snapshots>/<project>_<ts>
+    .projectarchive). IScriptProject.save_archive.
+    """
+    path = args.get("path", "")
+    if not path:
+        if not SNAPSHOTS_DIR:
+            raise RuntimeError("save_archive needs args.path (or "
+                               "ECP_PROJECT_ROOT/ECP_SNAPSHOTS_DIR for the "
+                               "default location)")
+        if not os.path.isdir(SNAPSHOTS_DIR):
+            os.makedirs(SNAPSHOTS_DIR)
+        path = os.path.join(
+            SNAPSHOTS_DIR, "{p}_{ts}.projectarchive".format(
+                p=_snapshot_prefix(project),
+                ts=datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d)
+    project.save_archive(path)
+    log("OK", "project archive written to {p}".format(p=path))
+    return {"path": path, "bytes": os.path.getsize(path) if
+            os.path.isfile(path) else None}
 
 
 _PROBE_KEYWORDS = ("compile", "check", "generate", "message", "online",
@@ -1688,8 +2028,11 @@ def cmd_probe(project):
 # --------------------------------------------------------------------------
 # Command dispatch
 # --------------------------------------------------------------------------
-KNOWN_COMMANDS = ("build", "import", "compile", "status", "read",
-                  "download", "disconnect", "probe", "messages", "snapshot")
+KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
+                  "write", "unforce", "download", "disconnect", "stop",
+                  "state", "probe", "messages", "snapshot", "export",
+                  "plcfs", "upload_source", "save_archive",
+                  "clear_messages")
 
 
 def run_command(request):
@@ -1708,7 +2051,7 @@ def run_command(request):
     log("INFO", "command '{c}' (id {i}) starting".format(c=cmd, i=rid or "<direct>"))
 
     try:
-        if cmd in ("build", "import", "compile"):
+        if cmd in ("build", "import", "compile", "rebuild"):
             project = get_project()
             app = get_application(project)
             if cmd in ("build", "import") and not (args.get("skip_import") or SKIP_IMPORT):
@@ -1718,8 +2061,9 @@ def run_command(request):
                 system.delay(500)
             else:
                 log("INFO", "import step skipped for '{c}'".format(c=cmd))
-            if cmd in ("build", "compile"):
-                compile_project(app, project, summary, args)
+            if cmd in ("build", "compile", "rebuild"):
+                compile_project(app, project, summary, args,
+                                rebuild=(cmd == "rebuild"))
             else:
                 summary["ok"] = summary["errors"] == 0
         elif cmd == "status":
@@ -1730,6 +2074,14 @@ def run_command(request):
             project = get_project()
             result["value"] = cmd_read(project, args)
             summary["ok"] = True
+        elif cmd == "write":
+            project = get_project()
+            result["value"] = cmd_write(project, args)
+            summary["ok"] = True
+        elif cmd == "unforce":
+            project = get_project()
+            result["value"] = cmd_unforce(project, args)
+            summary["ok"] = True
         elif cmd == "download":
             project = get_project()
             cmd_download(project, args)
@@ -1737,6 +2089,14 @@ def run_command(request):
         elif cmd == "disconnect":
             project = get_project()
             cmd_disconnect(project, args)
+            summary["ok"] = True
+        elif cmd == "stop":
+            project = get_project()
+            result["value"] = cmd_stop(project, args)
+            summary["ok"] = True
+        elif cmd == "state":
+            project = get_project()
+            result["value"] = cmd_state(project, args)
             summary["ok"] = True
         elif cmd == "probe":
             project = get_project()
@@ -1749,6 +2109,40 @@ def run_command(request):
         elif cmd == "snapshot":
             project = get_project()
             result["value"] = cmd_snapshot(project, args)
+            summary["ok"] = True
+        elif cmd == "export":
+            project = get_project()
+            result["value"] = cmd_export(project, args, summary)
+            summary["ok"] = True
+        elif cmd == "plcfs":
+            project = get_project()
+            result["value"] = cmd_plcfs(project, args)
+            summary["ok"] = True
+        elif cmd == "upload_source":
+            project = get_project()
+            result["value"] = cmd_upload_source(project, args)
+            summary["ok"] = True
+        elif cmd == "save_archive":
+            project = get_project()
+            result["value"] = cmd_save_archive(project, args)
+            summary["ok"] = True
+        elif cmd == "clear_messages":
+            # System-level: wipe the message store (fresh-harvest aid).
+            # clear_messages takes ONE category Guid - iterate them all.
+            cleared = 0
+            failed = 0
+            for cat in system.get_message_categories():
+                try:
+                    system.clear_messages(cat)
+                    cleared += 1
+                except Exception as exc:
+                    failed += 1
+                    log("WARN", "clear_messages({c}) failed: {e}".format(
+                        c=str(cat)[:8], e=exc))
+            log("OK", "message store cleared ({n} categories, {f} failed)"
+                .format(n=cleared, f=failed))
+            result["value"] = {"categories_cleared": cleared,
+                               "categories_failed": failed}
             summary["ok"] = True
         else:
             raise RuntimeError("unknown command '{c}' (known: {k})".format(
