@@ -144,6 +144,15 @@ _TIMEOUTS = {
     "upload_source": 600,
     "save_archive": 300,
     "clear_messages": 60,
+    "libs": 120,
+    "lib_find": 120,
+    "lib_install": 120,
+    "lib_uninstall": 120,
+    "repos": 120,
+    "repo_add": 120,
+    "repo_remove": 120,
+    "repo_update": 120,
+    "repo_move": 120,
 }
 _DEFAULT_TIMEOUT = 300
 
@@ -254,7 +263,10 @@ mcp = MCPServer(
         "(ecockpit_download, ecockpit_write, ecockpit_stop, "
         "ecockpit_plc_put, ecockpit_plc_rm) touch the RUNNING PLC and are "
         "confirm-gated - only call them on an explicit owner request, with "
-        "confirm=true."))
+        "confirm=true. Library-repository mutations (ecockpit_lib_uninstall, "
+        "ecockpit_repo_add/remove/update) change machine-wide library "
+        "state and are confirm-gated the same way; ecockpit_libs, "
+        "ecockpit_lib_find and ecockpit_repos are read-only."))
 
 
 @mcp.tool(
@@ -655,6 +667,244 @@ def _run_http():
               t="required" if token else "DISABLED (loopback)"), flush=True)
     uvicorn.run(BearerTokenMiddleware(app), host=host, port=CFG.port,
                 log_level="warning")
+
+
+# --------------------------------------------------------------------------
+# Library curation (global `librarymanager` / ILibManager)
+# --------------------------------------------------------------------------
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=False,
+        readOnlyHint=True,
+        openWorldHint=True),
+    description="List the installed (managed) libraries known to the "
+                "e!COCKPIT library manager: display name, version, "
+                "company, namespace, dependencies, repository file path. "
+                "repo scopes the listing to one repository; shadowed=true "
+                "also lists libraries shadowed by higher-priority "
+                "repositories (default: excluded).")
+def ecockpit_libs(repo: str = "", shadowed: bool = False,
+                  timeout_s: int = 120) -> str:
+    args = {}
+    if repo:
+        args["repo"] = repo
+    if shadowed:
+        args["shadowed"] = True
+    return json.dumps(_run("libs", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=False,
+        readOnlyHint=True,
+        openWorldHint=True),
+    description="Find a library by name. Searches repositories in their "
+                "configured order and returns every match with its "
+                "repository and file path (find_library matches the "
+                "display name). exact=true matches the library NAME "
+                "exactly and stops at the first hit (get_library "
+                "semantics - this is what install resolution uses). "
+                "repo narrows the search.")
+def ecockpit_lib_find(name: str, repo: str = "", exact: bool = False,
+                      timeout_s: int = 120) -> str:
+    if not name:
+        raise ValueError("name (library name or display name) required")
+    args = {"name": name}
+    if repo:
+        args["repo"] = repo
+    if exact:
+        args["exact"] = True
+    return json.dumps(_run("lib_find", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=False,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="Install a compiled-library file (e.g. .library) into a "
+                "library repository. repo names the target repository "
+                "(default: the FIRST repository in the search order). "
+                "overwrite=true replaces an existing library and requires "
+                "confirm=true (as does any replacement - call with "
+                "confirm only on an explicit owner request). Modifies the "
+                "machine-wide library repositories, not the open project.")
+def ecockpit_lib_install(path: str, repo: str = "",
+                         overwrite: bool = False, confirm: bool = False,
+                         timeout_s: int = 120) -> str:
+    if not path:
+        raise ValueError("path (compiled-library file) required")
+    if overwrite and not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "lib_install refused - overwrite=true replaces an "
+                     "existing library; call again with confirm=true only "
+                     "on an explicit owner request",
+        }, indent=2)
+    args = {"path": path, "overwrite": bool(overwrite)}
+    if repo:
+        args["repo"] = repo
+    if overwrite:
+        args["confirm"] = True
+    return json.dumps(_run("lib_install", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request. Uninstall "
+                "a library from a library repository (removes the files "
+                "from the repository; projects referencing it will stop "
+                "resolving). If the library exists in several "
+                "repositories the command is refused unless repo names "
+                "one. Pass confirm=true, never without an explicit owner "
+                "instruction.")
+def ecockpit_lib_uninstall(name: str, repo: str = "",
+                           confirm: bool = False,
+                           timeout_s: int = 120) -> str:
+    if not name:
+        raise ValueError("name (library name or display name) required")
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "lib_uninstall refused - it removes a library from a "
+                     "repository; call again with confirm=true only on an "
+                     "explicit owner request",
+        }, indent=2)
+    args = {"name": name, "confirm": True}
+    if repo:
+        args["repo"] = repo
+    return json.dumps(_run("lib_uninstall", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=False,
+        readOnlyHint=True,
+        openWorldHint=True),
+    description="List the library repositories in their configured search "
+                "order (first match wins when resolving libraries): "
+                "name, root folder, editable flag (system repositories "
+                "are not), and per-repository library count.")
+def ecockpit_repos(timeout_s: int = 120) -> str:
+    return json.dumps(_run("repos", {}, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request. Register "
+                "a NEW library repository (machine-wide change). "
+                "rootfolder must already exist on disk; index places it "
+                "in the search order (-1 = append at the end). Pass "
+                "confirm=true, never without an explicit owner "
+                "instruction.")
+def ecockpit_repo_add(rootfolder: str, name: str, index: int = -1,
+                      confirm: bool = False, timeout_s: int = 120) -> str:
+    if not rootfolder or not name:
+        raise ValueError("rootfolder (existing directory) and name "
+                         "required")
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "repo_add refused - it changes the machine-wide "
+                     "library repository list; call again with "
+                     "confirm=true only on an explicit owner request",
+        }, indent=2)
+    return json.dumps(_run("repo_add",
+                           {"rootfolder": rootfolder, "name": name,
+                            "index": int(index), "confirm": True},
+                           timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request. Unregister "
+                "a library repository. delete_on_disk=true ALSO DELETES "
+                "the repository directory with all its library files - "
+                "only on an explicit owner instruction. System "
+                "repositories are not removable. Pass confirm=true, never "
+                "without an explicit owner instruction.")
+def ecockpit_repo_remove(name: str, delete_on_disk: bool = False,
+                         confirm: bool = False,
+                         timeout_s: int = 120) -> str:
+    if not name:
+        raise ValueError("name (repository name) required")
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "repo_remove refused - it changes the machine-wide "
+                     "library repository list (delete_on_disk=true also "
+                     "deletes the directory); call again with confirm=true "
+                     "only on an explicit owner request",
+        }, indent=2)
+    return json.dumps(_run("repo_remove",
+                           {"name": name,
+                            "delete_on_disk": bool(delete_on_disk),
+                            "confirm": True},
+                           timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request. Rename a "
+                "library repository (new_name) and/or move it to "
+                "new_location (must exist; copy_libraries=true installs "
+                "the old location's libraries at the new one when "
+                "missing). Pass confirm=true, never without an explicit "
+                "owner instruction.")
+def ecockpit_repo_update(name: str, new_name: str = "",
+                         new_location: str = "",
+                         copy_libraries: bool = False,
+                         confirm: bool = False,
+                         timeout_s: int = 120) -> str:
+    if not name:
+        raise ValueError("name (repository name) required")
+    if not new_name and not new_location:
+        raise ValueError("new_name and/or new_location required")
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "repo_update refused - it changes the machine-wide "
+                     "library repository list; call again with "
+                     "confirm=true only on an explicit owner request",
+        }, indent=2)
+    return json.dumps(_run("repo_update",
+                           {"name": name, "new_name": new_name,
+                            "new_location": new_location,
+                            "copy_libraries": bool(copy_libraries),
+                            "confirm": True},
+                           timeout_s), indent=2)
+
+
+@mcp.tool(
+    description="Reorder the library repository search order (first "
+                "repository wins when a library name resolves to several "
+                "ones). index is the new position, -1 moves the "
+                "repository to the end. Reversible settings change - no "
+                "confirm needed.")
+def ecockpit_repo_move(name: str, index: int, timeout_s: int = 120) -> str:
+    if not name:
+        raise ValueError("name (repository name) required")
+    return json.dumps(_run("repo_move",
+                           {"name": name, "index": int(index)},
+                           timeout_s), indent=2)
 
 
 def main():

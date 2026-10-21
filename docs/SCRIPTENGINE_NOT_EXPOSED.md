@@ -53,9 +53,14 @@ exposed but `convert` (project conversion) and
 `create_new_project_from_template` are not; `IScriptProject3.login/logout`
 (project-level login); `dirty`, `compiler_version` properties.
 
-### Library manager (ILibManager)
+### Library manager (ILibManager) — EXPOSED as of feat/library-manager
 `find_library`, `install_library`/`uninstall_library`, repositories —
-library curation from script. Low priority for this toolset.
+library curation from script. Now exposed as the `ecockpit_libs`,
+`ecockpit_lib_find`, `ecockpit_lib_install`, `ecockpit_lib_uninstall`,
+`ecockpit_repos`, `ecockpit_repo_add/remove/update/move` tools. Still not
+exposed: `get_category`/`categories`/`top_level_categories`
+(ILibCategory metadata). Per-application Library Manager *contents* are
+not scriptable in this build at all.
 
 ### Visualization / device tree / build properties
 `IScriptBuildProperties` (compiler_defines, link_always,

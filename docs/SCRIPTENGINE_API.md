@@ -142,6 +142,46 @@ MIND THE ARGUMENT ORDER (from the CHM):
 `upload_source(archive_path)` (IScriptOnlineDevice3) reads the source
 project archive back from the PLC (→ `ecockpit_upload_source`).
 
+## Libraries (global `librarymanager` — ILibManager)
+
+*"An instance implementing this interface is injected into the scriptengine
+scope under the name `librarymanager`."* — repository-level curation of
+compiled libraries. Signatures from the CHM (not yet live-verified — the
+executor wraps every member access in try/except per the gotcha above):
+
+- `repositories` → `ILibRepository` list in **search order** (first match
+  wins). It is a *snapshot* — refetch after insert/remove/move.
+  `ILibRepository`: `name`, `root_folder`, `editable` (system
+  repositories are not editable → cannot be removed).
+- `get_all_libraries(exclude_shadowed_libs=True)` → all managed libraries;
+  overload `get_all_libraries(repository)` scopes to one repo.
+- `find_library(display_name)` → list of *Python tuples*
+  `(IManagedLib, ILibRepository)` (or None).
+- `get_library(name, repository=None)` → first `IManagedLib` by exact
+  NAME (None → searches all repositories in order). NAME vs find's
+  DISPLAY NAME are different keys.
+- `install_library(filepath, repository=None, overwrite=False)` → the
+  installed `IManagedLib` (repository None → FIRST repository). →
+  `ecockpit_lib_install` (confirm-gated when overwrite).
+- `uninstall_library(repository, library)` → `ecockpit_lib_uninstall`
+  (confirm-gated; ambiguity refused unless repo given).
+- `insert_repository(rootfolder, name, index=-1)` — rootfolder must be an
+  EXISTING directory; `remove_repository(repository, delete_on_disk=False)`;
+  `update_repository(repository, new_name=None, new_location=None,
+  copy_libraries=False)`; `move_repository(repository, new_index)` (-1 =
+  end). → `ecockpit_repo_add/remove/update/move`.
+- `get_file_path(IManagedLib)` → repository file path.
+- `IManagedLib` properties: `displayname`, `version`, `company`,
+  `default_namespace`, `title`, `dependencies` (string list),
+  `categories` (`ILibCategory` list).
+- `categories` / `top_level_categories` (ILibCategory) — not exposed as
+  tools yet.
+
+**There is no per-application Library Manager scripting API in this
+build**: the e!COCKPIT UI shows a Library Manager under each application,
+but script access to its *referenced* libraries is not part of this
+surface — the `librarymanager` global covers repository curation only.
+
 ## Not in this build (probed live — do not retry)
 
 `system.get_message_log`, `system.get_messages_count`,
