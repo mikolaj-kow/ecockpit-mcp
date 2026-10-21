@@ -169,7 +169,7 @@ there is no per-application Library Manager scripting API in this build):
 
 | Tool | Notes |
 |---|---|
-| `ecockpit_libs(repo?, shadowed?)` | list installed libraries: version, company, namespace, dependencies, repo file path |
+| `ecockpit_libs(repo?, shadowed?, filter?, offset?, limit?)` | list installed libraries (version, company, namespace, dependencies, repo file path); paged — `limit` default 200, `filter` = case-insensitive substring; result carries `total`/`truncated` |
 | `ecockpit_lib_find(name, repo?, exact?)` | find by display name (all matches + repository); `exact=true` = first-match-by-name resolution |
 | `ecockpit_lib_install(path, repo?, overwrite?, confirm)` | install a compiled-library file into a repository (default: first in search order); `overwrite` needs confirm |
 | `ecockpit_lib_uninstall(name, repo?, confirm)` | **destructive** — remove a library from a repository; ambiguous names are refused unless `repo` given |

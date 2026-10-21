@@ -89,9 +89,16 @@ Build log rendering used by the executor:
 - `export_xml(reporter, objects, path, recursive)` — PLCopen XML export
   (→ `ecockpit_export`); the IScriptProject2 overload adds a 5th
   `export_folder_structure` bool. `objects` takes a Python list of script
-  objects (e.g. `[application]`, recursive). IExportReporter callbacks:
+  objects (e.g. `[application]`, recursive). Reporter callbacks:
   `error(message)`, `warning(message)`, `nonexportable(obj)`, `aborting`
-  property.
+  property. **EXPOSURE-NAME GOTCHA (live 2026-10-21)**: the reporter
+  class must subclass the interface under its exposed script-scope name
+  **`ExportReporter`** — `IExportReporter` is only the .NET type name and
+  is never injected; subclassing a plain-`object` placeholder named
+  IExportReporter made export_xml reject the reporter with
+  `TypeError: expected IExportReporter, got Object_1$1`. (The import
+  side is lucky: `IImportReporter` is exposed as `ImportReporter`, which
+  is the name the executor always guarded on.)
 - `path` — the on-disk project path (prefer over disk-searching).
 - `active_application`, `devices`, `find(name, recursive=True)`,
   `get_device(name)`, `get_children(...)`.

@@ -264,3 +264,63 @@ def test_repo_crud_gates_and_effects(mgr, tmp_path):
 
     with pytest.raises(RuntimeError, match="needs args.index"):
         ex.cmd_repo_move({"name": "Mine"})
+
+
+def test_libs_paging_and_filter(mgr):
+    user = mgr.repositories[2]
+    for i in range(250):
+        user.libs["Bulk{0:03d}".format(i)] = FakeLib(
+            "BulkLib{0:03d}".format(i), displayname="Bulk {0:03d} lib".format(i))
+    user.libs["Needle"] = FakeLib("NeedleLib", displayname="The Needle, 1.0")
+
+    # default limit pages the 253 matches (250 bulk + needle + the two
+    # fixture libs in User/WAGO)
+    out = ex.cmd_libs({})
+    assert out["total"] == 253
+    assert out["count"] == 200
+    assert out["truncated"] is True
+    assert out["offset"] == 0
+
+    # walk to the last page: 53 entries, no truncation
+    out = ex.cmd_libs({"offset": 200})
+    assert out["count"] == 53
+    assert out["truncated"] is False
+
+    # past the end -> empty page
+    out = ex.cmd_libs({"offset": 1000})
+    assert out["count"] == 0 and out["total"] == 253
+    assert out["truncated"] is False
+
+    # limit=0 means unlimited
+    out = ex.cmd_libs({"limit": 0})
+    assert out["count"] == 253 and out["truncated"] is False
+
+    # filter is a case-insensitive substring on displayname/title/name
+    out = ex.cmd_libs({"filter": "needle"})
+    assert out["total"] == 1
+    assert out["libraries"][0]["displayname"] == "The Needle, 1.0"
+    out = ex.cmd_libs({"filter": "bulklib249"})
+    assert out["total"] == 1
+
+    # scoped + paged together
+    out = ex.cmd_libs({"repo": "User", "limit": 10})
+    assert out["count"] == 10 and out["total"] == 252
+    assert all(lib["repo"] == "User" for lib in out["libraries"])
+
+
+def test_export_reporter_base_resolution(monkeypatch):
+    # offline: ExportReporter stand-in is None -> the IExportReporter
+    # placeholder class is the base
+    base = ex._export_reporter_base()
+    assert base is ex.IExportReporter
+
+    # a real injected interface (any non-None) wins under its own name
+    marker = type("RealExportReporter", (object,), {})
+    monkeypatch.setattr(ex, "ExportReporter", marker)
+    assert ex._export_reporter_base() is marker
+
+    # neither name present -> plain-object fallback (never called, but
+    # keeps the factory importable)
+    monkeypatch.setattr(ex, "ExportReporter", None)
+    monkeypatch.setattr(ex, "IExportReporter", None)
+    assert ex._export_reporter_base() is object

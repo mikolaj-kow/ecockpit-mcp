@@ -683,14 +683,26 @@ def _run_http():
                 "company, namespace, dependencies, repository file path. "
                 "repo scopes the listing to one repository; shadowed=true "
                 "also lists libraries shadowed by higher-priority "
-                "repositories (default: excluded).")
-def ecockpit_libs(repo: str = "", shadowed: bool = False,
+                "repositories (default: excluded). filter is a "
+                "case-insensitive substring on displayname/title/name - "
+                "USE IT (or page via offset) when exploring: the System "
+                "repository alone holds ~4000 libraries and results are "
+                "paged (limit default 200, 0 = unlimited). The result "
+                "carries total/offset/count/truncated for walking pages.")
+def ecockpit_libs(repo: str = "", shadowed: bool = False, filter: str = "",
+                  offset: int = 0, limit: int = 200,
                   timeout_s: int = 120) -> str:
     args = {}
     if repo:
         args["repo"] = repo
     if shadowed:
         args["shadowed"] = True
+    if filter:
+        args["filter"] = filter
+    if offset:
+        args["offset"] = int(offset)
+    if limit != 200:
+        args["limit"] = int(limit)
     return json.dumps(_run("libs", args, timeout_s), indent=2)
 
 

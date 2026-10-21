@@ -118,6 +118,13 @@ if "ConflictResolve" not in globals():
 if "ImportReporter" not in globals():
     class ImportReporter(object):
         """Placeholder base; the real class only exists inside e!COCKPIT."""
+if "ExportReporter" not in globals():
+    # LIVE GOTCHA (2026-10-21): the engine exposes the interface under the
+    # name ExportReporter - "IExportReporter" is only the .NET type name
+    # and is NEVER injected, so guarding on it alone left the placeholder
+    # bound live and export_xml rejected our reporter
+    # ("expected IExportReporter, got Object_1$1").
+    ExportReporter = None
 if "IExportReporter" not in globals():
     class IExportReporter(object):
         """Placeholder base; the real class only exists inside e!COCKPIT."""
@@ -1098,16 +1105,32 @@ def make_import_reporter(xml_path, summary):
     return AgentImportReporter()
 
 
+def _export_reporter_base():
+    """Resolve the class export_xml reporters must subclass.
+
+    The engine injects the interface as ExportReporter (CHM: "exposed
+    under the name ExportReporter"); IExportReporter is only the .NET
+    type name. Fall back across both names for robustness, then to a
+    plain base for offline import (the factory is never CALLED offline).
+    """
+    for name in ("ExportReporter", "IExportReporter"):
+        candidate = globals().get(name)
+        if candidate is not None:
+            return candidate
+    return object
+
+
 def make_export_reporter(summary):
-    """Build an IExportReporter funneling callbacks into our logfile.
+    """Build an export_xml reporter funneling callbacks into our logfile.
 
     Factory (same pattern as make_import_reporter) so plain CPython can
-    import this module offline; IExportReporter only exists inside
-    e!COCKPIT. Callbacks per ScriptEngine.chm: error/warning(message),
+    import this module offline; the real interface only exists inside
+    e!COCKPIT (see _export_reporter_base for the naming gotcha).
+    Callbacks per ScriptEngine.chm: error/warning(message),
     nonexportable(obj), aborting property.
     """
 
-    class AgentExportReporter(IExportReporter):
+    class AgentExportReporter(_export_reporter_base()):
         def __init__(self):
             self.file_errors = 0
             self.file_warnings = 0
@@ -1676,6 +1699,11 @@ def cmd_export(project, args, summary):
     Uses IScriptProject.export_xml(reporter, objects, path, recursive);
     the IScriptProject2 overload adds export_folder_structure. Reporter
     errors/warnings count into the command summary (import parity).
+    The reporter must subclass the REAL injected interface - exposed as
+    `ExportReporter`, NOT `IExportReporter` (live 2026-10-21: subclassing
+    the IExportReporter-named placeholder made export_xml reject it with
+    "expected IExportReporter, got Object_1$1"; see
+    _export_reporter_base).
     """
     out_dir = args.get("dir") or ""
     if not out_dir and PROJECT_ROOT:
@@ -2222,23 +2250,68 @@ def _resolve_library_pairs(name, repo_name="", exact=False):
 
 
 def cmd_libs(args):
-    """List managed libraries (ILibManager.get_all_libraries).
+    """List managed libraries (ILibManager.get_all_libraries), paged.
 
     args: {"repo": scope to one repository name,
-           "shadowed": true to include shadowed libs (default excluded)}
+           "shadowed": true to include shadowed libs (default excluded),
+           "filter": case-insensitive substring on displayname/title/name,
+           "offset": page start (default 0),
+           "limit": page size (default 200; 0 = unlimited)}
+    Summaries are built only for the returned page - the System repo
+    holds ~4000 libraries and summarizing all of them produced ~7 MB
+    results (live 2026-10-21).
     """
     repo_name = args.get("repo", "")
     include_shadowed = bool(args.get("shadowed"))
+    needle = str(args.get("filter", "")).lower().strip()
+    try:
+        offset = max(int(args.get("offset", 0)), 0)
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = int(args.get("limit", 200))
+    except (TypeError, ValueError):
+        limit = 200
+    if limit < 0:
+        limit = 0
+
     if repo_name:
         repo = _require_repo(repo_name)
         libs = list(librarymanager.get_all_libraries(repo))
-        out = [_lib_summary(lib, repo_name) for lib in libs]
     else:
         libs = list(librarymanager.get_all_libraries(not include_shadowed))
-        out = [_lib_summary(lib) for lib in libs]
-    log("OK", "libs: {n} libraries{s}".format(
-        n=len(out), s=" (shadowed included)" if include_shadowed else ""))
-    return {"count": len(out), "shadowed_included": include_shadowed,
+
+    if needle:
+        matched = []
+        for lib in libs:
+            texts = []
+            try:
+                texts.append(str(lib.displayname))
+            except Exception:
+                pass
+            try:
+                texts.append(str(lib.title))
+            except Exception:
+                pass
+            try:
+                texts.append(str(lib.name))
+            except Exception:
+                pass
+            if needle in " ".join(t for t in texts if t).lower():
+                matched.append(lib)
+    else:
+        matched = libs
+    page = matched[offset:offset + limit] if limit else matched[offset:]
+
+    out = [_lib_summary(lib, repo_name) for lib in page]
+    log("OK", "libs: {n}/{t} libraries{s}{f} (offset {o}, limit {l})".format(
+        n=len(out), t=len(matched),
+        s=" (shadowed included)" if include_shadowed else "",
+        f=" filter='{q}'".format(q=needle) if needle else "",
+        o=offset, l=limit or "none"))
+    return {"total": len(matched), "offset": offset, "count": len(out),
+            "truncated": bool(limit) and offset + len(out) < len(matched),
+            "limit": limit, "shadowed_included": include_shadowed,
             "libraries": out}
 
 
