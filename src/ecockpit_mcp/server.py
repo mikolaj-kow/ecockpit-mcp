@@ -15,7 +15,7 @@ Architecture (see README):
         |  tmp/ecockpit_cmd_result.json
         |  tmp/ecockpit_watch.heartbeat
         v
-    cmd_server.py (IronPython INSIDE e!COCKPIT, armed via
+    relay.py (IronPython INSIDE e!COCKPIT, armed via
         |                   FILE -> Scripting -> Execute script file)
         v  exec per command
     executor.py (bundled executor; drives the open project via the
@@ -74,7 +74,7 @@ def _find_dotenv(start_dir):
     """Locate the one project .env: next to the scripts, then up to two
     parent levels (the src/ package layout sits two levels below the repo
     root). Anchored at __file__ - never the cwd - so the daemon, the armed
-    command server, and the executor all resolve the SAME file."""
+    command relay, and the executor all resolve the SAME file."""
     d = os.path.abspath(start_dir)
     seen = []
     for _ in range(3):
@@ -102,7 +102,7 @@ class Config(object):
 
     @property
     def tmp_dir(self):
-        # File-protocol work dir - shared with cmd_server.py /
+        # File-protocol work dir - shared with relay.py /
         # executor.py (which resolve the same ECP_WORK_DIR/.env key).
         return self.work_dir or os.path.join(PROJECT_DIR, "tmp")
 
@@ -149,9 +149,9 @@ _DEFAULT_TIMEOUT = 300
 
 _SEND_LOCK = threading.Lock()
 
-REARM_HINT = ("e!COCKPIT command server is not running. Arm it in the open "
+REARM_HINT = ("e!COCKPIT command relay is not running. Arm it in the open "
               "e!COCKPIT GUI: FILE -> Scripting -> Execute script file -> "
-              "cmd_server.py (from this ecockpit-mcp checkout)")
+              "relay.py (from this ecockpit-mcp checkout)")
 
 
 class NotArmedError(RuntimeError):
@@ -247,8 +247,8 @@ mcp = MCPServer(
     instructions=(
         "Build/import/compile and online operations for a WAGO e!COCKPIT "
         "automation project. All tools drive the e!COCKPIT GUI "
-        "instance via its command server - it must be armed (FILE -> "
-        "Scripting -> Execute script file -> cmd_server.py). "
+        "instance via its command relay - it must be armed (FILE -> "
+        "Scripting -> Execute script file -> relay.py). "
         "Build results include the structured compiler diagnostics "
         "(harvest: C-code, severity, POU, line). Destructive operations "
         "(ecockpit_download, ecockpit_write, ecockpit_stop, "
@@ -258,7 +258,7 @@ mcp = MCPServer(
 
 
 @mcp.tool(
-    description="Check whether the in-instance e!COCKPIT command server is "
+    description="Check whether the in-instance e!COCKPIT command relay is "
                 "armed (heartbeat freshness) and show the last command result.")
 def ecockpit_server_status() -> str:
     age = _heartbeat_age()

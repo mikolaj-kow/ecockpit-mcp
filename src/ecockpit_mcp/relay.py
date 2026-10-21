@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 # This comment is required if there are any non-ASCII characters in the script file.
 """
-eCockpit COMMAND SERVER - runs inside an ALREADY-OPEN e!COCKPIT instance.
+eCockpit COMMAND RELAY - runs inside an ALREADY-OPEN e!COCKPIT instance.
 
 This script is the in-instance half of the ecockpit-mcp project. Arm it
 once per e!COCKPIT session:
 
-    FILE -> Scripting -> Execute script file -> cmd_server.py
+    FILE -> Scripting -> Execute script file -> relay.py
 
 It polls a command file (default <work dir>/ecockpit_cmd.json; the work dir
 is tmp/ next to this script, overridable via ECP_WORK_DIR), executes each
@@ -23,7 +23,7 @@ variables win over the .env.
 
 Stop: create <work dir>/ecockpit_server.stop, or use e!COCKPIT's
 "Stop script" command. On startup it also writes the previous-generation
-watcher stop file (build_watch.stop) so at most one server polls.
+watcher stop file (build_watch.stop) so at most one relay polls.
 """
 
 import os
@@ -121,7 +121,7 @@ def _opt(name, env, default):
 
 
 def _say(msg):
-    line = "[server] " + msg
+    line = "[relay] " + msg
     print(line)
     try:
         system.write_message(Severity.Info, line)
@@ -140,7 +140,7 @@ def _touch(path):
     """Refresh the heartbeat's mtime by actually rewriting its content.
 
     NOTE: open(path, "ab") + close() WITHOUT writing does NOT update an
-    existing file's mtime on NTFS (observed 2026-10-20: the server polled
+    existing file's mtime on NTFS (observed 2026-10-20: the relay polled
     fine but the heartbeat looked stale). Always write + truncate instead.
     """
     try:
@@ -167,7 +167,7 @@ def _atomic_write_json(path, obj):
     """Write JSON atomically: temp file, then rename over the destination.
 
     os.rename on Windows fails when the destination exists, so the old file
-    is removed first. Single-writer by protocol (one server, one client at
+    is removed first. Single-writer by protocol (one relay, one client at
     a time), so the tiny remove/rename window is acceptable.
     """
     d = os.path.dirname(path)
@@ -230,7 +230,7 @@ def _dispatch(request, counter):
     except Exception:
         result = {"id": rid, "cmd": cmd, "ok": False, "value": None,
                   "error": traceback.format_exc(), "log": log_file}
-        _say("command #{n} crashed in server:\n{tb}".format(
+        _say("command #{n} crashed in relay:\n{tb}".format(
             n=counter, tb=result["error"]))
     finally:
         if result is None:
@@ -254,16 +254,16 @@ def _dispatch(request, counter):
         n=counter, c=cmd, r=("OK" if result.get("ok") else "FAILED")))
 
 
-def main_server():
+def main_relay():
     poll_ms = int(_opt("poll", "ECP_WATCH_POLL", "500"))
 
     if not os.path.isfile(EXEC_SCRIPT):
         _say("CONFIGURATION ERROR: executor not found at {e} - keep "
              "executor.py in the same directory as "
-             "cmd_server.py, then re-arm.".format(e=EXEC_SCRIPT))
+             "relay.py, then re-arm.".format(e=EXEC_SCRIPT))
         try:
             system.write_message(Severity.Error,
-                                 "[server] executor missing - see "
+                                 "[relay] executor missing - see "
                                  "the script header / eCockpit Messages")
         except Exception:
             pass
@@ -277,7 +277,7 @@ def main_server():
     except Exception:
         pass
 
-    _say("command server starting (poll={p}ms, no runtime limit)".format(p=poll_ms))
+    _say("command relay starting (poll={p}ms, no runtime limit)".format(p=poll_ms))
     _say("work dir    : {r}".format(r=WORK_DIR))
     _say("command file: {c}".format(c=CMD_FILE))
     _say("result file : {r}".format(r=RESULT_FILE))
@@ -316,8 +316,8 @@ def main_server():
 
         system.delay(poll_ms)
 
-    _say("server exit after {n} command(s), {t:.0f}s uptime".format(
+    _say("relay exit after {n} command(s), {t:.0f}s uptime".format(
         n=counter, t=time.time() - start))
 
 
-main_server()
+main_relay()

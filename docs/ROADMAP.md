@@ -16,10 +16,10 @@ is an explicit non-goal (another MCP project targets that platform).
 ## Packaging (distribution-grade)
 
 - **src-layout**: done — `src/ecockpit_mcp/` ships as a real package
-  (`server.py`, `cmd_server.py`, `executor.py` stay siblings so their
+  (`server.py`, `relay.py`, `executor.py` stay siblings so their
   file-adjacency contract holds in site-packages too). Remaining piece:
   an `ecockpit-mcp install-scripts <dir>` command that writes
-  `cmd_server.py` + `executor.py` out to an arming directory of the
+  `relay.py` + `executor.py` out to an arming directory of the
   user's choice, so the wheel alone is enough to arm e!COCKPIT.
 - **Version single-sourcing** (`__version__` read by pyproject or
   setuptools-scm), **semver discipline**, and a **CHANGELOG**

@@ -25,7 +25,7 @@ src/ecockpit_mcp/server.py        <- host Python 3.10+ (this repo)
     |  FILE PROTOCOL (local to the e!COCKPIT machine)
     |  tmp/ecockpit_cmd.json + _cmd_result.json + _watch.heartbeat
     v
-src/ecockpit_mcp/cmd_server.py    <- IronPython INSIDE e!COCKPIT (this repo;
+src/ecockpit_mcp/relay.py         <- IronPython INSIDE e!COCKPIT (this repo;
     |                               arm once per session: FILE -> Scripting
     |                               -> Execute script file)
     v  exec per command
@@ -63,30 +63,43 @@ expects:
 There is **no built-in default** for `ECP_PROJECT_ROOT` — the server and
 executor are install-agnostic on purpose.
 
-## Setup
+## Quickstart
+
+Prereqs: Windows with e!COCKPIT installed (the relay and executor run
+inside it), host Python 3.10+, and your automation project (above).
+
+**1. Install** — from a checkout of this repo:
 
 ```powershell
-py -3 -m venv .venv                     # or any Python >= 3.10
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-copy .env.example .env                  # then edit ECP_PROJECT_ROOT etc.
+py -3 -m venv .venv                    # or any Python >= 3.10
+.venv\Scripts\python.exe -m pip install -e .
+copy .env.example .env                 # then edit: ECP_PROJECT_ROOT, PLC creds
 ```
+
+`pip install -e .` pulls in the `mcp` dependency and puts the
+`ecockpit-mcp` command on the venv PATH. (Script-only use without
+installing: `pip install -r requirements.txt` is enough.)
 
 `.env` keys — see `.env.example` for the full annotated list:
 `ECP_PROJECT_ROOT` (required), `ECP_MCP_HOST` (default `127.0.0.1`),
-`ECP_MCP_PORT` (default `9777`), `ECP_MCP_TOKEN` (required for
-non-loopback binds), plus the project/PLC keys above.
+`ECP_MCP_PORT` (default `9777`), `ECP_MCP_TOKEN` (required for non-loopback
+binds), plus the project/PLC keys above. The `.env` is found next to the
+scripts, then up to two parent levels — a repo-root `.env` works in a
+checkout, and `ECP_*` environment variables override it.
 
-## Run
+**2. Start the server** (host side):
 
 ```powershell
 # long-lived daemon (local + remote editors), loopback by default
-.venv\Scripts\python.exe src\ecockpit_mcp\server.py --transport http
+.venv\Scripts\ecockpit-mcp --transport http
 
 # LAN exposure requires a token
-.venv\Scripts\python.exe src\ecockpit_mcp\server.py --transport http --host 0.0.0.0 --token <secret>
+.venv\Scripts\ecockpit-mcp --transport http --host 0.0.0.0 --token <secret>
 ```
 
-Client config (ZCode / any MCP client):
+CLI flags `--work-dir/--host/--port/--token` override the `.env`.
+
+**3. Connect your editor** (ZCode / any MCP client):
 
 ```json
 {
@@ -97,6 +110,22 @@ Client config (ZCode / any MCP client):
     }
   }
 }
+```
+
+**4. Arm the relay** — with your project open in e!COCKPIT, run once per
+session: FILE -> Scripting -> Execute script file ->
+`src\ecockpit_mcp\relay.py`. It then polls for commands until stopped
+(e!COCKPIT's "Stop script", or create `tmp\ecockpit_server.stop`). Until it
+is armed, tools fail with a structured `server_not_armed` error carrying
+this same instruction.
+
+**5. Verify** — call the `ecockpit_server_status` tool from your editor, or
+run the dev smoke client from the checkout (it talks real MCP: initialize,
+tools/list, status, and refusal checks; PLC-touching steps are skipped
+unless the relay is armed):
+
+```powershell
+.venv\Scripts\python.exe smoke_client.py
 ```
 
 ## Tools
@@ -150,13 +179,6 @@ are confirm-gated at BOTH the MCP layer and the executor and carry
 `build`/`compile`/`rebuild` return `harvest` (structured compiler messages)
 and `log_tail` inline on failure, so the model usually needs no second
 read.
-
-## Prerequisite
-
-The e!COCKPIT command server (`src/ecockpit_mcp/cmd_server.py` from this
-repo) must be armed once per e!COCKPIT session (FILE -> Scripting -> Execute
-script file -> select it). Without it, tools fail with a structured
-`server_not_armed` error carrying the re-arm instruction.
 
 ## ScriptEngine API reference
 
