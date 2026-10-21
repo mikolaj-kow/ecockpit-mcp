@@ -3216,12 +3216,15 @@ def run_command(request):
             summary["ok"] = True
         elif cmd == "login":
             # Online-change control: login and STAY connected.
+            project = get_project()
             result["value"] = cmd_login(project, args)
             summary["ok"] = True
         elif cmd == "source_download":
+            project = get_project()
             result["value"] = cmd_source_download(project, args)
             summary["ok"] = True
         elif cmd == "prepared_values":
+            project = get_project()
             result["value"] = cmd_prepared_values(project, args)
             summary["ok"] = True
         else:
