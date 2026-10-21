@@ -1739,16 +1739,20 @@ def cmd_export(project, args, summary):
     """Export the application objects to PLCopen XML.
 
     args: {"dir": target directory} (default
-    <project root>/plcopensrc-export). The XML lands at
-    <dir>/<application>.xml - ONE PLCopen file, not the multi-file
-    Application.*.xml tree the import side reads. export_xml's `path`
-    is a FILE path (see _export_target_path). Ladder: 4-arg call, 5-arg
-    IScriptProject2 retry on TypeError, then the string-return form
-    (path=None -> the CHM guarantees the whole XML as the return value)
-    written by us. Reporter errors/warnings count into the command
-    summary (import parity). The reporter must subclass the REAL
-    injected interface - exposed as `ExportReporter`, NOT
-    `IExportReporter` (see _export_reporter_base).
+    <project root>/plcopensrc-export). Exports TWO files:
+    <dir>/<application>.xml (the whole application) and
+    <dir>/<application>.Library Manager.xml (the application-scope
+    Library Manager - owner-directed LM reconciliation 2026-10-21: the
+    LM XML must reach plcopensrc/ like the POUs do, it carries the
+    library-reference state the application compiles against).
+    export_xml's `path` is a FILE path (see _export_target_path).
+    Ladder per file: 4-arg call, 5-arg IScriptProject2 retry on
+    TypeError, then the string-return form (path=None -> the CHM
+    guarantees the whole XML as the return value) written by us.
+    Reporter errors/warnings count into the command summary (import
+    parity). The reporter must subclass the REAL injected interface -
+    exposed as `ExportReporter`, NOT `IExportReporter` (see
+    _export_reporter_base).
     """
     out_dir = args.get("dir") or ""
     if not out_dir and PROJECT_ROOT:
@@ -1759,33 +1763,59 @@ def cmd_export(project, args, summary):
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
     app = get_application(project)
-    target = _export_target_path(out_dir, _short_name(app))
     reporter = make_export_reporter(summary)
 
-    mode = "file"
-    try:
+    def _export_one(objs, target):
+        """One export_xml ladder. Returns the mode string."""
         try:
-            project.export_xml(reporter, [app], target, True)
-        except TypeError:
-            log("INFO", "retrying export_xml with folder-structure arg "
-                        "(IScriptProject2 overload)")
-            project.export_xml(reporter, [app], target, True, True)
-        if not os.path.isfile(target):
-            raise RuntimeError("export_xml reported success but wrote no "
-                               "file: {t}".format(t=target))
-    except Exception as exc:
-        log("INFO", "file-based export failed ({c}: {m}) - falling back "
-                    "to the string-return form".format(
-                        c=type(exc).__name__, m=str(exc)[:160]))
-        xml = project.export_xml(reporter, [app], None, True)
-        with open(target, "wb") as fh:
-            fh.write(_to_bytes(xml))
-        mode = "string-fallback"
+            try:
+                project.export_xml(reporter, objs, target, True)
+            except TypeError:
+                log("INFO", "retrying export_xml with folder-structure arg "
+                            "(IScriptProject2 overload)")
+                project.export_xml(reporter, objs, target, True, True)
+            if not os.path.isfile(target):
+                raise RuntimeError("export_xml reported success but wrote no "
+                                   "file: {t}".format(t=target))
+        except Exception as exc:
+            log("INFO", "file-based export failed ({c}: {m}) - falling back "
+                        "to the string-return form".format(
+                            c=type(exc).__name__, m=str(exc)[:160]))
+            xml = project.export_xml(reporter, objs, None, True)
+            with open(target, "wb") as fh:
+                fh.write(_to_bytes(xml))
+            return "string-fallback"
+        return "file"
 
+    jobs = [([app], _export_target_path(out_dir, _short_name(app)))]
+    try:
+        lms = app.find("Library Manager", True)
+    except Exception:
+        lms = None
+    n_lm = 0
+    if lms is not None:
+        try:
+            n_lm = lms.Count
+        except Exception:
+            n_lm = len(lms) if isinstance(lms, (list, tuple)) else 0
+    for i in range(n_lm):
+        try:
+            lm = lms[i]
+            lm_name = "{}.{}".format(_short_name(app), _short_name(lm))
+            jobs.append(([lm], _export_target_path(out_dir, lm_name)))
+        except Exception:
+            continue
+
+    modes = []
+    for objs, target in jobs:
+        modes.append(_export_one(objs, target))
+
+    target, mode = jobs[0][1], modes[0]
     files = sorted(glob.glob(os.path.join(out_dir, "*.xml")))
     size = os.path.getsize(target) if os.path.isfile(target) else None
-    log("OK", "export wrote {t} ({b} bytes, mode {m}, {e} error(s))".format(
-        t=target, b=size, m=mode, e=summary["errors"]))
+    log("OK", "export wrote {n} file(s) ({b} bytes for the first, modes "
+              "{m}, {e} error(s))".format(
+        n=len(jobs), b=size, m=modes, e=summary["errors"]))
     return {"dir": out_dir, "file": target, "mode": mode, "bytes": size,
             "xml_files": len(files), "first_files": files[:10]}
 

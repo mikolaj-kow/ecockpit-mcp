@@ -172,7 +172,30 @@ State properties: `is_logged_in`, `application_state` (ApplicationState),
 
 ### PLC file system (IScriptOnlineDevice4 → `ecockpit_plc_ls/get/put/rm`)
 
-MIND THE ARGUMENT ORDER (from the CHM):
+**VERDICT (live 2026-10-21, CLR reflection): the PLC file API does not
+exist in this build.** The online device (32 members) and online
+application (34 members) contain **no** file/transfer members at all —
+`get_file_list_of_directory`, `download_file`, `upload_file`,
+`delete_file` are all absent, and the only file-ish member anywhere is
+`source_download` (the source-archive push, deliberately not a tool).
+Discovery method: `dir()` is empty and `getattr()` lies on the interop
+wrappers, so the executor reflects via `clr.GetClrType(obj).
+GetMethods()/GetProperties()` — see `_reflect_member_names`.
+`ecockpit_plc_ls/get/put/rm` therefore cannot work in this build
+(their ladder + surface + reflection probe stays in the executor so a
+fixed engine self-documents). `ecockpit_upload_source` is equally
+suspect (`upload_source` absent from the reflected surface too).
+The online application's FULL reflected surface (34): application,
+application_state, create_boot_application, force_prepared_values,
+get_application, get_application_state, get_forced_expressions,
+get_is_logged_in, get_online_device, get_operation_state,
+get_prepared_expressions, get_prepared_value, get_timeout,
+is_logged_in, login, logout, operation_state, read_value, read_values,
+reset, set_prepared_value, set_timeout, set_unforce_value,
+source_download, start, stop, timeout, unforce_all_values,
+write_prepared_values (+ Dispose/Equals/GetHashCode/GetType/ToString).
+
+CHM documentation (unusable in this build):
 
 - `download_file(local_file, remote_file, force_overwrite)` — PLC → host
   (local first!)
@@ -181,15 +204,6 @@ MIND THE ARGUMENT ORDER (from the CHM):
 - `get_file_list_of_directory(remote_dir)` → `IScriptDirectoryInfo[]`
   (`name`, `is_directory`, `is_file`, `size`, `last_modification_time`)
 - `delete_file(remote_file)`
-
-**LIVE (2026-10-21, e!COCKPIT 11.3.1.0)**: the online device object
-(`EScriptDevice`) has **no `get_file_list_of_directory`** — `plcfs ls`
-logged in fine (76 s) and then died on that AttributeError. `cmd_plcfs`
-now probes a candidate-name ladder over BOTH online objects (device and
-online application), logs a surface probe of the file members at every
-call, and fails with the full probe result so the real name surfaces on
-the next armed session. The other three members (`download_file`,
-`upload_file`, `delete_file`) are unverified live so far.
 
 `upload_source(archive_path)` (IScriptOnlineDevice3) reads the source
 project archive back from the PLC (→ `ecockpit_upload_source`).
