@@ -164,6 +164,21 @@ PLC file system:
 | `ecockpit_plc_rm(remote, confirm)` | **destructive** — delete a PLC file |
 | `ecockpit_upload_source(path?)` | read the source project archive back from the PLC |
 
+Libraries (global `librarymanager` / ILibManager — repository curation;
+there is no per-application Library Manager scripting API in this build):
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_libs(repo?, shadowed?)` | list installed libraries: version, company, namespace, dependencies, repo file path |
+| `ecockpit_lib_find(name, repo?, exact?)` | find by display name (all matches + repository); `exact=true` = first-match-by-name resolution |
+| `ecockpit_lib_install(path, repo?, overwrite?, confirm)` | install a compiled-library file into a repository (default: first in search order); `overwrite` needs confirm |
+| `ecockpit_lib_uninstall(name, repo?, confirm)` | **destructive** — remove a library from a repository; ambiguous names are refused unless `repo` given |
+| `ecockpit_repos()` | repositories in search order: name, root folder, editable, library count |
+| `ecockpit_repo_add(rootfolder, name, index?, confirm)` | **destructive** — register a new repository (folder must exist) |
+| `ecockpit_repo_remove(name, delete_on_disk?, confirm)` | **destructive** — unregister a repository; `delete_on_disk=true` also deletes the directory |
+| `ecockpit_repo_update(name, new_name?, new_location?, copy_libraries?, confirm)` | **destructive** — rename/relocate a repository |
+| `ecockpit_repo_move(name, index)` | reorder the search order (first match wins) |
+
 Diagnostics:
 
 | Tool | Notes |
@@ -172,8 +187,9 @@ Diagnostics:
 | `ecockpit_messages` / `ecockpit_probe` | scripting-API debugging aids |
 | `ecockpit_clear_messages()` | wipe the message store — call before a build for a fresh harvest |
 
-All destructive tools (`download`, `write`, `stop`, `plc_put`, `plc_rm`)
-are confirm-gated at BOTH the MCP layer and the executor and carry
+All destructive tools (`download`, `write`, `stop`, `plc_put`, `plc_rm`,
+`lib_uninstall`, `repo_add`, `repo_remove`, `repo_update`) are
+confirm-gated at BOTH the MCP layer and the executor and carry
 `destructiveHint` annotations.
 
 `build`/`compile`/`rebuild` return `harvest` (structured compiler messages)

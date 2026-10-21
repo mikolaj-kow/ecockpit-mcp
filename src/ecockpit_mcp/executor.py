@@ -111,6 +111,8 @@ if "online" not in globals():
     online = None
 if "e_projects" not in globals():
     e_projects = None
+if "librarymanager" not in globals():
+    librarymanager = None
 if "ConflictResolve" not in globals():
     ConflictResolve = None
 if "ImportReporter" not in globals():
@@ -2072,13 +2074,436 @@ def cmd_probe(project):
 
 
 # --------------------------------------------------------------------------
+# Library manager (global `librarymanager` - ILibManager, ScriptEngine.chm)
+# --------------------------------------------------------------------------
+# Curation of compiled-library repositories from script. There is NO
+# project/application-level Library Manager API in this build: the injected
+# `librarymanager` global is the whole surface. Per the CHM:
+#   find_library(display_name)       -> list of (IManagedLib, ILibRepository)
+#   get_library(name, repo=None)     -> IManagedLib (repo None: repos in order)
+#   get_all_libraries(exclude_shadowed=True | repository) -> [IManagedLib]
+#   install_library(filepath, repository=None, overwrite=False) -> IManagedLib
+#   uninstall_library(repository, library)
+#   repositories -> [ILibRepository]  (name / root_folder / editable;
+#                                      order == search order, snapshot!)
+#   insert_repository(rootfolder, name, index=-1)   (rootfolder must EXIST)
+#   remove_repository(repository, delete_on_disk=False)
+#   update_repository(repository, new_name=None, new_location=None,
+#                     copy_libraries=False)
+#   move_repository(repository, new_index)          (-1 = end of list)
+# LIVE-VERIFIED 2026-10-21 (WAGO e!COCKPIT, ScriptEngine) - the CHM
+# signatures lie in three ways:
+#   * find_library / get_library raise SystemError 'stDisplayName' for any
+#     argument but the FULL display name ("NETWORK, 1.3.5.3 (OSCAT)"; a
+#     bare title "NETWORK" is rejected).
+#   * find_library returns IManagedLib objects directly, NOT
+#     (IManagedLib, ILibRepository) tuples.
+#   * get_library / install_library reject repository=None (TypeError:
+#     Value cannot be null. Parameter name: repo) - the "first repository"
+#     default must be resolved by the caller.
+# So all lookups are resolved by ENUMERATION over get_all_libraries() in
+# repository search order (verified working); find/get are never called.
+# Direct attribute access only - getattr() fails on the interop objects.
+
+def _lib_repos():
+    """Fresh snapshot of the repositories (the CHM: snapshots go stale
+    after insert/remove/move)."""
+    return list(librarymanager.repositories)
+
+
+def _repo_by_name(name):
+    for repo in _lib_repos():
+        try:
+            if str(repo.name) == name:
+                return repo
+        except Exception:
+            continue
+    return None
+
+
+def _repo_name(repo):
+    try:
+        return str(repo.name)
+    except Exception:
+        return ""
+
+
+def _lib_summary(lib, repo_name=""):
+    """Safe field extraction from an IManagedLib (direct access, one
+    try/except per member - the interop objects throw on anything)."""
+    out = {"name": "", "displayname": "", "version": "", "company": "",
+           "namespace": "", "title": "", "dependencies": [],
+           "repo": repo_name, "path": ""}
+    try:
+        out["name"] = str(lib.name)
+    except Exception:
+        pass
+    try:
+        out["displayname"] = str(lib.displayname)
+    except Exception:
+        pass
+    try:
+        out["version"] = str(lib.version)
+    except Exception:
+        pass
+    try:
+        out["company"] = str(lib.company)
+    except Exception:
+        pass
+    try:
+        out["namespace"] = str(lib.default_namespace)
+    except Exception:
+        pass
+    try:
+        out["title"] = str(lib.title)
+    except Exception:
+        pass
+    try:
+        out["dependencies"] = [str(d) for d in lib.dependencies]
+    except Exception:
+        pass
+    try:
+        out["path"] = str(librarymanager.get_file_path(lib))
+    except Exception:
+        pass
+    return out
+
+
+def _require_repo(name):
+    repo = _repo_by_name(name)
+    if repo is None:
+        raise RuntimeError('unknown library repository "{r}" - see the '
+                           "repos command".format(r=name))
+    return repo
+
+
+def _lib_query_hit(lib, query, exact):
+    """Live-build match rule (2026-10-21): case-insensitive equality
+    against the display name, the title or the library name; a non-exact
+    query may also be the bare title ('NETWORK' -> 'NETWORK, 1.3.5.3
+    (OSCAT)'). Reads the interop members directly in try/except pairs
+    (see the header notes - find_library/get_library are not usable for
+    lookups here). Live System-repo libs carry name="", so the name key
+    only ever matches when a repository actually populates it."""
+    q = query.lower().strip()
+    if not q:
+        return False
+    try:
+        display = str(lib.displayname).lower().strip()
+    except Exception:
+        display = ""
+    try:
+        title = str(lib.title).lower().strip()
+    except Exception:
+        title = ""
+    try:
+        name = str(lib.name).lower().strip()
+    except Exception:
+        name = ""
+    if q == display or (title and q == title) or (name and q == name):
+        return True
+    if not exact and display and display.split(",")[0].strip() == q:
+        return True
+    return False
+
+
+def _resolve_library_pairs(name, repo_name="", exact=False):
+    """All (lib, repo) pairs matching `name`, enumerated per repository in
+    search order (the first repository wins name collisions). Enumeration
+    instead of find_library/get_library - see the header notes at the top
+    of this section for the live-build defects that force this."""
+    repos = [_require_repo(repo_name)] if repo_name else _lib_repos()
+    pairs = []
+    for repo in repos:
+        for lib in librarymanager.get_all_libraries(repo):
+            if _lib_query_hit(lib, name, exact):
+                pairs.append((lib, repo))
+    return pairs
+
+
+def cmd_libs(args):
+    """List managed libraries (ILibManager.get_all_libraries).
+
+    args: {"repo": scope to one repository name,
+           "shadowed": true to include shadowed libs (default excluded)}
+    """
+    repo_name = args.get("repo", "")
+    include_shadowed = bool(args.get("shadowed"))
+    if repo_name:
+        repo = _require_repo(repo_name)
+        libs = list(librarymanager.get_all_libraries(repo))
+        out = [_lib_summary(lib, repo_name) for lib in libs]
+    else:
+        libs = list(librarymanager.get_all_libraries(not include_shadowed))
+        out = [_lib_summary(lib) for lib in libs]
+    log("OK", "libs: {n} libraries{s}".format(
+        n=len(out), s=" (shadowed included)" if include_shadowed else ""))
+    return {"count": len(out), "shadowed_included": include_shadowed,
+            "libraries": out}
+
+
+def cmd_lib_find(args):
+    """Find libraries across repositories by display name or title
+    (enumeration-based, see _lib_query_hit).
+
+    args: {"name": required, "repo": optional scope, "exact": bool}
+    Matches in later repositories carry shadowed=true when an earlier
+    repository in search order has the same library (first match wins).
+    """
+    name = args.get("name", "")
+    if not name:
+        raise RuntimeError("lib_find needs args.name (library name or "
+                           "display name)")
+    exact = bool(args.get("exact"))
+    pairs = _resolve_library_pairs(name, args.get("repo", ""), exact)
+    out = []
+    seen = set()
+    for lib, repo in pairs:
+        summary = _lib_summary(lib, _repo_name(repo))
+        key = (summary["title"] or summary["displayname"]).lower()
+        summary["shadowed"] = key in seen
+        seen.add(key)
+        out.append(summary)
+    log("OK", "lib_find '{n}': {m} match(es)".format(n=name, m=len(out)))
+    return {"query": name, "exact": exact,
+            "count": len(out), "matches": out}
+
+
+def cmd_lib_install(args):
+    """install_library(filepath, repository, overwrite) - install a
+    compiled-library file into a repository (default: the FIRST one).
+
+    args: {"path": required (.library file), "repo": optional name,
+           "overwrite": replace existing; needs confirm=true}
+    """
+    path = args.get("path", "")
+    if not path:
+        raise RuntimeError("lib_install needs args.path (compiled-library "
+                           "file, e.g. some.library)")
+    if not os.path.isfile(path):
+        raise RuntimeError("library file not found: {p}".format(p=path))
+    overwrite = bool(args.get("overwrite"))
+    if overwrite and not args.get("confirm"):
+        raise RuntimeError("lib_install REFUSED - overwrite=true replaces "
+                           "an existing library; requires "
+                           "args.confirm=true")
+    repo = _require_repo(args["repo"]) if args.get("repo") else None
+    if repo is None:
+        # Live build: install_library rejects repository=None (TypeError:
+        # Value cannot be null) - resolve the CHM's "first repository"
+        # default here instead.
+        repo = _lib_repos()[0]
+    lib = librarymanager.install_library(path, repo, overwrite)
+    summary = _lib_summary(lib, _repo_name(repo))
+    log("OK", "lib_install {d} {v} -> {r}".format(
+        d=summary["displayname"], v=summary["version"],
+        r=summary["repo"] or "<first repository>"))
+    return summary
+
+
+def cmd_lib_uninstall(args):
+    """uninstall_library(repository, library) - remove a library from a
+    repository. Requires confirm=true; ambiguous names (same library in
+    several repositories) need args.repo.
+
+    args: {"name": required, "repo": optional name, "confirm": true}
+    """
+    name = args.get("name", "")
+    if not name:
+        raise RuntimeError("lib_uninstall needs args.name (library name "
+                           "or display name)")
+    if not args.get("confirm"):
+        raise RuntimeError("lib_uninstall REFUSED - it removes a library "
+                           "from a repository; requires args.confirm=true")
+    repo_name = args.get("repo", "")
+    exact = bool(args.get("exact"))
+    if repo_name:
+        pairs = _resolve_library_pairs(name, repo_name, exact)
+        if not pairs:
+            raise RuntimeError('library "{n}" not found in repository '
+                               "{r}".format(n=name, r=repo_name))
+        if len(pairs) > 1:
+            # Several versions/variants in ONE repository: name the exact
+            # full display name so the destructive call is unambiguous.
+            raise RuntimeError('library "{n}" is ambiguous in repository '
+                               "{r} - pass the full display name as "
+                               "args.name with exact=true".format(
+                                   n=name, r=repo_name))
+    else:
+        pairs = _resolve_library_pairs(name)
+        if not pairs:
+            raise RuntimeError('library "{n}" not found in any '
+                               "repository".format(n=name))
+        if len(pairs) > 1:
+            raise RuntimeError('library "{n}" is ambiguous - present in '
+                               "{r}; pass args.repo".format(
+                                   n=name,
+                                   r=", ".join(_repo_name(p[1])
+                                               for p in pairs)))
+    repo = pairs[0][1]
+    librarymanager.uninstall_library(repo, pairs[0][0])
+    gone = not _resolve_library_pairs(name, _repo_name(repo), exact)
+    log("OK", "lib_uninstall {n} from {r}{v}".format(
+        n=name, r=_repo_name(repo),
+        v="" if gone else " (STILL PRESENT after uninstall?)"))
+    return {"uninstalled": name, "repo": _repo_name(repo),
+            "verified_gone": gone}
+
+
+def cmd_repos(args):
+    """List library repositories in search order, with per-repo library
+    counts (ILibManager.repositories + get_all_libraries(repo))."""
+    del args  # no options yet
+    out = []
+    for index, repo in enumerate(_lib_repos()):
+        entry = {"index": index, "name": _repo_name(repo),
+                 "root_folder": "", "editable": None, "libraries": None}
+        try:
+            entry["root_folder"] = str(repo.root_folder)
+        except Exception:
+            pass
+        try:
+            entry["editable"] = bool(repo.editable)
+        except Exception:
+            pass
+        try:
+            entry["libraries"] = len(
+                list(librarymanager.get_all_libraries(repo)))
+        except Exception:
+            pass
+        out.append(entry)
+    log("OK", "repos: {n} repositories in search order".format(n=len(out)))
+    return {"count": len(out), "repositories": out}
+
+
+def cmd_repo_add(args):
+    """insert_repository(rootfolder, name, index) - register a new
+    repository. Requires confirm=true; rootfolder must already exist.
+
+    args: {"rootfolder": required existing dir, "name": required,
+           "index": position in search order, -1 = end, "confirm": true}
+    """
+    root = args.get("rootfolder", "")
+    name = args.get("name", "")
+    if not root or not name:
+        raise RuntimeError("repo_add needs args.rootfolder (existing "
+                           "directory) and args.name")
+    if not args.get("confirm"):
+        raise RuntimeError("repo_add REFUSED - it changes the machine-wide "
+                           "library repository list; requires "
+                           "args.confirm=true")
+    if not os.path.isdir(root):
+        raise RuntimeError("args.rootfolder must be an existing directory: "
+                           "{r}".format(r=root))
+    try:
+        index = int(args.get("index", -1))
+    except (TypeError, ValueError):
+        index = -1
+    repo = librarymanager.insert_repository(root, name, index)
+    log("OK", "repo_add {n} at {r} (index {i})".format(
+        n=name, r=root, i=index))
+    return {"name": _repo_name(repo), "root_folder": root, "index": index}
+
+
+def cmd_repo_remove(args):
+    """remove_repository(repository, delete_on_disk) - unregister a
+    repository. Requires confirm=true; delete_on_disk=true also deletes
+    the directory (destructive). System repositories are not removable.
+
+    args: {"name": required, "delete_on_disk": false, "confirm": true}
+    """
+    name = args.get("name", "")
+    if not name:
+        raise RuntimeError("repo_remove needs args.name (repository name)")
+    if not args.get("confirm"):
+        raise RuntimeError("repo_remove REFUSED - it changes the "
+                           "machine-wide library repository list; requires "
+                           "args.confirm=true")
+    repo = _require_repo(name)
+    try:
+        if not repo.editable:
+            raise RuntimeError('repository "{r}" is not editable (system '
+                               "repository) - it cannot be removed"
+                               .format(r=name))
+    except RuntimeError:
+        raise
+    except Exception:
+        pass  # editable unreadable - let remove_repository decide
+    delete_on_disk = bool(args.get("delete_on_disk"))
+    librarymanager.remove_repository(repo, delete_on_disk)
+    log("OK", "repo_remove {n} (delete_on_disk={d})".format(
+        n=name, d=delete_on_disk))
+    return {"removed": name, "delete_on_disk": delete_on_disk}
+
+
+def cmd_repo_update(args):
+    """update_repository(repository, new_name, new_location, copy_libraries)
+    - rename a repository and/or point it at a new location. Requires
+    confirm=true.
+
+    args: {"name": required, "new_name": "", "new_location": "",
+           "copy_libraries": false, "confirm": true}
+    """
+    name = args.get("name", "")
+    if not name:
+        raise RuntimeError("repo_update needs args.name (repository name)")
+    if not args.get("confirm"):
+        raise RuntimeError("repo_update REFUSED - it changes the "
+                           "machine-wide library repository list; requires "
+                           "args.confirm=true")
+    new_name = args.get("new_name", "")
+    new_location = args.get("new_location", "")
+    if not new_name and not new_location:
+        raise RuntimeError("repo_update needs args.new_name and/or "
+                           "args.new_location")
+    if new_location and not os.path.isdir(new_location):
+        raise RuntimeError("args.new_location must be an existing "
+                           "directory: {r}".format(r=new_location))
+    repo = _require_repo(name)
+    copy_libraries = bool(args.get("copy_libraries"))
+    librarymanager.update_repository(repo, new_name or None,
+                                     new_location or None, copy_libraries)
+    log("OK", "repo_update {n} -> name='{nn}' location='{nl}' "
+              "copy={c}".format(n=name, nn=new_name, nl=new_location,
+                                c=copy_libraries))
+    return {"updated": name, "new_name": new_name,
+            "new_location": new_location,
+            "copy_libraries": copy_libraries}
+
+
+def cmd_repo_move(args):
+    """move_repository(repository, new_index) - reorder the repository
+    search order (first match wins when resolving libraries).
+
+    args: {"name": required, "index": required position, -1 = end}
+    """
+    name = args.get("name", "")
+    if not name:
+        raise RuntimeError("repo_move needs args.name (repository name)")
+    try:
+        index = int(args.get("index"))
+    except (TypeError, ValueError):
+        raise RuntimeError("repo_move needs args.index (integer position "
+                           "in the search order, -1 = end)")
+    repo = _require_repo(name)
+    librarymanager.move_repository(repo, index)
+    order = [_repo_name(r) for r in _lib_repos()]
+    log("OK", "repo_move {n} -> index {i}; order now: {o}".format(
+        n=name, i=index, o=", ".join(order)))
+    return {"moved": name, "index": index, "order": order}
+
+
+# --------------------------------------------------------------------------
 # Command dispatch
 # --------------------------------------------------------------------------
 KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
                   "write", "unforce", "download", "disconnect", "stop",
                   "state", "probe", "messages", "snapshot", "export",
                   "plcfs", "upload_source", "save_archive",
-                  "clear_messages")
+                  "clear_messages",
+                  "libs", "lib_find", "lib_install", "lib_uninstall",
+                  "repos", "repo_add", "repo_remove", "repo_update",
+                  "repo_move")
 
 
 def run_command(request):
@@ -2189,6 +2614,35 @@ def run_command(request):
                 .format(n=cleared, f=failed))
             result["value"] = {"categories_cleared": cleared,
                                "categories_failed": failed}
+            summary["ok"] = True
+        elif cmd == "libs":
+            # Library curation: all system-level (global `librarymanager`),
+            # no project lookup needed.
+            result["value"] = cmd_libs(args)
+            summary["ok"] = True
+        elif cmd == "lib_find":
+            result["value"] = cmd_lib_find(args)
+            summary["ok"] = True
+        elif cmd == "lib_install":
+            result["value"] = cmd_lib_install(args)
+            summary["ok"] = True
+        elif cmd == "lib_uninstall":
+            result["value"] = cmd_lib_uninstall(args)
+            summary["ok"] = True
+        elif cmd == "repos":
+            result["value"] = cmd_repos(args)
+            summary["ok"] = True
+        elif cmd == "repo_add":
+            result["value"] = cmd_repo_add(args)
+            summary["ok"] = True
+        elif cmd == "repo_remove":
+            result["value"] = cmd_repo_remove(args)
+            summary["ok"] = True
+        elif cmd == "repo_update":
+            result["value"] = cmd_repo_update(args)
+            summary["ok"] = True
+        elif cmd == "repo_move":
+            result["value"] = cmd_repo_move(args)
             summary["ok"] = True
         else:
             raise RuntimeError("unknown command '{c}' (known: {k})".format(

@@ -142,6 +142,61 @@ MIND THE ARGUMENT ORDER (from the CHM):
 `upload_source(archive_path)` (IScriptOnlineDevice3) reads the source
 project archive back from the PLC (→ `ecockpit_upload_source`).
 
+## Libraries (global `librarymanager` — ILibManager)
+
+*"An instance implementing this interface is injected into the scriptengine
+scope under the name `librarymanager`."* — repository-level curation of
+compiled libraries. CHM signatures, corrected where the live build
+disagrees (**live-verified 2026-10-21**; the executor wraps every member
+access in try/except per the gotcha above):
+
+- `repositories` → `ILibRepository` list in **search order** (first match
+  wins). It is a *snapshot* — refetch after insert/remove/move.
+  `ILibRepository`: `name`, `root_folder`, `editable` (system
+  repositories are not editable → cannot be removed).
+- `get_all_libraries(exclude_shadowed_libs=True)` → all managed libraries;
+  overload `get_all_libraries(repository)` scopes to one repo.
+- `find_library(display_name)` — **live deviations**: only the FULL
+  display name is accepted (`"NETWORK, 1.3.5.3 (OSCAT)"`; a bare title
+  `"NETWORK"` raises `SystemError: stDisplayName`), and the return value
+  is a flat list of `IManagedLib` objects — NOT `(IManagedLib,
+  ILibRepository)` tuples.
+- `get_library(name, repository=None)` → first `IManagedLib` by exact
+  NAME. **Live deviations**: `repository=None` raises
+  `TypeError: Value cannot be null. Parameter name: repo`, and a name
+  that is not the full display name raises `SystemError: stDisplayName`
+  (the NAME vs DISPLAY-NAME key split the CHM describes does not exist
+  here).
+- `install_library(filepath, repository=None, overwrite=False)` → the
+  installed `IManagedLib`. **Live deviation**: `repository=None` raises
+  the same null-argument TypeError — the "FIRST repository" default must
+  be resolved by the caller. An install whose library already exists in
+  the target repository fails natively (`IOError: Library already
+  exists`) unless `overwrite=True`. → `ecockpit_lib_install`
+  (confirm-gated when overwrite).
+
+Because of the find/get deviations above, the executor resolves ALL
+lookups by enumeration over `get_all_libraries()` in repository search
+order (`_resolve_library_pairs`) and never calls find_library/get_library.
+- `uninstall_library(repository, library)` → `ecockpit_lib_uninstall`
+  (confirm-gated; ambiguity refused unless repo given).
+- `insert_repository(rootfolder, name, index=-1)` — rootfolder must be an
+  EXISTING directory; `remove_repository(repository, delete_on_disk=False)`;
+  `update_repository(repository, new_name=None, new_location=None,
+  copy_libraries=False)`; `move_repository(repository, new_index)` (-1 =
+  end). → `ecockpit_repo_add/remove/update/move`.
+- `get_file_path(IManagedLib)` → repository file path.
+- `IManagedLib` properties: `displayname`, `version`, `company`,
+  `default_namespace`, `title`, `dependencies` (string list),
+  `categories` (`ILibCategory` list).
+- `categories` / `top_level_categories` (ILibCategory) — not exposed as
+  tools yet.
+
+**There is no per-application Library Manager scripting API in this
+build**: the e!COCKPIT UI shows a Library Manager under each application,
+but script access to its *referenced* libraries is not part of this
+surface — the `librarymanager` global covers repository curation only.
+
 ## Not in this build (probed live — do not retry)
 
 `system.get_message_log`, `system.get_messages_count`,

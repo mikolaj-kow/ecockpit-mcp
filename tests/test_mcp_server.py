@@ -21,5 +21,8 @@ def test_server_module_imports():
 
 def test_expected_tools_registered():
     for name in ("ecockpit_server_status", "ecockpit_build", "ecockpit_read",
-                 "ecockpit_write", "ecockpit_download"):
+                 "ecockpit_write", "ecockpit_download",
+                 "ecockpit_libs", "ecockpit_lib_find",
+                 "ecockpit_lib_install", "ecockpit_lib_uninstall",
+                 "ecockpit_repos", "ecockpit_repo_move"):
         assert hasattr(srv, name), "missing tool function: " + name
