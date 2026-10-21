@@ -110,24 +110,21 @@ Build log rendering used by the executor:
   with the CHM's 1-arg signature) — the executor's export callbacks
   take `*argv` and log everything.
 - `save_archive(path)` — single-file `.projectarchive` backup
-  (NO MCP tool — removed, see the verdict). **VERDICT (live 2026-10-21, e!COCKPIT
-  11.3.1.0): BROKEN in this build — do not rely on it.** Every binding
-  NREs inside the engine with `Object reference not set`: the 1-arg
-  form, `(path, None)`, the IScriptProject9 `(path, None, None, None)`
-  (which IronPython first rejects with `Multiple targets could match`
-  across the 7 overlapping IScriptProject8/9 overloads), and the fully
-  disambiguated `(path, "", ArchiveCategories.default|.none)` via the
-  injected **`ArchiveCategories`** global. Binding quirks worth
-  remembering: IronPython needs a TYPED argument in the category slot
-  (None leaves multiple overloads matching; a lone category into
-  `IEnumerable` slots casts badly). The executor's `save_archive`
-  command keeps the probe ladder + full attempt log so a fixed engine
-  self-heals, and points at `ecockpit_snapshot` (plain `.ecp` copy —
-  works live) for
-  backups today. The MCP tool is **disabled at the server layer** — it
-  returns the explanation without touching the relay (the executor
-  ladder remains for file-protocol users and self-heals if the engine
-  gets fixed).
+  (NO MCP tool — removed, see the verdict). **VERDICT (live 2026-10-21
+  + 10-22 retest, e!COCKPIT 11.3.1.0): BROKEN in this build — do not
+  rely on it.** Every binding NREs inside the engine with
+  `Object reference not set`: the 1-arg form, `(path, None)`, the
+  IScriptProject9 `(path, None, None, None)` (which IronPython first
+  rejects with `Multiple targets could match` across the 7 overlapping
+  IScriptProject8/9 overloads), the fully disambiguated
+  `(path, "", ArchiveCategories.default|.none)` via the injected
+  **`ArchiveCategories`** global, and the named-args IScriptProject9
+  form — **retested AFTER the project was saved/named**: unlike
+  `source_download` (which needed exactly that), the NREs persist, so
+  the unnamed project explains `source_download` but NOT
+  `save_archive`. The executor's ladder + attempt log stay (self-heals
+  if WAGO fixes the engine); `ecockpit_snapshot` (plain `.ecp` copy —
+  works live) is the backup path.
 - `path` — the on-disk project path (prefer over disk-searching).
 - `active_application`, `devices`, `find(name, recursive=True)`,
   `get_device(name)`, `get_children(...)`.
