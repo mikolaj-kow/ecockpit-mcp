@@ -180,6 +180,10 @@ State properties: `is_logged_in`, `application_state` (ApplicationState),
 `source_download()` writes the source project to the PLC — EXPOSED as
 `ecockpit_source_download` (confirm-gated; distinct from
 `ecockpit_download`, which deploys the compiled application).
+**LIVE 2026-10-21**: the member exists but the engine NREs
+("Object reference not set") — same defect class as `save_archive`.
+Treat as broken in this build; the tool stays (confirm-gated) so a
+fixed engine self-heals.
 
 ### PLC file system (IScriptOnlineDevice4 → `ecockpit_plc_ls/get/put/rm`)
 

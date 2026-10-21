@@ -578,8 +578,11 @@ def ecockpit_login(option: str = "try", delete_foreign_apps: bool = False,
     description="DESTRUCTIVE - requires explicit owner request. Write the "
                 "SOURCE project to the PLC (source_download) - unlike "
                 "ecockpit_download this ships the sources, not the "
-                "compiled application. Pass confirm=true, never without "
-                "an explicit owner instruction.")
+                "compiled application. CAUTION, live 2026-10-21: the "
+                "engine NREs on this call ('Object reference not set') - "
+                "same defect class as save_archive; kept so a fixed "
+                "engine self-heals. Pass confirm=true, never without an "
+                "explicit owner instruction.")
 def ecockpit_source_download(confirm: bool = False,
                              timeout_s: int = 300) -> str:
     if not confirm:
