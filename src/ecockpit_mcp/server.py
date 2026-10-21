@@ -596,17 +596,23 @@ def ecockpit_upload_source(path: str = "", device: str = "",
 
 
 @mcp.tool(
-    description="Save the open project as a single-file .projectarchive "
-                "(backup). CAUTION, live 2026-10-21: e!COCKPIT 11.3.1.0 "
-                "NREs ('Object reference not set') in EVERY documented "
-                "save_archive binding - this tool probes them all, logs "
-                "each attempt, and ends with a pointer to "
-                "ecockpit_snapshot (plain .ecp copy), which is the "
-                "working backup path in this build. path defaults to "
-                "<snapshots>/<project>_<timestamp>.projectarchive.")
+    description="DISABLED (live 2026-10-21): e!COCKPIT 11.3.1.0 throws "
+                "'Object reference not set' in EVERY documented "
+                "save_archive binding - all 5 probed forms NRE inside the "
+                "engine. Calling this returns that explanation without "
+                "touching the relay. Use ecockpit_snapshot (plain .ecp "
+                "copy) for backups; the probe ladder stays in the "
+                "executor and self-heals if WAGO fixes the engine.")
 def ecockpit_save_archive(path: str = "", timeout_s: int = 300) -> str:
-    args = {"path": path} if path else {}
-    return json.dumps(_run("save_archive", args, timeout_s), indent=2)
+    return json.dumps({
+        "ok": False,
+        "disabled": True,
+        "error": "save_archive is disabled - e!COCKPIT 11.3.1.0 throws "
+                 "'Object reference not set' in every documented "
+                 "save_archive binding (all 5 probed forms NRE; see "
+                 "docs/SCRIPTENGINE_API.md). Use ecockpit_snapshot for "
+                 "backups (plain .ecp copy, works live).",
+    }, indent=2)
 
 
 @mcp.tool(

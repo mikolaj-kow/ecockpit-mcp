@@ -139,7 +139,7 @@ Build & project:
 | `ecockpit_import` / `ecockpit_compile` | halves of build, standalone |
 | `ecockpit_export(dir?)` | PLCopen XML export to `<dir>/<application>.xml` (single file; defaults to `<project root>/plcopensrc-export`) — string-return fallback if the engine refuses to write |
 | `ecockpit_snapshot(version?)` | project copy to `<snapshots>/<project>_<version>.ecp` |
-| `ecockpit_save_archive(path?)` | single-file `.projectarchive` backup — **broken in e!COCKPIT 11.3.1.0** (engine NREs in every `save_archive` binding; the tool probes all forms, logs each attempt and points at `ecockpit_snapshot`, the working backup) |
+| `ecockpit_save_archive(path?)` | **DISABLED** — e!COCKPIT 11.3.1.0 engine NREs in every `save_archive` binding (all 5 forms probed live); calling it returns the explanation. Use `ecockpit_snapshot`, the working backup |
 | `ecockpit_status` | project/application/device info (no PLC login) |
 
 Online (PLC):

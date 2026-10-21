@@ -123,7 +123,10 @@ Build log rendering used by the executor:
   `IEnumerable` slots casts badly). `ecockpit_save_archive` keeps the
   probe ladder + full attempt log so a fixed engine self-heals, and
   points at `ecockpit_snapshot` (plain `.ecp` copy — works live) for
-  backups today.
+  backups today. The MCP tool is **disabled at the server layer** — it
+  returns the explanation without touching the relay (the executor
+  ladder remains for file-protocol users and self-heals if the engine
+  gets fixed).
 - `path` — the on-disk project path (prefer over disk-searching).
 - `active_application`, `devices`, `find(name, recursive=True)`,
   `get_device(name)`, `get_children(...)`.
