@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecockpit-mcp"
+version = "0.1.0"
+description = "MCP server exposing WAGO e!COCKPIT PLC automation (build, import, online read/write, download) to LLM editors as typed tools"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mikołaj Kowalski" }]
+keywords = ["mcp", "ecockpit", "codesys", "plc", "wago", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Software Development :: Embedded Systems",
+]
+dependencies = [
+    "mcp>=2.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/mikolaj-kow/ecockpit-mcp"
+Issues = "https://github.com/mikolaj-kow/ecockpit-mcp/issues"
+
+[project.scripts]
+ecockpit-mcp = "ecockpit_mcp_server:main"
+
+[tool.setuptools]
+# The three scripts ship as top-level modules on purpose: ecockpit_cmd_server
+# exec()s ecockpit_exec.py from its own directory and the server checks the
+# executor sits next to it (PROJECT_DIR), so all three must stay siblings.
+py-modules = ["ecockpit_mcp_server", "ecockpit_cmd_server", "ecockpit_exec"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
