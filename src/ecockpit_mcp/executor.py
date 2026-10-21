@@ -2195,6 +2195,14 @@ def cmd_plcfs(project, args):
     try:
         if op == "ls":
             remote_dir = args.get("remote", "/")
+            # LIVE 2026-10-22: the connected device refused "/" with
+            # "Get directory entries failed" - PLC layouts vary, so on
+            # failure we probe well-known directories and report which
+            # one listed.
+            dir_candidates = [remote_dir]
+            for candidate in ("/", "/tmp", "/PlcLogic", "."):
+                if candidate not in dir_candidates:
+                    dir_candidates.append(candidate)
             last_errors = []
             for name in _LS_CANDIDATES:
                 try:
@@ -2202,41 +2210,49 @@ def cmd_plcfs(project, args):
                 except AttributeError:
                     continue
                 _ensure_connected()
-                try:
-                    infos = fn(remote_dir)
-                except TypeError as exc:
-                    # member exists but rejected (remote_dir) - keep
-                    # it in the log, try the next candidate
-                    log("INFO", "plcfs: odev.{n} rejected the "
-                        "arguments: {e}".format(n=name, e=exc))
-                    last_errors.append("odev.{n}: {e}".format(
-                        n=name, e=str(exc)[:120]))
-                    continue
-                out = []
-                for fi in infos:
-                    entry = {"name": ""}
-                    for attr in ("name", "is_directory", "is_file",
-                                 "size", "last_modification_time"):
-                        try:
-                            if attr == "name":
-                                entry["name"] = str(fi.name)
-                            elif attr == "is_directory":
-                                entry["is_directory"] = \
-                                    bool(fi.is_directory)
-                            elif attr == "is_file":
-                                entry["is_file"] = bool(fi.is_file)
-                            elif attr == "size":
-                                entry["size"] = str(fi.size)
-                            elif attr == "last_modification_time":
-                                entry["last_modification_time"] = \
-                                    str(fi.last_modification_time)
-                        except Exception:
-                            continue
-                    out.append(entry)
+                for attempt_dir in dir_candidates:
+                    try:
+                        infos = fn(attempt_dir)
+                    except TypeError as exc:
+                        # member exists but rejected (dir) - keep it in
+                        # the log, try the next candidate
+                        log("INFO", "plcfs: odev.{n} rejected the "
+                            "arguments: {e}".format(n=name, e=exc))
+                        last_errors.append("odev.{n}: {e}".format(
+                            n=name, e=str(exc)[:120]))
+                        break
+                    except Exception as exc:
+                        log("INFO", "plcfs: odev.{n}({d}) failed: "
+                            "{e}".format(n=name, d=attempt_dir,
+                                         e=str(exc)[:120]))
+                        last_errors.append("odev.{n}({d}): {e}".format(
+                            n=name, d=attempt_dir, e=str(exc)[:120]))
+                        continue
+                    out = []
+                    for fi in infos:
+                        entry = {"name": ""}
+                        for attr in ("name", "is_directory", "is_file",
+                                     "size", "last_modification_time"):
+                            try:
+                                if attr == "name":
+                                    entry["name"] = str(fi.name)
+                                elif attr == "is_directory":
+                                    entry["is_directory"] = \
+                                        bool(fi.is_directory)
+                                elif attr == "is_file":
+                                    entry["is_file"] = bool(fi.is_file)
+                                elif attr == "size":
+                                    entry["size"] = str(fi.size)
+                                elif attr == "last_modification_time":
+                                    entry["last_modification_time"] = \
+                                        str(fi.last_modification_time)
+                            except Exception:
+                                continue
+                        out.append(entry)
                 log("OK", "plcfs ls {d} via create_online_device.{n}: "
-                    "{c} entries".format(d=remote_dir, n=name, c=len(out)))
-                return {"dir": remote_dir, "via": "create_online_device"
-                                                    ".{n}".format(n=name),
+                    "{c} entries".format(d=attempt_dir, n=name, c=len(out)))
+                return {"dir": attempt_dir, "requested_dir": remote_dir,
+                        "via": "create_online_device.{n}".format(n=name),
                         "entries": out}
             raise RuntimeError(
                 "no file-listing member worked on the ScriptOnlineDevice "
