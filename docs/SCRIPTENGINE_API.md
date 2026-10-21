@@ -84,14 +84,50 @@ Build log rendering used by the executor:
 - `save_as(path, password=None)` — saves under a **new filename**
   (RETARGETS the open project; password optional, re-encrypts when given).
   Avoid for snapshots — copy the file instead.
-- `save_archive(path)` — single-file `.projectarchive` backup
-  (→ `ecockpit_save_archive`).
 - `export_xml(reporter, objects, path, recursive)` — PLCopen XML export
   (→ `ecockpit_export`); the IScriptProject2 overload adds a 5th
-  `export_folder_structure` bool. `objects` takes a Python list of script
-  objects (e.g. `[application]`, recursive). IExportReporter callbacks:
-  `error(message)`, `warning(message)`, `nonexportable(obj)`, `aborting`
-  property.
+  `export_folder_structure` bool (IScriptProject7 a 6th,
+  `declarations_as_plaintext`). **`path` is the path of the FILE we
+  export into — NEVER a directory** (live 2026-10-21: passing a
+  directory makes .NET try to open it as a file → `Access to the path
+  '<dir>' is denied` on any directory). If `path` is null the WHOLE
+  export comes back as the return string ("The exported XML as string,
+  or null if a filepath is given") — the executor's deterministic
+  fallback: call with `path=None`, write the file itself. `objects`
+  takes a Python list of script objects (e.g. `[application]`,
+  recursive). Reporter callbacks: `error(message)`,
+  `warning(message)`, `nonexportable(obj)`, `aborting` property.
+  **EXPOSURE-NAME GOTCHA (live 2026-10-21)**: the reporter
+  class must subclass the interface under its exposed script-scope name
+  **`ExportReporter`** — `IExportReporter` is only the .NET type name and
+  is never injected; subclassing a plain-`object` placeholder named
+  IExportReporter made export_xml reject the reporter with
+  `TypeError: expected IExportReporter, got Object_1$1`. (The import
+  side is lucky: `IImportReporter` is exposed as `ImportReporter`, which
+  is the name the executor always guarded on.) **CALLBACK ARITY GOTCHA
+  (live 2026-10-21)**: the EXPORT flow calls `warning()` with TWO
+  message arguments (`warning() takes exactly 2 arguments (3 given)`
+  with the CHM's 1-arg signature) — the executor's export callbacks
+  take `*argv` and log everything.
+- `save_archive(path)` — single-file `.projectarchive` backup
+  (NO MCP tool — removed, see the verdict). **VERDICT (live 2026-10-21, e!COCKPIT
+  11.3.1.0): BROKEN in this build — do not rely on it.** Every binding
+  NREs inside the engine with `Object reference not set`: the 1-arg
+  form, `(path, None)`, the IScriptProject9 `(path, None, None, None)`
+  (which IronPython first rejects with `Multiple targets could match`
+  across the 7 overlapping IScriptProject8/9 overloads), and the fully
+  disambiguated `(path, "", ArchiveCategories.default|.none)` via the
+  injected **`ArchiveCategories`** global. Binding quirks worth
+  remembering: IronPython needs a TYPED argument in the category slot
+  (None leaves multiple overloads matching; a lone category into
+  `IEnumerable` slots casts badly). The executor's `save_archive`
+  command keeps the probe ladder + full attempt log so a fixed engine
+  self-heals, and points at `ecockpit_snapshot` (plain `.ecp` copy —
+  works live) for
+  backups today. The MCP tool is **disabled at the server layer** — it
+  returns the explanation without touching the relay (the executor
+  ladder remains for file-protocol users and self-heals if the engine
+  gets fixed).
 - `path` — the on-disk project path (prefer over disk-searching).
 - `active_application`, `devices`, `find(name, recursive=True)`,
   `get_device(name)`, `get_children(...)`.

@@ -142,7 +142,6 @@ _TIMEOUTS = {
     "export": 600,
     "plcfs": 300,
     "upload_source": 600,
-    "save_archive": 300,
     "clear_messages": 60,
     "libs": 120,
     "lib_find": 120,
@@ -297,11 +296,14 @@ def ecockpit_server_status() -> str:
                 "severity, POU and line on failure. Codes listed in "
                 "IGNORE_CODES (.env, e.g. \"C543, C100\") are filtered from "
                 "harvest and counts; set all_messages=true to bypass the "
-                "filter for this run.")
+                "filter for this run. harvest_lines (default 60) raises "
+                "how many harvest lines come back inline for big "
+                "failures.")
 def ecockpit_build(skip_import: bool = False, all_messages: bool = False,
-                   timeout_s: int = 900) -> str:
+                   harvest_lines: int = 60, timeout_s: int = 900) -> str:
     return json.dumps(_run("build", {"skip_import": bool(skip_import),
-                                     "all_messages": bool(all_messages)},
+                                     "all_messages": bool(all_messages),
+                                     "harvest_lines": int(harvest_lines)},
                            timeout_s), indent=2)
 
 
@@ -327,9 +329,12 @@ def ecockpit_export(dir: str = "", timeout_s: int = 600) -> str:
 @mcp.tool(
     description="Compile only (no XML re-import). Same diagnostics and "
                 "IGNORE_CODES filtering as build (all_messages=true "
-                "bypasses).")
-def ecockpit_compile(all_messages: bool = False, timeout_s: int = 900) -> str:
-    return json.dumps(_run("compile", {"all_messages": bool(all_messages)},
+                "bypasses). harvest_lines (default 60) raises how many "
+                "harvest lines come back inline.")
+def ecockpit_compile(all_messages: bool = False, harvest_lines: int = 60,
+                     timeout_s: int = 900) -> str:
+    return json.dumps(_run("compile", {"all_messages": bool(all_messages),
+                                       "harvest_lines": int(harvest_lines)},
                            timeout_s), indent=2)
 
 
@@ -338,10 +343,13 @@ def ecockpit_compile(all_messages: bool = False, timeout_s: int = 900) -> str:
                 "compile from scratch without XML re-import. Fixes grown "
                 "GVL arrays failing incremental builds with C0106 'out of "
                 "global data memory'. Slower than compile (~1-3 min). Same "
-                "diagnostics and IGNORE_CODES filtering as build.")
-def ecockpit_rebuild(all_messages: bool = False,
+                "diagnostics and IGNORE_CODES filtering as build. "
+                "harvest_lines (default 60) raises how many harvest lines "
+                "come back inline.")
+def ecockpit_rebuild(all_messages: bool = False, harvest_lines: int = 60,
                      timeout_s: int = 1200) -> str:
-    return json.dumps(_run("rebuild", {"all_messages": bool(all_messages)},
+    return json.dumps(_run("rebuild", {"all_messages": bool(all_messages),
+                                       "harvest_lines": int(harvest_lines)},
                            timeout_s), indent=2)
 
 
@@ -586,14 +594,11 @@ def ecockpit_upload_source(path: str = "", device: str = "",
     return json.dumps(_run("upload_source", args, timeout_s), indent=2)
 
 
-@mcp.tool(
-    description="Save the open project as a single-file .projectarchive "
-                "(backup; the .ecp snapshot stays the plain-project "
-                "counterpart). path defaults to "
-                "<snapshots>/<project>_<timestamp>.projectarchive.")
-def ecockpit_save_archive(path: str = "", timeout_s: int = 300) -> str:
-    args = {"path": path} if path else {}
-    return json.dumps(_run("save_archive", args, timeout_s), indent=2)
+# NOTE: no ecockpit_save_archive tool on purpose - e!COCKPIT 11.3.1.0
+# NREs ("Object reference not set") in EVERY documented save_archive
+# binding (5 forms probed live 2026-10-21; see docs/SCRIPTENGINE_API.md
+# and the executor's cmd_save_archive ladder). ecockpit_snapshot is the
+# working backup path. Re-add a tool only once the engine is fixed.
 
 
 @mcp.tool(
@@ -683,14 +688,26 @@ def _run_http():
                 "company, namespace, dependencies, repository file path. "
                 "repo scopes the listing to one repository; shadowed=true "
                 "also lists libraries shadowed by higher-priority "
-                "repositories (default: excluded).")
-def ecockpit_libs(repo: str = "", shadowed: bool = False,
+                "repositories (default: excluded). filter is a "
+                "case-insensitive substring on displayname/title/name - "
+                "USE IT (or page via offset) when exploring: the System "
+                "repository alone holds ~4000 libraries and results are "
+                "paged (limit default 200, 0 = unlimited). The result "
+                "carries total/offset/count/truncated for walking pages.")
+def ecockpit_libs(repo: str = "", shadowed: bool = False, filter: str = "",
+                  offset: int = 0, limit: int = 200,
                   timeout_s: int = 120) -> str:
     args = {}
     if repo:
         args["repo"] = repo
     if shadowed:
         args["shadowed"] = True
+    if filter:
+        args["filter"] = filter
+    if offset:
+        args["offset"] = int(offset)
+    if limit != 200:
+        args["limit"] = int(limit)
     return json.dumps(_run("libs", args, timeout_s), indent=2)
 
 

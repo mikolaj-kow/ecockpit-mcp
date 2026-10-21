@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Offline unit tests for the library-curation executor commands.
+"""Offline unit tests for the ecockpit-mcp executor commands
+(library curation, export reporter, save_archive ladder).
 
 The executor talks to the ScriptEngine-injected `librarymanager` global
 (ILibManager). Here a plain-Python fake following the ScriptEngine.chm
@@ -264,3 +265,122 @@ def test_repo_crud_gates_and_effects(mgr, tmp_path):
 
     with pytest.raises(RuntimeError, match="needs args.index"):
         ex.cmd_repo_move({"name": "Mine"})
+
+
+def test_libs_paging_and_filter(mgr):
+    user = mgr.repositories[2]
+    for i in range(250):
+        user.libs["Bulk{0:03d}".format(i)] = FakeLib(
+            "BulkLib{0:03d}".format(i), displayname="Bulk {0:03d} lib".format(i))
+    user.libs["Needle"] = FakeLib("NeedleLib", displayname="The Needle, 1.0")
+
+    # default limit pages the 253 matches (250 bulk + needle + the two
+    # fixture libs in User/WAGO)
+    out = ex.cmd_libs({})
+    assert out["total"] == 253
+    assert out["count"] == 200
+    assert out["truncated"] is True
+    assert out["offset"] == 0
+
+    # walk to the last page: 53 entries, no truncation
+    out = ex.cmd_libs({"offset": 200})
+    assert out["count"] == 53
+    assert out["truncated"] is False
+
+    # past the end -> empty page
+    out = ex.cmd_libs({"offset": 1000})
+    assert out["count"] == 0 and out["total"] == 253
+    assert out["truncated"] is False
+
+    # limit=0 means unlimited
+    out = ex.cmd_libs({"limit": 0})
+    assert out["count"] == 253 and out["truncated"] is False
+
+    # filter is a case-insensitive substring on displayname/title/name
+    out = ex.cmd_libs({"filter": "needle"})
+    assert out["total"] == 1
+    assert out["libraries"][0]["displayname"] == "The Needle, 1.0"
+    out = ex.cmd_libs({"filter": "bulklib249"})
+    assert out["total"] == 1
+
+    # scoped + paged together
+    out = ex.cmd_libs({"repo": "User", "limit": 10})
+    assert out["count"] == 10 and out["total"] == 252
+    assert all(lib["repo"] == "User" for lib in out["libraries"])
+
+
+def test_export_reporter_base_resolution(monkeypatch):
+    # offline: ExportReporter stand-in is None -> the IExportReporter
+    # placeholder class is the base
+    base = ex._export_reporter_base()
+    assert base is ex.IExportReporter
+
+    # a real injected interface (any non-None) wins under its own name
+    marker = type("RealExportReporter", (object,), {})
+    monkeypatch.setattr(ex, "ExportReporter", marker)
+    assert ex._export_reporter_base() is marker
+
+    # neither name present -> plain-object fallback (never called, but
+    # keeps the factory importable)
+    monkeypatch.setattr(ex, "ExportReporter", None)
+    monkeypatch.setattr(ex, "IExportReporter", None)
+    assert ex._export_reporter_base() is object
+
+
+def test_export_target_path_sanitized(tmp_path):
+    # _short_name's "Name=<x>" prefix is stripped, bad chars underscored
+    assert ex._export_target_path(str(tmp_path), "Name=My App").endswith(
+        "My_App.xml")
+    assert ex._export_target_path(str(tmp_path), "Name=A/B:C").endswith(
+        "A_B_C.xml")
+    assert ex._export_target_path(str(tmp_path), "").endswith(
+        "application.xml")
+    assert ex._export_target_path(str(tmp_path), "Name=").endswith(
+        "application.xml")
+
+
+class FakeArchiveProject(object):
+    """Records save_archive calls; raises per configured form."""
+
+    def __init__(self, failures):
+        # failures: list of exception-or-None per form index
+        self.failures = list(failures)
+        self.calls = []
+
+    def save_archive(self, *argv):
+        self.calls.append(argv)
+        idx = len(self.calls) - 1
+        failure = self.failures[idx] if idx < len(self.failures) else None
+        if failure is not None:
+            raise failure
+        # "write" the archive the executor then verifies
+        with open(argv[0], "wb") as fh:
+            fh.write(b"archive")
+
+
+def test_save_archive_ladder(tmp_path):
+    # form 1 works -> used, reported
+    good = FakeArchiveProject([None])
+    out = ex.cmd_save_archive(good, {"path": str(tmp_path / "a.parch")})
+    assert out["form"] == 1 and out["bytes"] == 7
+    assert good.calls == [(str(tmp_path / "a.parch"),)]
+
+    # form 1 NREs live-style -> form 2 saves the day
+    nre = RuntimeError("Object reference not set")
+    fallback = FakeArchiveProject([nre, None])
+    out = ex.cmd_save_archive(fallback, {"path": str(tmp_path / "b.parch")})
+    assert out["form"] == 2
+    assert fallback.calls[0] == (str(tmp_path / "b.parch"),)
+    assert fallback.calls[1] == (str(tmp_path / "b.parch"), None)
+
+    # every form fails -> error lists attempts and points at snapshot
+    doomed = FakeArchiveProject([nre, nre, nre])
+    with pytest.raises(RuntimeError, match="ecockpit_snapshot"):
+        ex.cmd_save_archive(doomed, {"path": str(tmp_path / "c.parch")})
+    assert len(doomed.calls) == 3
+
+    # a form that returns without writing the file is not trusted
+    liar = FakeArchiveProject([None])
+    liar.save_archive = lambda *a: None
+    with pytest.raises(RuntimeError, match="ecockpit_snapshot"):
+        ex.cmd_save_archive(liar, {"path": str(tmp_path / "d.parch")})

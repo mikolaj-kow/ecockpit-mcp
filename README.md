@@ -134,12 +134,11 @@ Build & project:
 
 | Tool | Notes |
 |---|---|
-| `ecockpit_build(skip_import?, all_messages?)` | re-import + cleanup + compile; structured diagnostics (`harvest`: C-code, severity, POU, line) |
-| `ecockpit_rebuild(all_messages?)` | FULL rebuild (`app.rebuild()`) — scripted Build → Clean; fixes C0106 on grown GVL arrays |
+| `ecockpit_build(skip_import?, all_messages?, harvest_lines?)` | re-import + cleanup + compile; structured diagnostics (`harvest`: C-code, severity, POU, line) |
+| `ecockpit_rebuild(all_messages?, harvest_lines?)` | FULL rebuild (`app.rebuild()`) — scripted Build → Clean; fixes C0106 on grown GVL arrays |
 | `ecockpit_import` / `ecockpit_compile` | halves of build, standalone |
-| `ecockpit_export(dir?)` | PLCopen XML export (reverse of import; defaults to `<project root>/plcopensrc-export`) |
-| `ecockpit_snapshot(version?)` | project copy to `<snapshots>/<project>_<version>.ecp` |
-| `ecockpit_save_archive(path?)` | single-file `.projectarchive` backup |
+| `ecockpit_export(dir?)` | PLCopen XML export to `<dir>/<application>.xml` (single file; defaults to `<project root>/plcopensrc-export`) — string-return fallback if the engine refuses to write |
+| `ecockpit_snapshot(version?)` | project copy to `<snapshots>/<project>_<version>.ecp` — the working backup (no `save_archive` tool: the engine NREs in every binding, see `docs/SCRIPTENGINE_API.md`) |
 | `ecockpit_status` | project/application/device info (no PLC login) |
 
 Online (PLC):
@@ -169,7 +168,7 @@ there is no per-application Library Manager scripting API in this build):
 
 | Tool | Notes |
 |---|---|
-| `ecockpit_libs(repo?, shadowed?)` | list installed libraries: version, company, namespace, dependencies, repo file path |
+| `ecockpit_libs(repo?, shadowed?, filter?, offset?, limit?)` | list installed libraries (version, company, namespace, dependencies, repo file path); paged — `limit` default 200, `filter` = case-insensitive substring; result carries `total`/`truncated` |
 | `ecockpit_lib_find(name, repo?, exact?)` | find by display name (all matches + repository); `exact=true` = first-match-by-name resolution |
 | `ecockpit_lib_install(path, repo?, overwrite?, confirm)` | install a compiled-library file into a repository (default: first in search order); `overwrite` needs confirm |
 | `ecockpit_lib_uninstall(name, repo?, confirm)` | **destructive** — remove a library from a repository; ambiguous names are refused unless `repo` given |
