@@ -175,6 +175,15 @@ MIND THE ARGUMENT ORDER (from the CHM):
   (`name`, `is_directory`, `is_file`, `size`, `last_modification_time`)
 - `delete_file(remote_file)`
 
+**LIVE (2026-10-21, e!COCKPIT 11.3.1.0)**: the online device object
+(`EScriptDevice`) has **no `get_file_list_of_directory`** — `plcfs ls`
+logged in fine (76 s) and then died on that AttributeError. `cmd_plcfs`
+now probes a candidate-name ladder over BOTH online objects (device and
+online application), logs a surface probe of the file members at every
+call, and fails with the full probe result so the real name surfaces on
+the next armed session. The other three members (`download_file`,
+`upload_file`, `delete_file`) are unverified live so far.
+
 `upload_source(archive_path)` (IScriptOnlineDevice3) reads the source
 project archive back from the PLC (→ `ecockpit_upload_source`).
 

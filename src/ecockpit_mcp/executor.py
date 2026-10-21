@@ -1784,6 +1784,53 @@ def cmd_export(project, args, summary):
             "xml_files": len(files), "first_files": files[:10]}
 
 
+def _plcfs_member(holder, name):
+    """Fetch one plcfs member by literal name.
+
+    getattr() is unreliable on the interop wrappers (false negatives per
+    the gotcha at the top of this file), so every candidate gets its own
+    direct-access branch. Raises AttributeError when the member is not
+    present.
+    """
+    if name == "get_file_list_of_directory":
+        return holder.get_file_list_of_directory
+    if name == "get_files_of_directory":
+        return holder.get_files_of_directory
+    if name == "get_file_list":
+        return holder.get_file_list
+    if name == "get_directory_listing":
+        return holder.get_directory_listing
+    if name == "list_files":
+        return holder.list_files
+    if name == "get_files":
+        return holder.get_files
+    if name == "download_file":
+        return holder.download_file
+    if name == "upload_file":
+        return holder.upload_file
+    if name == "delete_file":
+        return holder.delete_file
+    raise AttributeError(name)
+
+
+_LS_CANDIDATES = ("get_file_list_of_directory", "get_files_of_directory",
+                  "get_file_list", "get_directory_listing", "list_files",
+                  "get_files")
+_FILE_CANDIDATES = {"get": ("download_file",), "put": ("upload_file",),
+                    "rm": ("delete_file",)}
+
+
+def _plcfs_member_present(holder, name):
+    try:
+        _plcfs_member(holder, name)
+        return True
+    except AttributeError:
+        return False
+    except Exception:
+        # member exists but touching it surfaced - count it as present
+        return True
+
+
 def cmd_plcfs(project, args):
     """File operations on the PLC's file system (IScriptOnlineDevice4).
 
@@ -1801,65 +1848,116 @@ def cmd_plcfs(project, args):
         raise RuntimeError("plcfs {o} REFUSED - requires args.confirm=true "
                            "(it modifies files on the PLC)".format(o=op))
     device, onlineapp = _online_connect(project, args)
+    holders = (("device", device), ("onlineapp", onlineapp))
+    surface = []
+    for holder_name, holder in holders:
+        present = [n for n in ("download_file", "upload_file", "delete_file")
+                   if _plcfs_member_present(holder, n)]
+        surface.append("{h}: {n}".format(h=holder_name,
+                                         n=", ".join(present) or "(none)"))
+    log("INFO", "plcfs surface probe: {s}".format(s="; ".join(surface)))
     try:
         if op == "ls":
             remote_dir = args.get("remote", "/")
-            infos = device.get_file_list_of_directory(remote_dir)
-            out = []
-            for fi in infos:
-                entry = {"name": ""}
-                for attr in ("name", "is_directory", "is_file", "size",
-                             "last_modification_time"):
+            last_errors = []
+            for holder_name, holder in holders:
+                for name in _LS_CANDIDATES:
                     try:
-                        if attr == "name":
-                            entry["name"] = str(fi.name)
-                        elif attr == "is_directory":
-                            entry["is_directory"] = bool(fi.is_directory)
-                        elif attr == "is_file":
-                            entry["is_file"] = bool(fi.is_file)
-                        elif attr == "size":
-                            entry["size"] = str(fi.size)
-                        elif attr == "last_modification_time":
-                            entry["last_modification_time"] = \
-                                str(fi.last_modification_time)
-                    except Exception:
+                        fn = _plcfs_member(holder, name)
+                    except AttributeError:
                         continue
-                out.append(entry)
-            log("OK", "plcfs ls {d}: {n} entries".format(
-                d=remote_dir, n=len(out)))
-            return {"dir": remote_dir, "entries": out}
-        if op == "get":
+                    try:
+                        infos = fn(remote_dir)
+                    except TypeError as exc:
+                        # member exists but rejected (remote_dir) - keep
+                        # it in the log, try the next candidate
+                        log("INFO", "plcfs: {h}.{n} rejected the "
+                            "arguments: {e}".format(h=holder_name, n=name,
+                                                    e=exc))
+                        last_errors.append("{h}.{n}: {e}".format(
+                            h=holder_name, n=name, e=str(exc)[:120]))
+                        continue
+                    out = []
+                    for fi in infos:
+                        entry = {"name": ""}
+                        for attr in ("name", "is_directory", "is_file",
+                                     "size", "last_modification_time"):
+                            try:
+                                if attr == "name":
+                                    entry["name"] = str(fi.name)
+                                elif attr == "is_directory":
+                                    entry["is_directory"] = \
+                                        bool(fi.is_directory)
+                                elif attr == "is_file":
+                                    entry["is_file"] = bool(fi.is_file)
+                                elif attr == "size":
+                                    entry["size"] = str(fi.size)
+                                elif attr == "last_modification_time":
+                                    entry["last_modification_time"] = \
+                                        str(fi.last_modification_time)
+                            except Exception:
+                                continue
+                        out.append(entry)
+                    log("OK", "plcfs ls {d} via {h}.{n}: {c} entries".format(
+                        d=remote_dir, h=holder_name, n=name, c=len(out)))
+                    return {"dir": remote_dir, "via": "{h}.{n}".format(
+                        h=holder_name, n=name), "entries": out}
+            raise RuntimeError(
+                "no file-listing member worked on the online objects "
+                "(CHM documents get_file_list_of_directory on "
+                "IScriptOnlineDevice4; live build 11.3.1.0 disagrees - "
+                "EScriptDevice has no such attribute). Probed: "
+                "{c}. Surface: {s}. Last errors: {e}".format(
+                    c=", ".join(_LS_CANDIDATES), s="; ".join(surface),
+                    e=" | ".join(last_errors) or "none"))
+        if op in ("get", "put", "rm"):
             remote = args.get("remote", "")
             local = args.get("local", "")
-            if not remote or not local:
-                raise RuntimeError('plcfs get needs args.remote (PLC path) '
-                                   'and args.local (host path)')
-            d = os.path.dirname(local)
-            if d and not os.path.isdir(d):
-                os.makedirs(d)
-            device.download_file(local, remote, True)
-            log("OK", "plcfs get {r} -> {l}".format(r=remote, l=local))
-            return {"remote": remote, "local": local,
-                    "bytes": os.path.getsize(local) if
-                    os.path.isfile(local) else None}
-        if op == "put":
-            remote = args.get("remote", "")
-            local = args.get("local", "")
-            if not remote or not local:
-                raise RuntimeError('plcfs put needs args.local (host path) '
-                                   'and args.remote (PLC path)')
-            if not os.path.isfile(local):
-                raise RuntimeError("local file not found: {l}".format(
-                    l=local))
-            device.upload_file(remote, local, True)
-            log("OK", "plcfs put {l} -> {r}".format(l=local, r=remote))
-            return {"local": local, "remote": remote}
-        if op == "rm":
-            remote = args.get("remote", "")
-            if not remote:
+            if op in ("get", "put") and (not remote or not local):
+                raise RuntimeError("plcfs {o} needs args.remote (PLC path) "
+                                   "and args.local (host path)".format(o=op))
+            if op == "rm" and not remote:
                 raise RuntimeError("plcfs rm needs args.remote (PLC path)")
-            device.delete_file(remote)
-            log("OK", "plcfs rm {r}".format(r=remote))
+            fn = None
+            for holder_name, holder in holders:
+                for name in _FILE_CANDIDATES[op]:
+                    try:
+                        fn = (holder_name, name,
+                              _plcfs_member(holder, name))
+                        break
+                    except AttributeError:
+                        continue
+                if fn:
+                    break
+            if fn is None:
+                raise RuntimeError(
+                    "no {o} member on the online objects (probed "
+                    "{c}); surface: {s}".format(
+                        o=_FILE_CANDIDATES[op][0],
+                        c=", ".join(_FILE_CANDIDATES[op]),
+                        s="; ".join(surface)))
+            holder_name, member_name, member = fn
+            if op == "get":
+                d = os.path.dirname(local)
+                if d and not os.path.isdir(d):
+                    os.makedirs(d)
+                member(local, remote, True)
+                log("OK", "plcfs get {r} -> {l} via {h}.{n}".format(
+                    r=remote, l=local, h=holder_name, n=member_name))
+                return {"remote": remote, "local": local,
+                        "bytes": os.path.getsize(local) if
+                        os.path.isfile(local) else None}
+            if op == "put":
+                if not os.path.isfile(local):
+                    raise RuntimeError("local file not found: {l}".format(
+                        l=local))
+                member(remote, local, True)
+                log("OK", "plcfs put {l} -> {r} via {h}.{n}".format(
+                    l=local, r=remote, h=holder_name, n=member_name))
+                return {"local": local, "remote": remote}
+            member(remote)
+            log("OK", "plcfs rm {r} via {h}.{n}".format(
+                r=remote, h=holder_name, n=member_name))
             return {"deleted": remote}
     finally:
         _online_disconnect(device)
