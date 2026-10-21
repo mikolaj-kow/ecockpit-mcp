@@ -1493,6 +1493,12 @@ def _online_connect(project, args):
     online.set_default_credentials(user, pw)
     device.connect()
     log("OK", "connected (logged in)")
+    # LIVE 2026-10-21: device.connect() performed an IMPLICIT CODE
+    # DOWNLOAD of the open application on login (observed during a
+    # read-only plc_ls) - "few days of untested code just went live".
+    # Every _online_connect caller (plc_ls/get/put/rm, read, write,
+    # state, download, ...) must be treated as potentially deploying
+    # until a non-deploying login variant is found and wired in.
     onlineapp = online.create_online_application(app)
     return device, onlineapp
 
@@ -1831,6 +1837,55 @@ def _plcfs_member_present(holder, name):
         return True
 
 
+def _reflect_member_names(obj):
+    """Best-effort .NET reflection on an interop object.
+
+    dir() is empty and getattr() lies on these wrappers, but the CLR
+    type may still enumerate its members - the only systematic
+    discovery path left when the CHM disagrees with the live build.
+    IronPython-only (import clr); returns [] under plain CPython.
+    """
+    import clr  # noqa: F401 - IronPython only; unused directly
+    names = []
+    try:
+        clr_type = clr.GetClrType(obj)
+    except Exception:
+        try:
+            clr_type = obj.GetType()
+        except Exception:
+            return names
+    for getter in (lambda t: t.GetMethods(), lambda t: t.GetProperties()):
+        try:
+            for member in getter(clr_type):
+                names.append(str(member.Name))
+        except Exception:
+            continue
+    return sorted(set(names))
+
+
+def _reflection_summary(holders):
+    """One log/error line of reflection hits per holder, filtered to
+    file/dir/transfer-related member names (capped per holder)."""
+    keywords = ("file", "dir", "upload", "download", "load", "transfer")
+    out = []
+    for holder_name, holder in holders:
+        try:
+            names = _reflect_member_names(holder)
+        except Exception as exc:
+            out.append("{h}: reflection failed ({e})".format(
+                h=holder_name, e=str(exc)[:80]))
+            continue
+        hits = [n for n in names if any(k in n.lower()
+                                       for k in keywords)]
+        out.append("{h}: {n} members total, file-ish: {f}".format(
+            h=holder_name, n=len(names),
+            f=", ".join(hits[:25]) or "(none)"))
+        if hits:
+            log("INFO", "plcfs reflection {h}: {l}".format(
+                h=holder_name, l=", ".join(sorted(names))))
+    return "; ".join(out)
+
+
 def cmd_plcfs(project, args):
     """File operations on the PLC's file system (IScriptOnlineDevice4).
 
@@ -1907,9 +1962,11 @@ def cmd_plcfs(project, args):
                 "(CHM documents get_file_list_of_directory on "
                 "IScriptOnlineDevice4; live build 11.3.1.0 disagrees - "
                 "EScriptDevice has no such attribute). Probed: "
-                "{c}. Surface: {s}. Last errors: {e}".format(
+                "{c}. Surface: {s}. Last errors: {e}. CLR reflection "
+                "(file/dir/upload/download-related members): {r}".format(
                     c=", ".join(_LS_CANDIDATES), s="; ".join(surface),
-                    e=" | ".join(last_errors) or "none"))
+                    e=" | ".join(last_errors) or "none",
+                    r=_reflection_summary(holders)))
         if op in ("get", "put", "rm"):
             remote = args.get("remote", "")
             local = args.get("local", "")

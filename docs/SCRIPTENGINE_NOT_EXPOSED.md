@@ -56,15 +56,6 @@ engine NREs in every binding in this build (see SCRIPTENGINE_API.md);
 the executor keeps a self-healing probe ladder, `ecockpit_snapshot` is
 the backup path.
 
-### Library manager (ILibManager) — EXPOSED as of feat/library-manager
-`find_library`, `install_library`/`uninstall_library`, repositories —
-library curation from script. Now exposed as the `ecockpit_libs`,
-`ecockpit_lib_find`, `ecockpit_lib_install`, `ecockpit_lib_uninstall`,
-`ecockpit_repos`, `ecockpit_repo_add/remove/update/move` tools. Still not
-exposed: `get_category`/`categories`/`top_level_categories`
-(ILibCategory metadata). Per-application Library Manager *contents* are
-not scriptable in this build at all.
-
 ### Visualization / device tree / build properties
 `IScriptBuildProperties` (compiler_defines, link_always,
 exclude_from_build, …), symbol config creation, device connectors,

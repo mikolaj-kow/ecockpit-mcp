@@ -137,6 +137,13 @@ Build log rendering used by the executor:
 - `online.create_online_application(app)` → online app:
   `read_value("path.to.var")`, `create_boot_application()` (download while
   online), login/logout variants.
+- **`device.connect()` DEPLOYS (live 2026-10-21)**: a plain connect
+  performed an implicit login-WITH-DOWNLOAD of the open application
+  during a read-only `plc_ls` — "days of untested code went live".
+  Every `_online_connect` caller (plc_ls/get/put/rm, read, write,
+  state, download, …) must be treated as potentially deploying until
+  an explicit non-deploying login (`onlineapp.login(OnlineChangeOption,
+  delete_foreign_apps)` ladder) is found and wired in.
 - `online.set_default_credentials(user, password)`; also
   `set_specific_credentials`, `clear_all_credentials`, `gateways`.
 - `device.connect()` / `disconnect()` / `start()` / `stop()` /
