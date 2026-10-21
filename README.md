@@ -8,6 +8,12 @@ Self-contained: everything that runs on the e!COCKPIT machine ships in this
 repo. The only external input is YOUR automation project (pointed at by
 `ECP_PROJECT_ROOT`).
 
+> **Disclaimer** — independent tooling, not affiliated with, endorsed by, or
+> sponsored by WAGO GmbH & Co. KG. "e!COCKPIT" and "WAGO" are trademarks of
+> WAGO GmbH & Co. KG, used here solely to identify the platform this tooling
+> operates on. WAGO has discontinued e!COCKPIT; this project targets
+> existing installations.
+
 ## Architecture
 
 ```
