@@ -5,7 +5,7 @@ eCockpit command EXECUTOR - runs INSIDE e!COCKPIT's Python Scripting engine.
 
 It is NOT a standalone script: it relies on globals injected by e!COCKPIT
 (e_projects, e_system, system, Severity, ImportReporter, ConflictResolve,
-online). It is normally driven by ecockpit_cmd_server.py, which exec()s this
+online). It is normally driven by relay.py, which exec()s this
 file once per command and then calls run_command(request). It can also be
 run directly (FILE -> Scripting -> Execute script file); a direct run
 executes a BUILD.
@@ -93,6 +93,35 @@ import xml.etree.ElementTree as ET
 
 
 # --------------------------------------------------------------------------
+# ScriptEngine injected globals
+# --------------------------------------------------------------------------
+# e!COCKPIT's ScriptEngine injects these into every script's globals before
+# execution; under plain CPython (flake8, offline import, tests) they do not
+# exist. The guarded form keeps the injected originals when present and only
+# binds stand-ins when it is NOT running inside e!COCKPIT, so the module
+# stays lintable and importable offline. None of the stand-ins are usable -
+# every code path that touches them needs the real engine anyway.
+if "system" not in globals():
+    system = None
+if "Severity" not in globals():
+    Severity = None
+if "script_arguments" not in globals():
+    script_arguments = ""
+if "online" not in globals():
+    online = None
+if "e_projects" not in globals():
+    e_projects = None
+if "ConflictResolve" not in globals():
+    ConflictResolve = None
+if "ImportReporter" not in globals():
+    class ImportReporter(object):
+        """Placeholder base; the real class only exists inside e!COCKPIT."""
+if "IExportReporter" not in globals():
+    class IExportReporter(object):
+        """Placeholder base; the real class only exists inside e!COCKPIT."""
+
+
+# --------------------------------------------------------------------------
 # Configuration (single source: the .env next to this script)
 # --------------------------------------------------------------------------
 def _load_dotenv(path):
@@ -125,7 +154,7 @@ def _load_dotenv(path):
 def _this_dir():
     """Directory of the running script.
 
-    When exec()'d by ecockpit_cmd_server.py, __file__ is the SERVER's path
+    When exec()'d by relay.py, __file__ is the SERVER's path
     (this file lives in the same directory), so the .env lookup below lands
     on the ecockpit-mcp .env in both direct-run and server-driven mode.
     """
@@ -135,8 +164,25 @@ def _this_dir():
         return os.getcwd()
 
 
+def _find_dotenv(start_dir):
+    """Locate the one project .env: next to the scripts, then up to two
+    parent levels (the src/ package layout sits two levels below the repo
+    root). Anchored at __file__ - never the cwd - so the daemon, the armed
+    command relay, and the executor all resolve the SAME file.
+    """
+    d = os.path.abspath(start_dir)
+    seen = []
+    for _ in range(3):
+        seen.append(os.path.join(d, ".env"))
+        d = os.path.dirname(d)
+    for path in seen:
+        if os.path.isfile(path):
+            return path
+    return seen[0]
+
+
 ENV_FILE = os.environ.get("ECP_ENV_FILE", "") \
-    or os.path.join(_this_dir(), ".env")
+    or _find_dotenv(_this_dir())
 _ENV = _load_dotenv(ENV_FILE)
 
 
@@ -685,7 +731,7 @@ def _flush_message_queue():
 
 def _our_script_line(ln):
     """True when a message text was posted by OUR own script machinery."""
-    if ln.startswith("[server]") or ln.startswith("[watch]"):
+    if ln.startswith("[relay]") or ln.startswith("[server]") or ln.startswith("[watch]"):
         return True
     if re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]", ln):
         return True  # our log() mirror lines
@@ -2177,7 +2223,7 @@ def run_command(request):
 
 
 # Direct run (FILE -> Scripting -> Execute script file): execute a BUILD.
-# The command server instead sets ECP_NO_RUN=1 and calls run_command()
+# The command relay instead sets ECP_NO_RUN=1 and calls run_command()
 # itself once per request.
 if not os.environ.get("ECP_NO_RUN"):
     run_command({"id": "", "cmd": "build", "args": {}})

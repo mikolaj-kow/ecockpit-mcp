@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecockpit-mcp"
+dynamic = ["version"]
+description = "MCP server exposing WAGO e!COCKPIT PLC automation (build, import, online read/write, download) to LLM editors as typed tools"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Mikołaj Kowalski" }]
+keywords = ["mcp", "ecockpit", "codesys", "plc", "wago", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Software Development :: Embedded Systems",
+]
+dependencies = [
+    "mcp>=2.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/mikolaj-kow/ecockpit-mcp"
+Issues = "https://github.com/mikolaj-kow/ecockpit-mcp/issues"
+
+[project.scripts]
+ecockpit-mcp = "ecockpit_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "ecockpit_mcp.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
