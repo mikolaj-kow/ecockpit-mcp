@@ -1749,7 +1749,14 @@ def cmd_source_download(project, args):
         project.save()
         log("OK", "project saved")
     except Exception as exc:
-        log("WARN", "pre-save failed (continuing): {e}".format(e=exc))
+        # LIVE 2026-10-21: "Current project is stored with a temporary
+        # file-name" = the project was never saved as a .ecp. Proceeding
+        # is still correct when a human can answer the engine's save
+        # prompt in the GUI (that is exactly the flow that uploaded
+        # fine); unattended runs will NRE instead.
+        log("WARN", "pre-save failed (continuing - if e!COCKPIT shows a "
+            "save dialog, answer it there; unattended runs will likely "
+            "fail): {e}".format(e=exc))
     device, onlineapp = _online_connect(project, args)
     try:
         try:
