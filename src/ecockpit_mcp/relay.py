@@ -278,6 +278,16 @@ def main_relay():
         pass
 
     _say("command relay starting (poll={p}ms, no runtime limit)".format(p=poll_ms))
+    # Create the work dir before the first heartbeat write: _touch swallows
+    # OSError, so a missing dir used to leave the relay alive but invisible
+    # to clients (observed 2026-10-21 - no heartbeat, "not armed" forever).
+    try:
+        if not os.path.isdir(WORK_DIR):
+            os.makedirs(WORK_DIR)
+    except Exception as exc:
+        _say("CONFIGURATION ERROR: work dir {r} cannot be created: "
+             "{e}".format(r=WORK_DIR, e=exc))
+        return
     _say("work dir    : {r}".format(r=WORK_DIR))
     _say("command file: {c}".format(c=CMD_FILE))
     _say("result file : {r}".format(r=RESULT_FILE))
