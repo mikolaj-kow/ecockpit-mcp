@@ -2,7 +2,7 @@
 """Smoke client for the ecockpit MCP server (dev tool).
 
 Usage:
-    .venv/Scripts/python.exe test_smoke.py [url]
+    .venv/Scripts/python.exe smoke_client.py [url]
 
 Checks: initialize, tools/list, server_status, download refusal (no PLC
 touch), and - when the in-instance command server is armed - a full build

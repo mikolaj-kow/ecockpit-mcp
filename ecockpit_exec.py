@@ -93,6 +93,35 @@ import xml.etree.ElementTree as ET
 
 
 # --------------------------------------------------------------------------
+# ScriptEngine injected globals
+# --------------------------------------------------------------------------
+# e!COCKPIT's ScriptEngine injects these into every script's globals before
+# execution; under plain CPython (flake8, offline import, tests) they do not
+# exist. The guarded form keeps the injected originals when present and only
+# binds stand-ins when it is NOT running inside e!COCKPIT, so the module
+# stays lintable and importable offline. None of the stand-ins are usable -
+# every code path that touches them needs the real engine anyway.
+if "system" not in globals():
+    system = None
+if "Severity" not in globals():
+    Severity = None
+if "script_arguments" not in globals():
+    script_arguments = ""
+if "online" not in globals():
+    online = None
+if "e_projects" not in globals():
+    e_projects = None
+if "ConflictResolve" not in globals():
+    ConflictResolve = None
+if "ImportReporter" not in globals():
+    class ImportReporter(object):
+        """Placeholder base; the real class only exists inside e!COCKPIT."""
+if "IExportReporter" not in globals():
+    class IExportReporter(object):
+        """Placeholder base; the real class only exists inside e!COCKPIT."""
+
+
+# --------------------------------------------------------------------------
 # Configuration (single source: the .env next to this script)
 # --------------------------------------------------------------------------
 def _load_dotenv(path):

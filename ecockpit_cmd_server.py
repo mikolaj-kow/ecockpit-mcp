@@ -33,6 +33,18 @@ import json
 import traceback
 
 
+# e!COCKPIT's ScriptEngine injects system/Severity when this script is armed
+# inside e!COCKPIT. The guarded form keeps the injected originals there and
+# binds stand-ins under plain CPython (flake8, offline import) so the module
+# stays lintable. run_command is bound by exec()ing ecockpit_exec.py into
+# this module's globals once per command (see _dispatch).
+if "system" not in globals():
+    system = None
+if "Severity" not in globals():
+    Severity = None
+run_command = None
+
+
 # ---------------------------------------------------------------------------
 # USER CONFIGURATION
 # ---------------------------------------------------------------------------
