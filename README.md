@@ -21,22 +21,24 @@ MCP client (ZCode etc.)
     |  streamable-http  http://<host>:9777/mcp  (bearer token; default)
     |  or stdio         (--transport stdio, client-spawned)
     v
-ecockpit_mcp_server.py            <- host Python 3.10+ (this repo)
+src/ecockpit_mcp/server.py        <- host Python 3.10+ (this repo)
     |  FILE PROTOCOL (local to the e!COCKPIT machine)
     |  tmp/ecockpit_cmd.json + _cmd_result.json + _watch.heartbeat
     v
-ecockpit_cmd_server.py            <- IronPython INSIDE e!COCKPIT (this repo;
+src/ecockpit_mcp/cmd_server.py    <- IronPython INSIDE e!COCKPIT (this repo;
     |                               arm once per session: FILE -> Scripting
     |                               -> Execute script file)
     v  exec per command
-ecockpit_exec.py                  <- command implementations (this repo;
+src/ecockpit_mcp/executor.py      <- command implementations (this repo;
                                     drives the open project via the
                                     e!COCKPIT ScriptEngine)
 ```
 
-All three parts read ONE `.env` next to the scripts. The work dir holding
-the file-protocol files and logs defaults to `tmp/` next to the scripts
-(`ECP_WORK_DIR` overrides).
+All three parts read ONE `.env` found next to the scripts (the search walks
+up from the script's own directory — never the cwd — so it also finds a
+repo-root `.env` in a checkout). The work dir holding the file-protocol
+files and logs defaults to `tmp/` next to the scripts (`ECP_WORK_DIR`
+overrides).
 
 The file protocol is intentionally simple: the in-instance side is
 single-threaded IronPython inside a GUI, so transport latency is irrelevant
@@ -78,10 +80,10 @@ non-loopback binds), plus the project/PLC keys above.
 
 ```powershell
 # long-lived daemon (local + remote editors), loopback by default
-.venv\Scripts\python.exe ecockpit_mcp_server.py --transport http
+.venv\Scripts\python.exe src\ecockpit_mcp\server.py --transport http
 
 # LAN exposure requires a token
-.venv\Scripts\python.exe ecockpit_mcp_server.py --transport http --host 0.0.0.0 --token <secret>
+.venv\Scripts\python.exe src\ecockpit_mcp\server.py --transport http --host 0.0.0.0 --token <secret>
 ```
 
 Client config (ZCode / any MCP client):
@@ -151,9 +153,9 @@ read.
 
 ## Prerequisite
 
-The e!COCKPIT command server (`ecockpit_cmd_server.py` from this repo) must
-be armed once per e!COCKPIT session (FILE -> Scripting -> Execute script
-file -> select it). Without it, tools fail with a structured
+The e!COCKPIT command server (`src/ecockpit_mcp/cmd_server.py` from this
+repo) must be armed once per e!COCKPIT session (FILE -> Scripting -> Execute
+script file -> select it). Without it, tools fail with a structured
 `server_not_armed` error carrying the re-arm instruction.
 
 ## ScriptEngine API reference

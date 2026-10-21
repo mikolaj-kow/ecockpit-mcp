@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ecockpit-mcp"
-version = "0.1.0"
+dynamic = ["version"]
 description = "MCP server exposing WAGO e!COCKPIT PLC automation (build, import, online read/write, download) to LLM editors as typed tools"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,13 +34,14 @@ Homepage = "https://github.com/mikolaj-kow/ecockpit-mcp"
 Issues = "https://github.com/mikolaj-kow/ecockpit-mcp/issues"
 
 [project.scripts]
-ecockpit-mcp = "ecockpit_mcp_server:main"
+ecockpit-mcp = "ecockpit_mcp.server:main"
 
-[tool.setuptools]
-# The three scripts ship as top-level modules on purpose: ecockpit_cmd_server
-# exec()s ecockpit_exec.py from its own directory and the server checks the
-# executor sits next to it (PROJECT_DIR), so all three must stay siblings.
-py-modules = ["ecockpit_mcp_server", "ecockpit_cmd_server", "ecockpit_exec"]
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "ecockpit_mcp.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]

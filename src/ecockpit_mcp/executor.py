@@ -5,7 +5,7 @@ eCockpit command EXECUTOR - runs INSIDE e!COCKPIT's Python Scripting engine.
 
 It is NOT a standalone script: it relies on globals injected by e!COCKPIT
 (e_projects, e_system, system, Severity, ImportReporter, ConflictResolve,
-online). It is normally driven by ecockpit_cmd_server.py, which exec()s this
+online). It is normally driven by cmd_server.py, which exec()s this
 file once per command and then calls run_command(request). It can also be
 run directly (FILE -> Scripting -> Execute script file); a direct run
 executes a BUILD.
@@ -154,7 +154,7 @@ def _load_dotenv(path):
 def _this_dir():
     """Directory of the running script.
 
-    When exec()'d by ecockpit_cmd_server.py, __file__ is the SERVER's path
+    When exec()'d by cmd_server.py, __file__ is the SERVER's path
     (this file lives in the same directory), so the .env lookup below lands
     on the ecockpit-mcp .env in both direct-run and server-driven mode.
     """
@@ -164,8 +164,25 @@ def _this_dir():
         return os.getcwd()
 
 
+def _find_dotenv(start_dir):
+    """Locate the one project .env: next to the scripts, then up to two
+    parent levels (the src/ package layout sits two levels below the repo
+    root). Anchored at __file__ - never the cwd - so the daemon, the armed
+    command server, and the executor all resolve the SAME file.
+    """
+    d = os.path.abspath(start_dir)
+    seen = []
+    for _ in range(3):
+        seen.append(os.path.join(d, ".env"))
+        d = os.path.dirname(d)
+    for path in seen:
+        if os.path.isfile(path):
+            return path
+    return seen[0]
+
+
 ENV_FILE = os.environ.get("ECP_ENV_FILE", "") \
-    or os.path.join(_this_dir(), ".env")
+    or _find_dotenv(_this_dir())
 _ENV = _load_dotenv(ENV_FILE)
 
 

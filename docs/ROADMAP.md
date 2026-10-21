@@ -1,8 +1,8 @@
 # Outlook: the state-of-the-art ecockpit-mcp package
 
-Where the packaging and the tool are headed, from the current preliminary
-state (flat scripts + `py-modules` workaround, lint/test/build CI) to what a
-mature, corporate-adoptable distribution looks like.
+Where the packaging and the tool are headed, from the current state
+(src-layout package, lint/test/build CI, wheel + console entry point) to a
+mature, corporate-adoptable distribution.
 
 ## Positioning
 
@@ -15,12 +15,12 @@ is an explicit non-goal (another MCP project targets that platform).
 
 ## Packaging (distribution-grade)
 
-- **src-layout**: `src/ecockpit_mcp/` with the server as a real package.
-  The three ScriptEngine scripts ship as package *data* inside the wheel,
-  and a new `ecockpit-mcp install-scripts <dir>` command writes them out
-  next to each other (their file-adjacency contract) wherever the user
-  arms them — replacing the current top-level `py-modules` arrangement,
-  which is only a stopgap.
+- **src-layout**: done — `src/ecockpit_mcp/` ships as a real package
+  (`server.py`, `cmd_server.py`, `executor.py` stay siblings so their
+  file-adjacency contract holds in site-packages too). Remaining piece:
+  an `ecockpit-mcp install-scripts <dir>` command that writes
+  `cmd_server.py` + `executor.py` out to an arming directory of the
+  user's choice, so the wheel alone is enough to arm e!COCKPIT.
 - **Version single-sourcing** (`__version__` read by pyproject or
   setuptools-scm), **semver discipline**, and a **CHANGELOG**
   (Keep a Changelog format).

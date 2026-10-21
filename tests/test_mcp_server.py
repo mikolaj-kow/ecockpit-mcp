@@ -7,7 +7,12 @@ real regression gate (the two ScriptEngine scripts are covered by their
 guarded stand-in blocks instead).
 """
 
-import ecockpit_mcp_server as srv
+import ecockpit_mcp
+from ecockpit_mcp import server as srv
+
+
+def test_package_version():
+    assert ecockpit_mcp.__version__
 
 
 def test_server_module_imports():

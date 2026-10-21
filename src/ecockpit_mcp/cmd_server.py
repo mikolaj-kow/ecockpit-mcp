@@ -6,12 +6,12 @@ eCockpit COMMAND SERVER - runs inside an ALREADY-OPEN e!COCKPIT instance.
 This script is the in-instance half of the ecockpit-mcp project. Arm it
 once per e!COCKPIT session:
 
-    FILE -> Scripting -> Execute script file -> ecockpit_cmd_server.py
+    FILE -> Scripting -> Execute script file -> cmd_server.py
 
 It polls a command file (default <work dir>/ecockpit_cmd.json; the work dir
 is tmp/ next to this script, overridable via ECP_WORK_DIR), executes each
 command against the open project by re-running the executor
-(ecockpit_exec.py, bundled next to this script), and writes id-matched
+(executor.py, bundled next to this script), and writes id-matched
 results. A heartbeat file lets clients distinguish "not armed" from "busy".
 
 CONFIGURATION
@@ -36,7 +36,7 @@ import traceback
 # e!COCKPIT's ScriptEngine injects system/Severity when this script is armed
 # inside e!COCKPIT. The guarded form keeps the injected originals there and
 # binds stand-ins under plain CPython (flake8, offline import) so the module
-# stays lintable. run_command is bound by exec()ing ecockpit_exec.py into
+# stays lintable. run_command is bound by exec()ing executor.py into
 # this module's globals once per command (see _dispatch).
 if "system" not in globals():
     system = None
@@ -50,18 +50,27 @@ run_command = None
 # ---------------------------------------------------------------------------
 # Work dir resolution order (holds the command/result/heartbeat files):
 #   1. ECP_WORK_DIR environment variable
-#   2. ECP_WORK_DIR in the .env file NEXT TO THIS SCRIPT (the ecockpit-mcp
-#      project .env - one place configures both halves)
+#   2. ECP_WORK_DIR in the .env file next to this script (then up to two
+#      parent levels - the ecockpit-mcp project .env; one place configures
+#      both halves)
 #   3. tmp/ next to this script
 
 def _env_file_value(key):
+    """Read key from the one project .env: next to this script, then up to
+    two parent levels (src/ package layout) - same search the daemon and
+    the executor use, so both halves always agree on the work dir."""
     try:
         base = os.path.dirname(os.path.abspath(__file__))
-        with open(os.path.join(base, ".env"), "r") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if line.startswith(key + "="):
-                    return line.split("=", 1)[1].strip()
+        for _ in range(3):
+            path = os.path.join(base, ".env")
+            if os.path.isfile(path):
+                with open(path, "r") as fh:
+                    for raw in fh:
+                        line = raw.strip()
+                        if line.startswith(key + "="):
+                            return line.split("=", 1)[1].strip()
+                break
+            base = os.path.dirname(base)
     except Exception:
         pass
     return ""
@@ -81,7 +90,7 @@ STOP_FILE       = os.path.join(WORK_DIR, "ecockpit_server.stop")
 HEARTBEAT_FILE  = os.path.join(WORK_DIR, "ecockpit_watch.heartbeat")
 
 # The executor is bundled with this script (same directory).
-EXEC_SCRIPT     = os.path.join(SCRIPT_DIR, "ecockpit_exec.py")
+EXEC_SCRIPT     = os.path.join(SCRIPT_DIR, "executor.py")
 
 
 def _raw_args():
@@ -250,8 +259,8 @@ def main_server():
 
     if not os.path.isfile(EXEC_SCRIPT):
         _say("CONFIGURATION ERROR: executor not found at {e} - keep "
-             "ecockpit_exec.py in the same directory as "
-             "ecockpit_cmd_server.py, then re-arm.".format(e=EXEC_SCRIPT))
+             "executor.py in the same directory as "
+             "cmd_server.py, then re-arm.".format(e=EXEC_SCRIPT))
         try:
             system.write_message(Severity.Error,
                                  "[server] executor missing - see "

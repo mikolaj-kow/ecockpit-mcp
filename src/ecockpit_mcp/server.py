@@ -15,10 +15,10 @@ Architecture (see README):
         |  tmp/ecockpit_cmd_result.json
         |  tmp/ecockpit_watch.heartbeat
         v
-    ecockpit_cmd_server.py (IronPython INSIDE e!COCKPIT, armed via
+    cmd_server.py (IronPython INSIDE e!COCKPIT, armed via
         |                   FILE -> Scripting -> Execute script file)
         v  exec per command
-    ecockpit_exec.py (bundled executor; drives the open project via the
+    executor.py (bundled executor; drives the open project via the
                       e!COCKPIT ScriptEngine)
 
 Transports
@@ -32,7 +32,7 @@ Transports
     --transport stdio  client-spawned (no network); token not used.
 
 Run as a long-lived daemon for http:
-    .venv/Scripts/python.exe ecockpit_mcp_server.py --transport http
+    .venv/Scripts/python.exe src/ecockpit_mcp/server.py --transport http
 """
 
 import argparse
@@ -68,7 +68,25 @@ def _load_dotenv(path):
 
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-_DOTENV = _load_dotenv(os.path.join(PROJECT_DIR, ".env"))
+
+
+def _find_dotenv(start_dir):
+    """Locate the one project .env: next to the scripts, then up to two
+    parent levels (the src/ package layout sits two levels below the repo
+    root). Anchored at __file__ - never the cwd - so the daemon, the armed
+    command server, and the executor all resolve the SAME file."""
+    d = os.path.abspath(start_dir)
+    seen = []
+    for _ in range(3):
+        seen.append(os.path.join(d, ".env"))
+        d = os.path.dirname(d)
+    for path in seen:
+        if os.path.isfile(path):
+            return path
+    return seen[0]
+
+
+_DOTENV = _load_dotenv(_find_dotenv(PROJECT_DIR))
 
 
 def _cfg(name, default=""):
@@ -84,8 +102,8 @@ class Config(object):
 
     @property
     def tmp_dir(self):
-        # File-protocol work dir - shared with ecockpit_cmd_server.py /
-        # ecockpit_exec.py (which resolve the same ECP_WORK_DIR/.env key).
+        # File-protocol work dir - shared with cmd_server.py /
+        # executor.py (which resolve the same ECP_WORK_DIR/.env key).
         return self.work_dir or os.path.join(PROJECT_DIR, "tmp")
 
     @property
@@ -133,7 +151,7 @@ _SEND_LOCK = threading.Lock()
 
 REARM_HINT = ("e!COCKPIT command server is not running. Arm it in the open "
               "e!COCKPIT GUI: FILE -> Scripting -> Execute script file -> "
-              "ecockpit_cmd_server.py (from this ecockpit-mcp checkout)")
+              "cmd_server.py (from this ecockpit-mcp checkout)")
 
 
 class NotArmedError(RuntimeError):
@@ -230,7 +248,7 @@ mcp = MCPServer(
         "Build/import/compile and online operations for a WAGO e!COCKPIT "
         "automation project. All tools drive the e!COCKPIT GUI "
         "instance via its command server - it must be armed (FILE -> "
-        "Scripting -> Execute script file -> ecockpit_cmd_server.py). "
+        "Scripting -> Execute script file -> cmd_server.py). "
         "Build results include the structured compiler diagnostics "
         "(harvest: C-code, severity, POU, line). Destructive operations "
         "(ecockpit_download, ecockpit_write, ecockpit_stop, "
@@ -664,11 +682,11 @@ def main():
         CFG.token = ns.token
     CFG.transport = ns.transport or "http"
 
-    executor = os.path.join(PROJECT_DIR, "ecockpit_exec.py")
+    executor = os.path.join(PROJECT_DIR, "executor.py")
     if not os.path.isfile(executor):
         raise SystemExit(
             "bundled executor missing: {e} - keep the ecockpit-mcp "
-            "checkout intact (ecockpit_exec.py next to this "
+            "checkout intact (executor.py next to this "
             "server)".format(e=executor))
 
     print("[ecockpit-mcp] work dir: {r}".format(r=CFG.tmp_dir),
