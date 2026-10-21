@@ -156,13 +156,22 @@ Online (PLC):
 | `ecockpit_stop(confirm)` | **destructive** — stops the running PLC application |
 | `ecockpit_disconnect(force?)` | PLC logout (`force=true` → forced_disconnect) |
 
-CAUTION — every online command logs in via the online-change ladder and
-may apply online changes (deploy code deltas) to the RUNNING
-application when the open project differs from the PLC. There are NO
-PLC file-system tools: the CHM's IScriptOnlineDevice4 file API
-(`get_file_list_of_directory`, `download_file`, `upload_file`,
-`delete_file`) does not exist in this build (CLR-reflection-proven,
-see `docs/SCRIPTENGINE_API.md`).
+CAUTION — every online command logs in via the online-change ladder
+(read-only tools prefer `OnlineChangeOption.Keep`: login without
+applying changes or downloading) but deploying commands may still
+apply code deltas to the RUNNING application.
+
+PLC file system (works via the `ScriptOnlineDevice` created by
+`online.create_online_device` — the project-tree device object has no
+file API):
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_plc_ls(directory?)` | list a PLC directory |
+| `ecockpit_plc_get(remote, local)` | download a file from the PLC |
+| `ecockpit_plc_put(local, remote, confirm)` | **destructive** — upload a file onto the PLC |
+| `ecockpit_plc_rm(remote, confirm)` | **destructive** — delete a PLC file |
+| `ecockpit_upload_source(path?)` | read the source project archive back from the PLC |
 
 Libraries (global `librarymanager` / ILibManager — repository curation;
 there is no per-application Library Manager scripting API in this build):

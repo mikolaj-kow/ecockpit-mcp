@@ -137,10 +137,12 @@ Build log rendering used by the executor:
 - **`device.connect()` DEPLOYS (live 2026-10-21)**: a plain connect
   performed an implicit login-WITH-DOWNLOAD of the open application
   during a read-only `plc_ls` — "days of untested code went live".
-  Every `_online_connect` caller (plc_ls/get/put/rm, read, write,
-  state, download, …) must be treated as potentially deploying until
-  an explicit non-deploying login (`onlineapp.login(OnlineChangeOption,
-  delete_foreign_apps)` ladder) is found and wired in.
+  FIXED: every online command now logs in via the
+  `_online_login` ladder — `onlineapp.login(OnlineChangeOption,
+  delete_foreign_apps)` with read-only commands preferring
+  **`OnlineChangeOption.Keep`** (stub-only: "Do not online update. Do
+  not download. Keep as it is."), deploy commands Try → Force → Never
+  → connect fallback.
 - `online.set_default_credentials(user, password)`; also
   `set_specific_credentials`, `clear_all_credentials`, `gateways`.
 - `device.connect()` / `disconnect()` / `start()` / `stop()` /
@@ -183,40 +185,40 @@ State properties: `is_logged_in`, `application_state` (ApplicationState),
 (best-effort, same as the snapshot command), after which the same call
 uploaded fine (user-verified).
 
-### PLC file system (IScriptOnlineDevice4 → `ecockpit_plc_ls/get/put/rm`)
+### PLC file system (ScriptOnlineDevice via `online.create_online_device()` → `ecockpit_plc_ls/get/put/rm`)
 
-**VERDICT (live 2026-10-21, CLR reflection): the PLC file API does not
-exist in this build.** The online device (32 members) and online
-application (34 members) contain **no** file/transfer members at all —
-`get_file_list_of_directory`, `download_file`, `upload_file`,
-`delete_file` are all absent, and the only file-ish member anywhere is
-`source_download` (the source-archive push, deliberately not a tool).
-Discovery method: `dir()` is empty and `getattr()` lies on the interop
-wrappers, so the executor reflects via `clr.GetClrType(obj).
-GetMethods()/GetProperties()` — see `_reflect_member_names`.
-`ecockpit_plc_ls/get/put/rm` therefore cannot work in this build
-(their ladder + surface + reflection probe stays in the executor so a
-fixed engine self-documents). `ecockpit_upload_source` is equally
-suspect (`upload_source` absent from the reflected surface too).
-The online application's FULL reflected surface (34): application,
-application_state, create_boot_application, force_prepared_values,
-get_application, get_application_state, get_forced_expressions,
-get_is_logged_in, get_online_device, get_operation_state,
-get_prepared_expressions, get_prepared_value, get_timeout,
-is_logged_in, login, logout, operation_state, read_value, read_values,
-reset, set_prepared_value, set_timeout, set_unforce_value,
-source_download, start, stop, timeout, unforce_all_values,
-write_prepared_values (+ Dispose/Equals/GetHashCode/GetType/ToString).
+**CORRECTED (2026-10-22, ScriptLib stubs at `...\CODESYS\ScriptLib\
+Stubs\scriptengine\ScriptOnline.pyi`)**: the file API EXISTS — but on
+the **`ScriptOnlineDevice` created by `online.create_online_device()`**,
+NOT on the project-tree device object (`EScriptDevice` — 32 members,
+none file-related; our first reflection round targeted the wrong
+object). `OnlineChangeOption.Keep = 3` is also stub-only (not in the
+CHM): "Try to login. Do not online update. Do not download. Keep as it
+is." — the safe login for read-only commands.
 
-CHM documentation (unusable in this build):
+`ScriptOnlineDevice` members (3.5.9.0+ for the file block; connect/
+disconnect/connected/shared_connected/forced_disconnect also on it —
+it keeps an internal connection, so **Dispose() it when done**):
 
-- `download_file(local_file, remote_file, force_overwrite)` — PLC → host
-  (local first!)
-- `upload_file(remote_file, local_file, force_overwrite)` — host → PLC
-  (remote first!)
-- `get_file_list_of_directory(remote_dir)` → `IScriptDirectoryInfo[]`
+- `get_file_list_of_directory(remote_directory)` → dir info objects
   (`name`, `is_directory`, `is_file`, `size`, `last_modification_time`)
-- `delete_file(remote_file)`
+- `download_file(local_file, remote_file, force_overwrite)` — PLC →
+  host (local first!)
+- `upload_file(remote_file, local_file, force_overwrite)` — host → PLC
+- `delete_file(remote_file)`, `rename_file`, `create_directory`,
+  `rename_directory`, `delete_directory(remote_directory, recursive)`
+- `download_source(bCompact=False, additional_items=None)` — push the
+  source archive TO the PLC (→ `ecockpit_source_download`)
+- `upload_source(archive_path)` — read the source archive back
+  (→ `ecockpit_upload_source`)
+- plus `reset_origin()`, `create_user_management(...)`,
+  `activate_license(...)`, `change_user_password(...)`,
+  `current_logged_on_username`
+
+EARLIER (still true): the project-tree `EScriptDevice` has no file
+members, and `onlineapp.source_download()` (online APPLICATION object)
+NREs — the executor's first plc_ls run failed on exactly that wrong
+object.
 
 `upload_source(archive_path)` (IScriptOnlineDevice3) reads the source
 project archive back from the PLC (→ `ecockpit_upload_source`).

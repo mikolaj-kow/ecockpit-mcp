@@ -24,17 +24,17 @@ def test_expected_tools_registered():
                  "ecockpit_write", "ecockpit_download",
                  "ecockpit_login", "ecockpit_source_download",
                  "ecockpit_prepared_values",
+                 "ecockpit_plc_ls", "ecockpit_plc_get", "ecockpit_plc_put",
+                 "ecockpit_plc_rm", "ecockpit_upload_source",
                  "ecockpit_libs", "ecockpit_lib_find",
                  "ecockpit_lib_install", "ecockpit_lib_uninstall",
                  "ecockpit_repos", "ecockpit_repo_move"):
         assert hasattr(srv, name), "missing tool function: " + name
 
 
-def test_dead_tools_absent():
-    # e!COCKPIT 11.3.1.0 NREs in every save_archive binding and has NO
-    # PLC file API at all (CLR-reflection-proven; see
-    # docs/SCRIPTENGINE_API.md) - these tools must stay unregistered.
-    for name in ("ecockpit_save_archive", "ecockpit_plc_ls",
-                 "ecockpit_plc_get", "ecockpit_plc_put", "ecockpit_plc_rm",
-                 "ecockpit_upload_source"):
-        assert not hasattr(srv, name), "dead tool registered: " + name
+def test_save_archive_tool_absent():
+    # e!COCKPIT 11.3.1.0 NREs in every save_archive binding (retested
+    # with a saved, named project; see docs/SCRIPTENGINE_API.md) - the
+    # tool must stay unregistered so nobody can call it;
+    # ecockpit_snapshot is the backup path.
+    assert not hasattr(srv, "ecockpit_save_archive")

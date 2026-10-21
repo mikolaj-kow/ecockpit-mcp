@@ -141,6 +141,7 @@ _TIMEOUTS = {
     "snapshot": 300,
     "export": 600,
     "plcfs": 300,
+    "upload_source": 600,
     "login": 180,
     "source_download": 300,
     "prepared_values": 120,
@@ -499,18 +500,105 @@ def ecockpit_stop(confirm: bool = False, device: str = "",
 
 
 @mcp.tool(
-    description="Dump the scripting API surface (dir() + getattr probes) to "
-                "tmp/logs/ecockpit_api_probe.txt for API discovery.")
-def ecockpit_probe() -> str:
-    return json.dumps(_run("probe", {}), indent=2)
+    description="List a directory on the PLC file system (logs in, lists, "
+                "disconnects). Entries carry name, is_directory, size, "
+                "last_modification_time. Works via the ScriptOnlineDevice "
+                "created by online.create_online_device - the "
+                "project-tree device object has no file API.")
+def ecockpit_plc_ls(directory: str = "/", device: str = "",
+                    timeout_s: int = 300) -> str:
+    args = {"op": "ls", "remote": directory or "/"}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
 
+
+@mcp.tool(
+    description="Download a file FROM the PLC to this machine (read-only "
+                "on the PLC). remote is the PLC path, local the host "
+                "destination (overwrites).")
+def ecockpit_plc_get(remote: str, local: str, device: str = "",
+                     timeout_s: int = 300) -> str:
+    if not remote or not local:
+        raise ValueError("remote (PLC path) and local (host path) required")
+    args = {"op": "get", "remote": remote, "local": local}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request. Upload a "
+                "file from this machine ONTO the PLC file system "
+                "(overwrites). Pass confirm=true, never without an "
+                "explicit owner instruction.")
+def ecockpit_plc_put(local: str, remote: str, device: str = "",
+                     confirm: bool = False, timeout_s: int = 300) -> str:
+    if not local or not remote:
+        raise ValueError("local (host path) and remote (PLC path) required")
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "plc_put refused - it writes a file onto the PLC; "
+                     "call again with confirm=true only on an explicit "
+                     "owner request",
+        }, indent=2)
+    args = {"op": "put", "local": local, "remote": remote, "confirm": True}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request. DELETE a "
+                "file on the PLC file system. Pass confirm=true, never "
+                "without an explicit owner instruction.")
+def ecockpit_plc_rm(remote: str, device: str = "", confirm: bool = False,
+                    timeout_s: int = 300) -> str:
+    if not remote:
+        raise ValueError("remote (PLC path) required")
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "plc_rm refused - it deletes a file on the PLC; "
+                     "call again with confirm=true only on an explicit "
+                     "owner request",
+        }, indent=2)
+    args = {"op": "rm", "remote": remote, "confirm": True}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    description="Read the source project archive back from the PLC "
+                "(upload_source on the ScriptOnlineDevice; useful to "
+                "recover what is actually running). path defaults to "
+                "<work dir>/plc_source_upload.projectarchive.")
+def ecockpit_upload_source(path: str = "", device: str = "",
+                           timeout_s: int = 600) -> str:
+    args = {"path": path} if path else {}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("upload_source", args, timeout_s), indent=2)
 
 
 # NOTE: no ecockpit_save_archive tool on purpose - e!COCKPIT 11.3.1.0
 # NREs ("Object reference not set") in EVERY documented save_archive
-# binding (5 forms probed live 2026-10-21; see docs/SCRIPTENGINE_API.md
-# and the executor's cmd_save_archive ladder). ecockpit_snapshot is the
-# working backup path. Re-add a tool only once the engine is fixed.
+# binding (6 forms probed live 2026-10-21/22, INCLUDING with a saved,
+# named project; see docs/SCRIPTENGINE_API.md and the executor's
+# cmd_save_archive ladder). ecockpit_snapshot is the working backup
+# path. Re-add a tool only once the engine is fixed.
 
 
 @mcp.tool(
