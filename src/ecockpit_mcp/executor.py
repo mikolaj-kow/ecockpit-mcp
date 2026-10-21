@@ -2091,7 +2091,18 @@ def cmd_probe(project):
 #   update_repository(repository, new_name=None, new_location=None,
 #                     copy_libraries=False)
 #   move_repository(repository, new_index)          (-1 = end of list)
-# get_library matches the library NAME, find_library the display NAME.
+# LIVE-VERIFIED 2026-10-21 (WAGO e!COCKPIT, ScriptEngine) - the CHM
+# signatures lie in three ways:
+#   * find_library / get_library raise SystemError 'stDisplayName' for any
+#     argument but the FULL display name ("NETWORK, 1.3.5.3 (OSCAT)"; a
+#     bare title "NETWORK" is rejected).
+#   * find_library returns IManagedLib objects directly, NOT
+#     (IManagedLib, ILibRepository) tuples.
+#   * get_library / install_library reject repository=None (TypeError:
+#     Value cannot be null. Parameter name: repo) - the "first repository"
+#     default must be resolved by the caller.
+# So all lookups are resolved by ENUMERATION over get_all_libraries() in
+# repository search order (verified working); find/get are never called.
 # Direct attribute access only - getattr() fails on the interop objects.
 
 def _lib_repos():
@@ -2166,18 +2177,47 @@ def _require_repo(name):
     return repo
 
 
-def _resolve_library_pairs(name):
-    """All (lib, repo) pairs for a library name: find_library matches the
-    DISPLAY name; a NAME-only hit is resolved per repository in search
-    order via get_library (the two use different keys per the CHM)."""
-    found = librarymanager.find_library(name)
-    pairs = list(found) if found else []
-    if pairs:
-        return pairs
-    for repo in _lib_repos():
-        lib = librarymanager.get_library(name, repo)
-        if lib is not None:
-            pairs.append((lib, repo))
+def _lib_query_hit(lib, query, exact):
+    """Live-build match rule (2026-10-21): case-insensitive equality
+    against the display name, the title or the library name; a non-exact
+    query may also be the bare title ('NETWORK' -> 'NETWORK, 1.3.5.3
+    (OSCAT)'). Reads the interop members directly in try/except pairs
+    (see the header notes - find_library/get_library are not usable for
+    lookups here). Live System-repo libs carry name="", so the name key
+    only ever matches when a repository actually populates it."""
+    q = query.lower().strip()
+    if not q:
+        return False
+    try:
+        display = str(lib.displayname).lower().strip()
+    except Exception:
+        display = ""
+    try:
+        title = str(lib.title).lower().strip()
+    except Exception:
+        title = ""
+    try:
+        name = str(lib.name).lower().strip()
+    except Exception:
+        name = ""
+    if q == display or (title and q == title) or (name and q == name):
+        return True
+    if not exact and display and display.split(",")[0].strip() == q:
+        return True
+    return False
+
+
+def _resolve_library_pairs(name, repo_name="", exact=False):
+    """All (lib, repo) pairs matching `name`, enumerated per repository in
+    search order (the first repository wins name collisions). Enumeration
+    instead of find_library/get_library - see the header notes at the top
+    of this section for the live-build defects that force this."""
+    repos = [_require_repo(repo_name)] if repo_name else _lib_repos()
+    pairs = []
+    for repo in repos:
+        for lib in librarymanager.get_all_libraries(repo):
+            if _lib_query_hit(lib, name, exact):
+                pairs.append((lib, repo))
     return pairs
 
 
@@ -2203,31 +2243,29 @@ def cmd_libs(args):
 
 
 def cmd_lib_find(args):
-    """Find libraries: find_library(display_name), or get_library(name)
-    for an exact-name first match with exact=true.
+    """Find libraries across repositories by display name or title
+    (enumeration-based, see _lib_query_hit).
 
     args: {"name": required, "repo": optional scope, "exact": bool}
+    Matches in later repositories carry shadowed=true when an earlier
+    repository in search order has the same library (first match wins).
     """
     name = args.get("name", "")
     if not name:
         raise RuntimeError("lib_find needs args.name (library name or "
                            "display name)")
-    repo_name = args.get("repo", "")
-    if args.get("exact"):
-        repo = _require_repo(repo_name) if repo_name else None
-        lib = librarymanager.get_library(name, repo)
-        pairs = [] if lib is None else [(lib, repo)]
-    else:
-        found = librarymanager.find_library(name)
-        pairs = list(found) if found else []
-        if repo_name:
-            pairs = [p for p in pairs if _repo_name(p[1]) == repo_name]
+    exact = bool(args.get("exact"))
+    pairs = _resolve_library_pairs(name, args.get("repo", ""), exact)
     out = []
-    for pair in pairs:
-        lib = pair[0]
-        out.append(_lib_summary(lib, _repo_name(pair[1])))
+    seen = set()
+    for lib, repo in pairs:
+        summary = _lib_summary(lib, _repo_name(repo))
+        key = (summary["title"] or summary["displayname"]).lower()
+        summary["shadowed"] = key in seen
+        seen.add(key)
+        out.append(summary)
     log("OK", "lib_find '{n}': {m} match(es)".format(n=name, m=len(out)))
-    return {"query": name, "exact": bool(args.get("exact")),
+    return {"query": name, "exact": exact,
             "count": len(out), "matches": out}
 
 
@@ -2250,13 +2288,12 @@ def cmd_lib_install(args):
                            "an existing library; requires "
                            "args.confirm=true")
     repo = _require_repo(args["repo"]) if args.get("repo") else None
-    lib = librarymanager.install_library(path, repo, overwrite)
     if repo is None:
-        # CHM: an omitted repository means the FIRST one in the list.
-        try:
-            repo = _lib_repos()[0]
-        except IndexError:
-            pass
+        # Live build: install_library rejects repository=None (TypeError:
+        # Value cannot be null) - resolve the CHM's "first repository"
+        # default here instead.
+        repo = _lib_repos()[0]
+    lib = librarymanager.install_library(path, repo, overwrite)
     summary = _lib_summary(lib, _repo_name(repo))
     log("OK", "lib_install {d} {v} -> {r}".format(
         d=summary["displayname"], v=summary["version"],
@@ -2279,13 +2316,19 @@ def cmd_lib_uninstall(args):
         raise RuntimeError("lib_uninstall REFUSED - it removes a library "
                            "from a repository; requires args.confirm=true")
     repo_name = args.get("repo", "")
+    exact = bool(args.get("exact"))
     if repo_name:
-        repo = _require_repo(repo_name)
-        lib = librarymanager.get_library(name, repo)
-        if lib is None:
+        pairs = _resolve_library_pairs(name, repo_name, exact)
+        if not pairs:
             raise RuntimeError('library "{n}" not found in repository '
                                "{r}".format(n=name, r=repo_name))
-        pairs = [(lib, repo)]
+        if len(pairs) > 1:
+            # Several versions/variants in ONE repository: name the exact
+            # full display name so the destructive call is unambiguous.
+            raise RuntimeError('library "{n}" is ambiguous in repository '
+                               "{r} - pass the full display name as "
+                               "args.name with exact=true".format(
+                                   n=name, r=repo_name))
     else:
         pairs = _resolve_library_pairs(name)
         if not pairs:
@@ -2299,7 +2342,7 @@ def cmd_lib_uninstall(args):
                                                for p in pairs)))
     repo = pairs[0][1]
     librarymanager.uninstall_library(repo, pairs[0][0])
-    gone = librarymanager.get_library(name, repo) is None
+    gone = not _resolve_library_pairs(name, _repo_name(repo), exact)
     log("OK", "lib_uninstall {n} from {r}{v}".format(
         n=name, r=_repo_name(repo),
         v="" if gone else " (STILL PRESENT after uninstall?)"))

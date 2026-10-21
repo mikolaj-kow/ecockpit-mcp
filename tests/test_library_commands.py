@@ -41,9 +41,11 @@ class FakeLib(object):
 
 
 class FakeLibManager(object):
-    """ILibManager per ScriptEngine.chm signatures. Repositories key
-    libraries by NAME; find_library matches DISPLAY NAME, get_library
-    matches NAME (different keys per the CHM)."""
+    """ILibManager per the LIVE BUILD (verified 2026-10-21, see the
+    executor header notes): find_library/get_library reject anything but
+    the full display name (SystemError 'stDisplayName'), get_library
+    rejects repository=None (TypeError) - lookups must enumerate
+    get_all_libraries, so the fake makes the native calls fail loudly."""
 
     def __init__(self, repos):
         self.repositories = list(repos)
@@ -62,20 +64,12 @@ class FakeLibManager(object):
         return list(arg.libs.values())
 
     def find_library(self, display_name):
-        found = []
-        for repo in self.repositories:
-            for lib in repo.libs.values():
-                if lib.displayname == display_name:
-                    found.append((lib, repo))
-        return found or None
+        raise SystemError("stDisplayName")
 
     def get_library(self, name, repository=None):
-        repos = [repository] if repository is not None \
-            else self.repositories
-        for repo in repos:
-            if name in repo.libs:
-                return repo.libs[name]
-        return None
+        if repository is None:
+            raise TypeError("Value cannot be null.\r\nParameter name: repo")
+        raise SystemError("stDisplayName")
 
     def get_file_path(self, lib):
         return r"C:\libs\{}.library".format(lib.displayname)
@@ -157,16 +151,33 @@ def test_libs_lists_shadowed_and_scoped(mgr):
         ex.cmd_libs({"repo": "Nope"})
 
 
-def test_lib_find_displayname_and_exact_name(mgr):
+def test_lib_find_displayname_bare_title_and_shadowed(mgr):
     out = ex.cmd_lib_find({"name": "My Helpers"})  # display name
     assert out["count"] == 1
     assert out["matches"][0]["repo"] == "User"
 
+    out = ex.cmd_lib_find({"name": "MyHelpers"})   # library name key
+    assert out["count"] == 1
+    assert out["matches"][0]["repo"] == "User"
+
+    # exact wants the full display name / name - the bare-title prefix
+    # form is a non-exact convenience only
     assert ex.cmd_lib_find({"name": "My Helpers", "exact": True})[
-        "count"] == 0  # exact matches the NAME, not display name
+        "count"] == 1
+    assert ex.cmd_lib_find({"name": "My Helper", "exact": True})[
+        "count"] == 0
 
     out = ex.cmd_lib_find({"name": "WagoAppDateTime", "exact": True})
     assert out["matches"][0]["version"] == "1.2.3.4"
+
+    # a same-name copy in an earlier repository is reported shadowed
+    mgr.repositories[0].libs["MyHelpers"] = FakeLib(
+        "MyHelpers", displayname="My Helpers", version="9.9.9.9")
+    out = ex.cmd_lib_find({"name": "My Helpers"})
+    assert out["count"] == 2
+    flags = {(m["repo"], m["shadowed"]) for m in out["matches"]}
+    assert ("System", False) in flags   # first in search order: wins
+    assert ("User", True) in flags      # shadowed by the System copy
 
     with pytest.raises(RuntimeError, match="needs args.name"):
         ex.cmd_lib_find({})
@@ -202,9 +213,16 @@ def test_lib_uninstall_gate_ambiguity_and_verify(mgr):
     with pytest.raises(RuntimeError, match="ambiguous"):
         ex.cmd_lib_uninstall({"name": "MyHelpers", "confirm": True})
 
-    out = ex.cmd_lib_uninstall({"name": "MyHelpers", "repo": "User",
-                                "confirm": True})
-    assert out == {"uninstalled": "MyHelpers", "repo": "User",
+    # two variants INSIDE one repository -> name the exact display name
+    mgr.repositories[2].libs["MyHelpersOld"] = FakeLib(
+        "MyHelpersOld", displayname="My Helpers, 0.0.9.0")
+    with pytest.raises(RuntimeError, match="full display name"):
+        ex.cmd_lib_uninstall({"name": "My Helpers", "repo": "User",
+                              "confirm": True})
+
+    out = ex.cmd_lib_uninstall({"name": "My Helpers", "repo": "User",
+                                "exact": True, "confirm": True})
+    assert out == {"uninstalled": "My Helpers", "repo": "User",
                    "verified_gone": True}
 
     with pytest.raises(RuntimeError, match="not found"):

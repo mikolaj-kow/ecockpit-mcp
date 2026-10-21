@@ -699,13 +699,14 @@ def ecockpit_libs(repo: str = "", shadowed: bool = False,
         destructiveHint=False,
         readOnlyHint=True,
         openWorldHint=True),
-    description="Find a library by name. Searches repositories in their "
-                "configured order and returns every match with its "
-                "repository and file path (find_library matches the "
-                "display name). exact=true matches the library NAME "
-                "exactly and stops at the first hit (get_library "
-                "semantics - this is what install resolution uses). "
-                "repo narrows the search.")
+    description="Find a library by display name or title. Searches "
+                "repositories in their configured order and returns every "
+                "match with its repository, file path and a shadowed flag "
+                "(true when an earlier repository in search order has the "
+                "same library - the first match wins). exact=true matches "
+                "the full display name/title only; the default also "
+                "accepts the bare title ('NETWORK' finds 'NETWORK, 1.3.5.3 "
+                "(OSCAT)'). repo narrows the search.")
 def ecockpit_lib_find(name: str, repo: str = "", exact: bool = False,
                       timeout_s: int = 120) -> str:
     if not name:
