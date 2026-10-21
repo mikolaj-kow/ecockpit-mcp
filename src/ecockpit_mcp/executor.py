@@ -3515,6 +3515,200 @@ def cmd_textual(project, args):
     raise RuntimeError('textual needs args.op of "read" or "write"')
 
 
+def _get_application_obj(project, args):
+    """The application ScriptObject (args.application name overrides the
+    first found application)."""
+    app_name = str(args.get("application", "")).strip()
+    if app_name:
+        return _find_one(project, app_name)
+    return get_application(project)
+
+
+def cmd_task_config(project, args):
+    """Inspect / create the task configuration (ScriptTaskConfigObject
+    stub, 3.5.10.0).
+
+    ops:
+      inspect {application?} -> tasks with kind, priority, interval,
+              watchdog and assigned POUs (read-only)
+      create_task {application?, name, kind?: cyclic|freewheeling|event|
+              external_event|status|parent_synchron, interval?: "200",
+              interval_unit?: "ms", priority?: "1", watchdog_enabled?,
+              watchdog_time?, pous?: [names], confirm} -> creates the
+              task configuration object when missing, then the task
+
+    create_task modifies the project - CONFIRM-GATED. KindOfTask is an
+    injected enum (Cyclic=1, Freewheeling=2, Event=3, ExternalEvent=4,
+    Status=5, ParentSynchron=6).
+    """
+    op = args.get("op", "inspect")
+    app = _get_application_obj(project, args)
+    tc = None
+    for child in app.get_children(True):
+        try:
+            if child.is_task_configuration:
+                tc = child
+                break
+        except Exception:
+            continue
+
+    if op == "inspect":
+        tasks = []
+        if tc is not None:
+            for child in tc.get_children(True):
+                try:
+                    if not child.is_task:
+                        continue
+                except Exception:
+                    continue
+                task = {"name": _short_name(child)}
+                for attr in ("priority", "interval", "interval_unit",
+                             "event", "external_event", "core_binding",
+                             "parent_synchron_task"):
+                    try:
+                        if attr == "core_binding":
+                            task[attr] = str(child.core_binding)
+                        elif attr == "parent_synchron_task":
+                            task[attr] = str(child.parent_synchron_task)
+                        else:
+                            task[attr] = str(getattr(child, attr))
+                    except Exception:
+                        task[attr] = None
+                try:
+                    wd = child.watchdog
+                    task["watchdog"] = {
+                        "enabled": bool(wd.enabled),
+                        "time": str(wd.time),
+                        "time_unit": str(wd.time_unit),
+                        "sensitivity": str(wd.sensitivity),
+                    }
+                except Exception:
+                    task["watchdog"] = None
+                try:
+                    pous = []
+                    for entry in child.pous:
+                        pous.append(str(entry[0]))
+                    task["pous"] = pous
+                except Exception:
+                    task["pous"] = None
+                tasks.append(task)
+        log("OK", "task config: {n} task(s), config object "
+            "{p}".format(n=len(tasks),
+                         p="present" if tc is not None else "MISSING"))
+        return {"application": _short_name(app),
+                "has_task_configuration": tc is not None,
+                "tasks": tasks}
+
+    if op == "create_task":
+        if not args.get("confirm"):
+            raise RuntimeError("task create_task REFUSED - requires "
+                               "args.confirm=true (it modifies the "
+                               "project)")
+        name = str(args.get("name", "")).strip()
+        if not name:
+            raise RuntimeError("task create_task needs args.name")
+        if tc is None:
+            tc = app.create_task_configuration()
+            log("OK", "task configuration object created")
+        task = tc.create_task(name)
+        kind_map = {"cyclic": "Cyclic", "freewheeling": "Freewheeling",
+                    "event": "Event", "external_event": "ExternalEvent",
+                    "status": "Status", "parent_synchron": "ParentSynchron"}
+        kind = str(args.get("kind", "cyclic")).lower()
+        if KindOfTask is not None and kind in kind_map:
+            task.kind_of_task = getattr(KindOfTask, kind_map[kind])
+        if args.get("interval"):
+            task.interval = str(args["interval"])
+        if args.get("interval_unit"):
+            task.interval_unit = str(args["interval_unit"])
+        if args.get("priority"):
+            task.priority = str(args["priority"])
+        if args.get("watchdog_enabled") is not None:
+            task.watchdog.enabled = bool(args["watchdog_enabled"])
+        if args.get("watchdog_time"):
+            task.watchdog.time = str(args["watchdog_time"])
+        for pou in (args.get("pous") or []):
+            task.pous.add(str(pou))
+        log("OK", "task '{n}' created ({k})".format(n=name, k=kind))
+        return {"created": name, "kind": kind,
+                "pous": [str(p) for p in (args.get("pous") or [])]}
+    raise RuntimeError('task_config needs args.op of "inspect" or '
+                       '"create_task"')
+
+
+def cmd_symbol_config(project, args):
+    """Create the symbol configuration / dump the variable inventory
+    (ScriptSymbolConfigObject stub, 3.5.10.0).
+
+    ops:
+      variables {application?, compile?: true} -> full signature +
+              variable inventory (get_all_signatures; compile=true
+              builds first - takes time, read-only)
+      create  {application?, export_comments?: false,
+               support_opc_ua?: true, confirm} -> adds the symbol
+              configuration object to the application
+
+    create modifies the project - CONFIRM-GATED.
+    """
+    op = args.get("op", "variables")
+    app = _get_application_obj(project, args)
+    sym = None
+    for child in app.get_children(True):
+        try:
+            if child.is_symbol_config:
+                sym = child
+                break
+        except Exception:
+            continue
+
+    if op == "create":
+        if not args.get("confirm"):
+            raise RuntimeError("symbol_config create REFUSED - requires "
+                               "args.confirm=true (it modifies the "
+                               "project)")
+        if sym is not None:
+            return {"created": False,
+                    "note": "symbol configuration already present",
+                    "name": _short_name(sym)}
+        sym = app.create_symbol_config(
+            bool(args.get("export_comments", False)),
+            bool(args.get("support_opc_ua", True)),
+            False)  # client_side_layout_calculator: none
+        log("OK", "symbol configuration created")
+        return {"created": True, "name": _short_name(sym)}
+
+    if op == "variables":
+        if sym is None:
+            raise RuntimeError("no symbol configuration object under the "
+                               "application - create it first "
+                               "(op=create)")
+        compile_first = bool(args.get("compile", True))
+        signatures = sym.get_all_signatures(compile=compile_first)
+        out = []
+        for sig in signatures:
+            entry = {"name": str(sig.name),
+                     "full_qualified_name": str(sig.full_qualified_name),
+                     "variables": []}
+            try:
+                for var in sig.variables:
+                    v = {"name": str(var.name), "type": str(var.type)}
+                    try:
+                        v["effective_access"] = str(var.effective_access)
+                    except Exception:
+                        pass
+                    entry["variables"].append(v)
+            except Exception:
+                pass
+            out.append(entry)
+        total = sum(len(e["variables"]) for e in out)
+        log("OK", "symbol inventory: {s} signatures, {v} "
+            "variables".format(s=len(out), v=total))
+        return {"signatures": len(out), "variables": total,
+                "compiled": compile_first, "content": out}
+    raise RuntimeError('symbol_config needs args.op of "variables" or '
+                       '"create"')
+
+
 # --------------------------------------------------------------------------
 # Command dispatch
 # --------------------------------------------------------------------------
@@ -3527,7 +3721,7 @@ KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
                   "repos", "repo_add", "repo_remove", "repo_update",
                   "repo_move",
                   "login", "source_download", "prepared_values",
-                  "tree", "object_create", "textual")
+                  "tree", "object_create", "textual", "task_config", "symbol_config")
 
 
 def run_command(request):
