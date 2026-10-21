@@ -2325,9 +2325,9 @@ def cmd_save_archive(project, args):
         os.makedirs(d)
 
     forms = [
-        (1, (path,)),
-        (2, (path, None)),
-        (3, (path, None, None, None)),
+        (1, (path,), {}),
+        (2, (path, None), {}),
+        (3, (path, None, None, None), {}),
     ]
     if ArchiveCategories is not None:
         # direct member access only - getattr() fails on the interop
@@ -2343,14 +2343,20 @@ def cmd_save_archive(project, args):
                 log("INFO", "ArchiveCategories.{p} unavailable: "
                     "{e}".format(p=prop, e=exc))
                 continue
-            forms.append((len(forms) + 1, (path, "", category)))
+            forms.append((len(forms) + 1, (path, "", category), {}))
+    # NAMED-ARGS rung (post-save-retest): positional forms NRE'd in all
+    # shapes even with a saved, named project - the named IScriptProject9
+    # form may bind the overload positional calls cannot disambiguate.
+    forms.append((len(forms) + 1, (), {
+        "path": path, "comment": None, "additional_files": None,
+        "additional_categories": None}))
     attempts = []
-    for number, argv in forms:
+    for number, argv, kwargs in forms:
         log("INFO", "save_archive: trying form {n} "
             "save_archive(path{dots})".format(
                 n=number, dots=", None" * (number - 1)))
         try:
-            project.save_archive(*argv)
+            project.save_archive(*argv, **kwargs)
         except Exception as exc:
             attempts.append("form {n}: {c}: {m}".format(
                 n=number, c=type(exc).__name__, m=str(exc)[:200]))
