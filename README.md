@@ -148,20 +148,21 @@ Online (PLC):
 | `ecockpit_read(variable, device?)` | online variable read (`.env` PLC creds) |
 | `ecockpit_write(values, force?, confirm)` | **destructive** — write/force values on the RUNNING PLC; confirm-gated, reads back after write |
 | `ecockpit_unforce_all` | release all forced values |
+| `ecockpit_prepared_values(expression?, device?)` | read-only — staged (prepared) values + currently forced variables |
 | `ecockpit_state(device?)` | login/application/operation state readout |
+| `ecockpit_login(option?, delete_foreign_apps?, device?, confirm)` | **destructive** — explicit login with online-change control (`try` = deltas if possible, `force` = deltas or nothing, `never` = full download, `auto` = ladder); session stays open, logout via disconnect |
+| `ecockpit_source_download(confirm)` | **destructive** — writes the SOURCE project to the PLC (not the compiled app) |
 | `ecockpit_download(confirm)` | **destructive** — replaces the RUNNING PLC app; `confirm=true` only on explicit owner request |
 | `ecockpit_stop(confirm)` | **destructive** — stops the running PLC application |
 | `ecockpit_disconnect(force?)` | PLC logout (`force=true` → forced_disconnect) |
 
-PLC file system:
-
-| Tool | Notes |
-|---|---|
-| `ecockpit_plc_ls(directory?)` | list a PLC directory |
-| `ecockpit_plc_get(remote, local)` | download a file from the PLC |
-| `ecockpit_plc_put(local, remote, confirm)` | **destructive** — upload a file onto the PLC |
-| `ecockpit_plc_rm(remote, confirm)` | **destructive** — delete a PLC file |
-| `ecockpit_upload_source(path?)` | read the source project archive back from the PLC |
+CAUTION — every online command logs in via the online-change ladder and
+may apply online changes (deploy code deltas) to the RUNNING
+application when the open project differs from the PLC. There are NO
+PLC file-system tools: the CHM's IScriptOnlineDevice4 file API
+(`get_file_list_of_directory`, `download_file`, `upload_file`,
+`delete_file`) does not exist in this build (CLR-reflection-proven,
+see `docs/SCRIPTENGINE_API.md`).
 
 Libraries (global `librarymanager` / ILibManager — repository curation;
 there is no per-application Library Manager scripting API in this build):
@@ -186,10 +187,10 @@ Diagnostics:
 | `ecockpit_messages` / `ecockpit_probe` | scripting-API debugging aids |
 | `ecockpit_clear_messages()` | wipe the message store — call before a build for a fresh harvest |
 
-All destructive tools (`download`, `write`, `stop`, `plc_put`, `plc_rm`,
-`lib_uninstall`, `repo_add`, `repo_remove`, `repo_update`) are
-confirm-gated at BOTH the MCP layer and the executor and carry
-`destructiveHint` annotations.
+All destructive tools (`download`, `write`, `stop`, `login`,
+`source_download`, `lib_uninstall`, `repo_add`, `repo_remove`,
+`repo_update`) are confirm-gated at BOTH the MCP layer and the executor
+and carry `destructiveHint` annotations.
 
 `build`/`compile`/`rebuild` return `harvest` (structured compiler messages)
 and `log_tail` inline on failure, so the model usually needs no second

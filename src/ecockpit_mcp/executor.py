@@ -119,6 +119,12 @@ if "ArchiveCategories" not in globals():
     # ArchiveCategories"); its .default/.none members give save_archive a
     # TYPED category that disambiguates the IronPython overload maze.
     ArchiveCategories = None
+if "OnlineChangeOption" not in globals():
+    # _3S.CoDeSys.OnlineUI.OnlineChangeOption, injected like Severity (per
+    # CHM): Never (0, online change never -> full download forced), Try
+    # (1, online change if possible else full download), Force (2, online
+    # change or nothing).
+    OnlineChangeOption = None
 if "ConflictResolve" not in globals():
     ConflictResolve = None
 if "ImportReporter" not in globals():
@@ -1476,10 +1482,64 @@ def compile_project(app, project, summary, args=None, rebuild=False):
 # --------------------------------------------------------------------------
 # Online commands (read / download / disconnect / status / probe)
 # --------------------------------------------------------------------------
+def _online_login(onlineapp, device):
+    """Explicit login ladder - online change control.
+
+    device.connect() performed an IMPLICIT login-with-download (live
+    2026-10-21: a read-only plc_ls deployed the open, untested
+    application to the live PLC). The controlled form is
+    onlineapp.login(OnlineChangeOption, delete_foreign_apps) with the
+    enum per CHM: Try (online change if possible, else full download),
+    Force (online change or nothing), Never (full download forced).
+    Preference order: Try first (lands deltas without a full download
+    whenever possible), then Force, Never, and finally the legacy
+    device.connect() fallback. Returns the form used; raises when every
+    form fails.
+    """
+    options = []
+    if OnlineChangeOption is not None:
+        for name in ("Try", "Force", "Never"):
+            try:
+                if name == "Try":
+                    options.append(("login(OnlineChangeOption.Try)",
+                                    OnlineChangeOption.Try))
+                elif name == "Force":
+                    options.append(("login(OnlineChangeOption.Force)",
+                                    OnlineChangeOption.Force))
+                else:
+                    options.append(("login(OnlineChangeOption.Never)",
+                                    OnlineChangeOption.Never))
+            except Exception as exc:
+                log("INFO", "OnlineChangeOption.{n} unavailable: "
+                    "{e}".format(n=name, e=exc))
+    options.append(("device.connect()", None))
+    attempts = []
+    for label, option in options:
+        try:
+            if option is None:
+                device.connect()
+            else:
+                onlineapp.login(option, False)
+            log("OK", "logged in via {l}".format(l=label))
+            return label
+        except Exception as exc:
+            attempts.append("{l}: {c}: {m}".format(
+                l=label, c=type(exc).__name__, m=str(exc)[:160]))
+            log("INFO", "login via {l} failed: {c}: {m}".format(
+                l=label, c=type(exc).__name__, m=str(exc)[:160]))
+    raise RuntimeError("all login forms failed:\n  " +
+                       "\n  ".join(attempts))
+
+
 def _online_connect(project, args):
     """Connect to the PLC (login) and return (device, onlineapp).
 
     Requires PLC_USER/PLC_PASS (.env or env vars). Caller disconnects.
+    Logs in via the online-change ladder (_online_login) - NEVER via
+    the implicit-download device.connect() unless every explicit form
+    fails. WARNING: even a Try login applies online changes (code
+    deltas) when the open project differs from the PLC - treat every
+    online command as potentially deploying.
     """
     user, pw = _require_creds()
     device = get_device(project, args.get("device", ""))
@@ -1491,15 +1551,8 @@ def _online_connect(project, args):
     log("INFO", "connecting to PLC as user '{u}' (login)".format(
         u=user[0] + "***" if len(user) > 1 else "***"))
     online.set_default_credentials(user, pw)
-    device.connect()
-    log("OK", "connected (logged in)")
-    # LIVE 2026-10-21: device.connect() performed an IMPLICIT CODE
-    # DOWNLOAD of the open application on login (observed during a
-    # read-only plc_ls) - "few days of untested code just went live".
-    # Every _online_connect caller (plc_ls/get/put/rm, read, write,
-    # state, download, ...) must be treated as potentially deploying
-    # until a non-deploying login variant is found and wired in.
     onlineapp = online.create_online_application(app)
+    _online_login(onlineapp, device)
     return device, onlineapp
 
 
@@ -1606,6 +1659,144 @@ def cmd_disconnect(project, args):
         except Exception as exc:
             log("WARN", "forced_disconnect raised: {e}".format(e=exc))
     _online_disconnect(device)
+
+
+def cmd_login(project, args):
+    """Explicit login with online-change control (login + STAY connected).
+
+    args: {"option": "try"|"force"|"never"|"auto" (default "auto" = the
+    ladder order Try -> Force -> Never -> device.connect()),
+    "delete_foreign_apps": false, "device": "", "confirm": true}.
+
+    CONFIRM-GATED: a login can apply online changes (code deltas) to the
+    RUNNING application. Logout afterwards with ecockpit_disconnect.
+    """
+    if not args.get("confirm"):
+        raise RuntimeError("login REFUSED - requires args.confirm=true. A "
+                           "login can apply online changes (code deltas) "
+                           "to the RUNNING PLC application.")
+    option = str(args.get("option", "auto")).lower()
+    delete_foreign_apps = bool(args.get("delete_foreign_apps"))
+    user, pw = _require_creds()
+    device = get_device(project, args.get("device", ""))
+    try:
+        aa = project.active_application
+        app = aa if aa is not None else get_application(project)
+    except Exception:
+        app = get_application(project)
+    log("INFO", "login to PLC as user '{u}' (option={o}, "
+        "delete_foreign_apps={d})".format(
+            u=user[0] + "***" if len(user) > 1 else "***",
+            o=option, d=delete_foreign_apps))
+    online.set_default_credentials(user, pw)
+    onlineapp = online.create_online_application(app)
+
+    if option == "auto":
+        _online_login(onlineapp, device)
+        log("OK", "login complete (auto ladder) - session stays open; "
+            "logout with ecockpit_disconnect")
+        return {"logged_in": True, "via": "auto", "stays_connected": True}
+
+    members = {"try": "Try", "force": "Force", "never": "Never"}
+    if option not in members or OnlineChangeOption is None:
+        raise RuntimeError('login needs args.option of "try", "force", '
+                           '"never" or "auto"{suffix}'.format(
+                               suffix="" if OnlineChangeOption is not None
+                               else " (OnlineChangeOption is unavailable "
+                                    "outside e!COCKPIT)"))
+    try:
+        if option == "try":
+            change_option = OnlineChangeOption.Try
+        elif option == "force":
+            change_option = OnlineChangeOption.Force
+        else:
+            change_option = OnlineChangeOption.Never
+    except Exception as exc:
+        raise RuntimeError("OnlineChangeOption.{m} unavailable: "
+                           "{e}".format(m=members[option], e=exc))
+    try:
+        onlineapp.login(change_option, delete_foreign_apps)
+    except Exception as exc:
+        raise RuntimeError(
+            "login({o}) failed: {c}: {m}".format(
+                o=members[option], c=type(exc).__name__,
+                m=str(exc)[:200]))
+    log("OK", "login complete (OnlineChangeOption.{m}) - session stays "
+        "open; logout with ecockpit_disconnect".format(m=members[option]))
+    return {"logged_in": True, "via": members[option],
+            "delete_foreign_apps": delete_foreign_apps,
+            "stays_connected": True}
+
+
+def cmd_source_download(project, args):
+    """Push the SOURCE project to the PLC (onlineapp.source_download).
+
+    CONFIRM-GATED - it writes to the PLC. Deliberately not the same as
+    ecockpit_download (which deploys the compiled application): this
+    ships the source archive so the PLC carries its own sources.
+    """
+    if not args.get("confirm"):
+        raise RuntimeError("source_download REFUSED - requires "
+                           "args.confirm=true (it writes the source "
+                           "project to the PLC)")
+    device, onlineapp = _online_connect(project, args)
+    try:
+        try:
+            onlineapp.source_download()
+        except AttributeError:
+            raise RuntimeError(
+                "source_download is not available on this online "
+                "application (live build; reflection 2026-10-21 showed "
+                "it may be absent - the only file-ish online member)")
+        log("OK", "source project written to the PLC")
+        return {"source_download": True}
+    finally:
+        _online_disconnect(device)
+
+
+def cmd_prepared_values(project, args):
+    """Read back staged (prepared) and forced values from the online app.
+
+    args: {"expression": optional single variable} - with it, that
+    expression's staged value via get_prepared_value(expression);
+    without, every staged expression via get_prepared_expressions.
+    Also lists currently forced variables (get_forced_expressions).
+    Read-only - never touches the PLC state beyond the login.
+    """
+    device, onlineapp = _online_connect(project, args)
+    try:
+        expression = str(args.get("expression", "")).strip()
+
+        def _staged_value(expr):
+            try:
+                return {"expression": str(expr),
+                        "value": str(onlineapp.get_prepared_value(expr))}
+            except Exception as exc:
+                return {"expression": str(expr),
+                        "error": str(exc)[:150]}
+
+        staged = []
+        if expression:
+            staged.append(_staged_value(expression))
+        else:
+            try:
+                exprs = list(onlineapp.get_prepared_expressions())
+            except Exception as exc:
+                exprs = []
+                log("WARN", "get_prepared_expressions failed: "
+                    "{e}".format(e=exc))
+            for expr in exprs:
+                staged.append(_staged_value(expr))
+        forced = []
+        try:
+            forced = [str(e) for e in onlineapp.get_forced_expressions()]
+        except Exception as exc:
+            log("WARN", "get_forced_expressions failed: {e}".format(e=exc))
+        log("OK", "prepared values: {s} staged, {f} forced".format(
+            s=len(staged), f=len(forced)))
+        return {"staged": staged, "forced": forced}
+    finally:
+        _online_disconnect(device)
 
 
 def cmd_write(project, args):
@@ -2881,7 +3072,8 @@ KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
                   "clear_messages",
                   "libs", "lib_find", "lib_install", "lib_uninstall",
                   "repos", "repo_add", "repo_remove", "repo_update",
-                  "repo_move")
+                  "repo_move",
+                  "login", "source_download", "prepared_values")
 
 
 def run_command(request):
@@ -3021,6 +3213,16 @@ def run_command(request):
             summary["ok"] = True
         elif cmd == "repo_move":
             result["value"] = cmd_repo_move(args)
+            summary["ok"] = True
+        elif cmd == "login":
+            # Online-change control: login and STAY connected.
+            result["value"] = cmd_login(project, args)
+            summary["ok"] = True
+        elif cmd == "source_download":
+            result["value"] = cmd_source_download(project, args)
+            summary["ok"] = True
+        elif cmd == "prepared_values":
+            result["value"] = cmd_prepared_values(project, args)
             summary["ok"] = True
         else:
             raise RuntimeError("unknown command '{c}' (known: {k})".format(

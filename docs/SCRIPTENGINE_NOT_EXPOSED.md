@@ -30,16 +30,18 @@ Regenerate the audit (needs the CHM extracted to `tmp/chm_decomp/`):
 
 ## Not exposed — by capability
 
-### Online change control (IScriptOnlineApplication.login)
-`login(OnlineChangeOption, delete_foreign_apps)` — explicit online-change
-mode. The highest-value remaining candidate: would let a build land on the
-running PLC without a full download. `source_download()` also unexposed
-(writes the source project to the PLC; the app download path is covered).
+### Online change control (IScriptOnlineApplication.login) — EXPOSED as of feat/library-manager
+`login(OnlineChangeOption, delete_foreign_apps)` is exposed as
+`ecockpit_login` (option `try`/`force`/`never`/`auto`; confirm-gated;
+session stays open) and wired into every online command's login ladder
+(`device.connect()` performed an implicit login-WITH-DOWNLOAD — see
+SCRIPTENGINE_API.md). `source_download()` is exposed as
+`ecockpit_source_download` (confirm-gated).
 
-### Prepared-value extras (IScriptOnlineApplication)
-`get_prepared_value`, `get_prepared_expressions` (readback of staged
-values — the write tool verifies via `read_value` instead),
-`get_forced_expressions` (list currently forced variables).
+### Prepared-value extras (IScriptOnlineApplication) — EXPOSED as of feat/library-manager
+`get_prepared_value`, `get_prepared_expressions`, `get_forced_expressions`
+are exposed as the read-only `ecockpit_prepared_values` tool (staged
+values + currently forced variables).
 
 ### Device management (IScriptOnlineDevice2/5, WAGO IEScriptDevice)
 `create_user_management`, `current_logged_on_username`, `connected`,

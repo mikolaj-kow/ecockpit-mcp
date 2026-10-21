@@ -152,8 +152,16 @@ Build log rendering used by the executor:
 - `forced_disconnect()` (IScriptOnlineDevice2) — logout that cannot hang;
   exposed as `ecockpit_disconnect(force=true)`.
 - `IScriptOnlineApplication.login(OnlineChangeOption, delete_foreign_apps)`
-  exists per docs (richer than the WAGO samples show) — candidate for
-  explicit online-change control later.
+  — EXPOSED (live 2026-10-21): `ecockpit_login` (option
+  `try`/`force`/`never`/`auto`, confirm-gated, session stays open), and
+  it is the login path for every online command. `OnlineChangeOption`
+  per CHM: `Never` (0, online change never → full download forced),
+  `Try` (1, online change if possible else full download), `Force`
+  (2, online change or nothing). Reflected live: `login`/`logout`
+  exist on the online application. Background: plain
+  `device.connect()` performed an implicit login-WITH-DOWNLOAD of the
+  open application during a read-only `plc_ls` — the ladder
+  (`_online_login`: Try → Force → Never → connect) replaced it.
 
 ### Prepared values — online writes (→ `ecockpit_write` / `ecockpit_unforce_all`)
 
@@ -164,11 +172,14 @@ literal STRING: `"TRUE"`, `"42"`, `"'text'"`); then exactly one of:
 - `force_prepared_values()` — values stay forced,
 - `unforce_all_values()` — release all forces.
 
-Readbacks: `get_prepared_value(expression)`, `get_prepared_expressions()`.
+Readbacks: `get_prepared_value(expression)`, `get_prepared_expressions()`,
+`get_forced_expressions()` (currently forced variables) — EXPOSED as the
+read-only `ecockpit_prepared_values` tool.
 State properties: `is_logged_in`, `application_state` (ApplicationState),
 `operation_state` (OperatingState), `timeout` (→ `ecockpit_state`).
-`source_download()` writes the source project to the PLC (NOT exposed —
-`ecockpit_download` covers the app-deployment case).
+`source_download()` writes the source project to the PLC — EXPOSED as
+`ecockpit_source_download` (confirm-gated; distinct from
+`ecockpit_download`, which deploys the compiled application).
 
 ### PLC file system (IScriptOnlineDevice4 → `ecockpit_plc_ls/get/put/rm`)
 
