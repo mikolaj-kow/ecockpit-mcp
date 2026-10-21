@@ -1734,11 +1734,22 @@ def cmd_source_download(project, args):
     CONFIRM-GATED - it writes to the PLC. Deliberately not the same as
     ecockpit_download (which deploys the compiled application): this
     ships the source archive so the PLC carries its own sources.
+    Saves the open project FIRST (best-effort, same as cmd_snapshot):
+    live 2026-10-21 - with unsaved changes the engine NRE'd on
+    source_download; after the user saved (GUI prompt) the same call
+    uploaded fine, so we save by default.
     """
     if not args.get("confirm"):
         raise RuntimeError("source_download REFUSED - requires "
                            "args.confirm=true (it writes the source "
                            "project to the PLC)")
+    log("INFO", "saving the open project first (source_download needs a "
+                "saved project)")
+    try:
+        project.save()
+        log("OK", "project saved")
+    except Exception as exc:
+        log("WARN", "pre-save failed (continuing): {e}".format(e=exc))
     device, onlineapp = _online_connect(project, args)
     try:
         try:
