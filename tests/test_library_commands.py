@@ -324,3 +324,62 @@ def test_export_reporter_base_resolution(monkeypatch):
     monkeypatch.setattr(ex, "ExportReporter", None)
     monkeypatch.setattr(ex, "IExportReporter", None)
     assert ex._export_reporter_base() is object
+
+
+def test_export_target_path_sanitized(tmp_path):
+    # _short_name's "Name=<x>" prefix is stripped, bad chars underscored
+    assert ex._export_target_path(str(tmp_path), "Name=My App").endswith(
+        "My_App.xml")
+    assert ex._export_target_path(str(tmp_path), "Name=A/B:C").endswith(
+        "A_B_C.xml")
+    assert ex._export_target_path(str(tmp_path), "").endswith(
+        "application.xml")
+    assert ex._export_target_path(str(tmp_path), "Name=").endswith(
+        "application.xml")
+
+
+class FakeArchiveProject(object):
+    """Records save_archive calls; raises per configured form."""
+
+    def __init__(self, failures):
+        # failures: list of exception-or-None per form index
+        self.failures = list(failures)
+        self.calls = []
+
+    def save_archive(self, *argv):
+        self.calls.append(argv)
+        idx = len(self.calls) - 1
+        failure = self.failures[idx] if idx < len(self.failures) else None
+        if failure is not None:
+            raise failure
+        # "write" the archive the executor then verifies
+        with open(argv[0], "wb") as fh:
+            fh.write(b"archive")
+
+
+def test_save_archive_ladder(tmp_path):
+    # form 1 works -> used, reported
+    good = FakeArchiveProject([None])
+    out = ex.cmd_save_archive(good, {"path": str(tmp_path / "a.parch")})
+    assert out["form"] == 1 and out["bytes"] == 7
+    assert good.calls == [(str(tmp_path / "a.parch"),)]
+
+    # form 1 NREs live-style -> form 2 saves the day
+    nre = RuntimeError("Object reference not set")
+    fallback = FakeArchiveProject([nre, None])
+    out = ex.cmd_save_archive(fallback, {"path": str(tmp_path / "b.parch")})
+    assert out["form"] == 2
+    assert fallback.calls[0] == (str(tmp_path / "b.parch"),)
+    assert fallback.calls[1] == (str(tmp_path / "b.parch"), None)
+
+    # every form fails -> error lists attempts and points at snapshot
+    doomed = FakeArchiveProject([nre, nre, nre])
+    with pytest.raises(RuntimeError, match="ecockpit_snapshot"):
+        ex.cmd_save_archive(doomed, {"path": str(tmp_path / "c.parch")})
+    assert len(doomed.calls) == 3
+
+    # a form that returns without writing the file is not trusted
+    liar = FakeArchiveProject([None])
+    liar.save_archive = lambda *a: None
+    with pytest.raises(RuntimeError, match="ecockpit_snapshot"):
+        ex.cmd_save_archive(liar, {"path": str(tmp_path / "d.parch")})

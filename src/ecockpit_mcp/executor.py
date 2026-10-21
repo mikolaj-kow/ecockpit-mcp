@@ -113,6 +113,12 @@ if "e_projects" not in globals():
     e_projects = None
 if "librarymanager" not in globals():
     librarymanager = None
+if "ArchiveCategories" not in globals():
+    # IScriptProjectArchiveCategories - injected per CHM ("An instance of
+    # this object is injected into the scriptengine module with the name
+    # ArchiveCategories"); its .default/.none members give save_archive a
+    # TYPED category that disambiguates the IronPython overload maze.
+    ArchiveCategories = None
 if "ConflictResolve" not in globals():
     ConflictResolve = None
 if "ImportReporter" not in globals():
@@ -1127,7 +1133,11 @@ def make_export_reporter(summary):
     import this module offline; the real interface only exists inside
     e!COCKPIT (see _export_reporter_base for the naming gotcha).
     Callbacks per ScriptEngine.chm: error/warning(message),
-    nonexportable(obj), aborting property.
+    nonexportable(obj), aborting property. LIVE 2026-10-21: the EXPORT
+    flow calls warning() with TWO message arguments
+    ("warning() takes exactly 2 arguments (3 given)" with the CHM
+    1-arg signature) - all callbacks therefore take *argv and use the
+    first argument, so any engine arity flows into the log.
     """
 
     class AgentExportReporter(_export_reporter_base()):
@@ -1135,18 +1145,21 @@ def make_export_reporter(summary):
             self.file_errors = 0
             self.file_warnings = 0
 
-        def error(self, message):
+        def error(self, *argv):
             self.file_errors += 1
             summary["errors"] += 1
-            log("ERROR", "export: {m}".format(m=message))
+            log("ERROR", "export: {m}".format(
+                m=" | ".join(str(a) for a in argv)[:300]))
 
-        def warning(self, message):
+        def warning(self, *argv):
             self.file_warnings += 1
             summary["warnings"] += 1
-            log("WARN", "export: {m}".format(m=message))
+            log("WARN", "export: {m}".format(
+                m=" | ".join(str(a) for a in argv)[:300]))
 
-        def nonexportable(self, obj):
-            log("WARN", "export: nonexportable {o}".format(o=_short_name(obj)))
+        def nonexportable(self, *argv):
+            log("WARN", "export: nonexportable {o}".format(
+                o=_short_name(argv[0]) if argv else "<???>"))
 
         @property
         def aborting(self):
@@ -1349,9 +1362,17 @@ def compile_project(app, project, summary, args=None, rebuild=False):
 
     args.all_messages=true bypasses the IGNORE_CODES known-noise filter
     (.env) for this run; otherwise ignored codes drop out of the harvest
-    and the counts, replaced by a one-line summary.
+    and the counts, replaced by a one-line summary. args.harvest_lines
+    (default 60) raises how many harvest lines land in the JSON result
+    (the report file section follows at max(harvest_lines, 100)) -
+    full-harvest parses no longer need a code change.
     """
     verb = "rebuild" if rebuild else "build"
+    try:
+        harvest_lines = int((args or {}).get("harvest_lines", 60))
+    except (TypeError, ValueError):
+        harvest_lines = 60
+    harvest_lines = max(harvest_lines, 0)
     log("INFO", "compiling (app.{v}() - documented IScriptApplication API)"
         .format(v=verb))
     build_raised = None
@@ -1380,7 +1401,7 @@ def compile_project(app, project, summary, args=None, rebuild=False):
     if entries:
         summary["errors"] += s_errors
         summary["warnings"] += s_warnings
-        harvest = lines[:60]
+        harvest = lines[:harvest_lines]
         if ignored_counts:
             detail = ", ".join("{c} x{n}".format(c=c, n=n)
                                for c, n in sorted(ignored_counts.items()))
@@ -1392,12 +1413,13 @@ def compile_project(app, project, summary, args=None, rebuild=False):
         if bypass:
             _lines.append("(IGNORE_CODES bypassed for this run - "
                           "all_messages=true)")
+        report_cap = max(harvest_lines, 100)
         _lines.append("----- Compiler messages (IScriptMessage, "
                       "structured) -----")
-        for ln in lines[:100]:
+        for ln in lines[:report_cap]:
             _lines.append(ln)
-        if len(lines) > 100:
-            _lines.append("... {n} more".format(n=len(lines) - 100))
+        if len(lines) > report_cap:
+            _lines.append("... {n} more".format(n=len(lines) - report_cap))
         _lines.append("")
 
     if build_available:
@@ -1692,18 +1714,35 @@ def cmd_state(project, args):
         _online_disconnect(device)
 
 
+def _export_target_path(out_dir, app_name):
+    """File target for export_xml.
+
+    The CHM's `path` parameter is "The path of the FILE we export into" -
+    NEVER a directory (live 2026-10-21: passing a directory makes .NET
+    try to open it as a file, failing with "Access to the path is
+    denied" on any directory, existing or not).
+    """
+    name = app_name or "application"
+    if name.startswith("Name="):
+        name = name[len("Name="):]
+    base = re.sub(r"[^A-Za-z0-9_.-]+", "_", name.strip()) or "application"
+    return os.path.join(out_dir, base + ".xml")
+
+
 def cmd_export(project, args, summary):
     """Export the application objects to PLCopen XML.
 
-    args: {"dir": target} (default <project root>/plcopensrc-export).
-    Uses IScriptProject.export_xml(reporter, objects, path, recursive);
-    the IScriptProject2 overload adds export_folder_structure. Reporter
-    errors/warnings count into the command summary (import parity).
-    The reporter must subclass the REAL injected interface - exposed as
-    `ExportReporter`, NOT `IExportReporter` (live 2026-10-21: subclassing
-    the IExportReporter-named placeholder made export_xml reject it with
-    "expected IExportReporter, got Object_1$1"; see
-    _export_reporter_base).
+    args: {"dir": target directory} (default
+    <project root>/plcopensrc-export). The XML lands at
+    <dir>/<application>.xml - ONE PLCopen file, not the multi-file
+    Application.*.xml tree the import side reads. export_xml's `path`
+    is a FILE path (see _export_target_path). Ladder: 4-arg call, 5-arg
+    IScriptProject2 retry on TypeError, then the string-return form
+    (path=None -> the CHM guarantees the whole XML as the return value)
+    written by us. Reporter errors/warnings count into the command
+    summary (import parity). The reporter must subclass the REAL
+    injected interface - exposed as `ExportReporter`, NOT
+    `IExportReporter` (see _export_reporter_base).
     """
     out_dir = args.get("dir") or ""
     if not out_dir and PROJECT_ROOT:
@@ -1714,19 +1753,35 @@ def cmd_export(project, args, summary):
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
     app = get_application(project)
+    target = _export_target_path(out_dir, _short_name(app))
     reporter = make_export_reporter(summary)
-    result = ""
+
+    mode = "file"
     try:
-        result = project.export_xml(reporter, [app], out_dir, True)
-    except TypeError:
-        log("INFO", "retrying export_xml with folder-structure arg "
-                    "(IScriptProject2 overload)")
-        result = project.export_xml(reporter, [app], out_dir, True, True)
+        try:
+            project.export_xml(reporter, [app], target, True)
+        except TypeError:
+            log("INFO", "retrying export_xml with folder-structure arg "
+                        "(IScriptProject2 overload)")
+            project.export_xml(reporter, [app], target, True, True)
+        if not os.path.isfile(target):
+            raise RuntimeError("export_xml reported success but wrote no "
+                               "file: {t}".format(t=target))
+    except Exception as exc:
+        log("INFO", "file-based export failed ({c}: {m}) - falling back "
+                    "to the string-return form".format(
+                        c=type(exc).__name__, m=str(exc)[:160]))
+        xml = project.export_xml(reporter, [app], None, True)
+        with open(target, "wb") as fh:
+            fh.write(_to_bytes(xml))
+        mode = "string-fallback"
+
     files = sorted(glob.glob(os.path.join(out_dir, "*.xml")))
-    log("OK", "export wrote {n} XML file(s) to {d} ({e} error(s))".format(
-        n=len(files), d=out_dir, e=summary["errors"]))
-    return {"dir": out_dir, "xml_files": len(files),
-            "result": str(result), "first_files": files[:10]}
+    size = os.path.getsize(target) if os.path.isfile(target) else None
+    log("OK", "export wrote {t} ({b} bytes, mode {m}, {e} error(s))".format(
+        t=target, b=size, m=mode, e=summary["errors"]))
+    return {"dir": out_dir, "file": target, "mode": mode, "bytes": size,
+            "xml_files": len(files), "first_files": files[:10]}
 
 
 def cmd_plcfs(project, args):
@@ -1836,7 +1891,28 @@ def cmd_save_archive(project, args):
     """Save the project as a .projectarchive (single-file backup).
 
     args: {"path": host path} (default <snapshots>/<project>_<ts>
-    .projectarchive). IScriptProject.save_archive.
+    .projectarchive). IScriptProject(.9).save_archive. LIVE 2026-10-21:
+    the plain 1-arg form dies with "Object reference not set" (NRE deep
+    in the engine, nothing documented in the CHM) - most plausibly the
+    IronPython binding of the params-array overload
+    save_archive(String, params IScriptProjectArchiveCategory[]). We
+    probe the documented forms in order and keep the first that writes
+    the file:
+      1. save_archive(path)
+      2. save_archive(path, None)
+      3. save_archive(path, None, None, None)   (IScriptProject9 form;
+         per CHM, None additional_categories = the default selection)
+      4. save_archive(path, None, None, ArchiveCategories.default)
+         (live 2026-10-21: forms 1+2 NRE and form 3 is rejected with
+         "Multiple targets could match" - but the typed category alone
+         still leaves two overloads matching on the None slots)
+      5/6. save_archive(path, "", ArchiveCategories.default|none)
+         (comment="" + ONE typed category pins the
+          (String, String, params IScriptProjectArchiveCategory[])
+          overload - the only unambiguous shape)
+    If every form fails, the error lists all attempts and points at
+    ecockpit_snapshot (plain file copy - works live) as the backup
+    alternative.
     """
     path = args.get("path", "")
     if not path:
@@ -1853,10 +1929,54 @@ def cmd_save_archive(project, args):
     d = os.path.dirname(path)
     if d and not os.path.isdir(d):
         os.makedirs(d)
-    project.save_archive(path)
-    log("OK", "project archive written to {p}".format(p=path))
-    return {"path": path, "bytes": os.path.getsize(path) if
-            os.path.isfile(path) else None}
+
+    forms = [
+        (1, (path,)),
+        (2, (path, None)),
+        (3, (path, None, None, None)),
+    ]
+    if ArchiveCategories is not None:
+        # direct member access only - getattr() fails on the interop
+        # objects; some categories may throw in customized environments
+        # (per CHM)
+        for prop in ("default", "none"):
+            try:
+                if prop == "default":
+                    category = ArchiveCategories.default
+                else:
+                    category = ArchiveCategories.none
+            except Exception as exc:
+                log("INFO", "ArchiveCategories.{p} unavailable: "
+                    "{e}".format(p=prop, e=exc))
+                continue
+            forms.append((len(forms) + 1, (path, "", category)))
+    attempts = []
+    for number, argv in forms:
+        log("INFO", "save_archive: trying form {n} "
+            "save_archive(path{dots})".format(
+                n=number, dots=", None" * (number - 1)))
+        try:
+            project.save_archive(*argv)
+        except Exception as exc:
+            attempts.append("form {n}: {c}: {m}".format(
+                n=number, c=type(exc).__name__, m=str(exc)[:200]))
+            log("WARN", "save_archive form {n} failed: {c}: {m}".format(
+                n=number, c=type(exc).__name__, m=str(exc)[:200]))
+            continue
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            log("OK", "project archive written to {p} (form {n})".format(
+                p=path, n=number))
+            return {"path": path, "form": number,
+                    "bytes": os.path.getsize(path)}
+        attempts.append("form {n}: returned but wrote no file".format(
+            n=number))
+        log("WARN", "save_archive form {n} returned but wrote no "
+            "file".format(n=number))
+    raise RuntimeError(
+        "save_archive failed in all {n} documented forms:\n  {a}\n"
+        "alternative: ecockpit_snapshot (plain .ecp file copy) for a "
+        "backup that does not use save_archive".format(
+            n=len(forms), a="\n  ".join(attempts)))
 
 
 _PROBE_KEYWORDS = ("compile", "check", "generate", "message", "online",

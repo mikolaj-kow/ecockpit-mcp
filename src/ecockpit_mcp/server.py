@@ -297,11 +297,14 @@ def ecockpit_server_status() -> str:
                 "severity, POU and line on failure. Codes listed in "
                 "IGNORE_CODES (.env, e.g. \"C543, C100\") are filtered from "
                 "harvest and counts; set all_messages=true to bypass the "
-                "filter for this run.")
+                "filter for this run. harvest_lines (default 60) raises "
+                "how many harvest lines come back inline for big "
+                "failures.")
 def ecockpit_build(skip_import: bool = False, all_messages: bool = False,
-                   timeout_s: int = 900) -> str:
+                   harvest_lines: int = 60, timeout_s: int = 900) -> str:
     return json.dumps(_run("build", {"skip_import": bool(skip_import),
-                                     "all_messages": bool(all_messages)},
+                                     "all_messages": bool(all_messages),
+                                     "harvest_lines": int(harvest_lines)},
                            timeout_s), indent=2)
 
 
@@ -327,9 +330,12 @@ def ecockpit_export(dir: str = "", timeout_s: int = 600) -> str:
 @mcp.tool(
     description="Compile only (no XML re-import). Same diagnostics and "
                 "IGNORE_CODES filtering as build (all_messages=true "
-                "bypasses).")
-def ecockpit_compile(all_messages: bool = False, timeout_s: int = 900) -> str:
-    return json.dumps(_run("compile", {"all_messages": bool(all_messages)},
+                "bypasses). harvest_lines (default 60) raises how many "
+                "harvest lines come back inline.")
+def ecockpit_compile(all_messages: bool = False, harvest_lines: int = 60,
+                     timeout_s: int = 900) -> str:
+    return json.dumps(_run("compile", {"all_messages": bool(all_messages),
+                                       "harvest_lines": int(harvest_lines)},
                            timeout_s), indent=2)
 
 
@@ -338,10 +344,13 @@ def ecockpit_compile(all_messages: bool = False, timeout_s: int = 900) -> str:
                 "compile from scratch without XML re-import. Fixes grown "
                 "GVL arrays failing incremental builds with C0106 'out of "
                 "global data memory'. Slower than compile (~1-3 min). Same "
-                "diagnostics and IGNORE_CODES filtering as build.")
-def ecockpit_rebuild(all_messages: bool = False,
+                "diagnostics and IGNORE_CODES filtering as build. "
+                "harvest_lines (default 60) raises how many harvest lines "
+                "come back inline.")
+def ecockpit_rebuild(all_messages: bool = False, harvest_lines: int = 60,
                      timeout_s: int = 1200) -> str:
-    return json.dumps(_run("rebuild", {"all_messages": bool(all_messages)},
+    return json.dumps(_run("rebuild", {"all_messages": bool(all_messages),
+                                       "harvest_lines": int(harvest_lines)},
                            timeout_s), indent=2)
 
 
@@ -588,8 +597,12 @@ def ecockpit_upload_source(path: str = "", device: str = "",
 
 @mcp.tool(
     description="Save the open project as a single-file .projectarchive "
-                "(backup; the .ecp snapshot stays the plain-project "
-                "counterpart). path defaults to "
+                "(backup). CAUTION, live 2026-10-21: e!COCKPIT 11.3.1.0 "
+                "NREs ('Object reference not set') in EVERY documented "
+                "save_archive binding - this tool probes them all, logs "
+                "each attempt, and ends with a pointer to "
+                "ecockpit_snapshot (plain .ecp copy), which is the "
+                "working backup path in this build. path defaults to "
                 "<snapshots>/<project>_<timestamp>.projectarchive.")
 def ecockpit_save_archive(path: str = "", timeout_s: int = 300) -> str:
     args = {"path": path} if path else {}
