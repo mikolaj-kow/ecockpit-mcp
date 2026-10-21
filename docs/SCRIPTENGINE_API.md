@@ -110,7 +110,7 @@ Build log rendering used by the executor:
   with the CHM's 1-arg signature) — the executor's export callbacks
   take `*argv` and log everything.
 - `save_archive(path)` — single-file `.projectarchive` backup
-  (→ `ecockpit_save_archive`). **VERDICT (live 2026-10-21, e!COCKPIT
+  (NO MCP tool — removed, see the verdict). **VERDICT (live 2026-10-21, e!COCKPIT
   11.3.1.0): BROKEN in this build — do not rely on it.** Every binding
   NREs inside the engine with `Object reference not set`: the 1-arg
   form, `(path, None)`, the IScriptProject9 `(path, None, None, None)`
@@ -120,9 +120,10 @@ Build log rendering used by the executor:
   injected **`ArchiveCategories`** global. Binding quirks worth
   remembering: IronPython needs a TYPED argument in the category slot
   (None leaves multiple overloads matching; a lone category into
-  `IEnumerable` slots casts badly). `ecockpit_save_archive` keeps the
-  probe ladder + full attempt log so a fixed engine self-heals, and
-  points at `ecockpit_snapshot` (plain `.ecp` copy — works live) for
+  `IEnumerable` slots casts badly). The executor's `save_archive`
+  command keeps the probe ladder + full attempt log so a fixed engine
+  self-heals, and points at `ecockpit_snapshot` (plain `.ecp` copy —
+  works live) for
   backups today. The MCP tool is **disabled at the server layer** — it
   returns the explanation without touching the relay (the executor
   ladder remains for file-protocol users and self-heals if the engine

@@ -138,8 +138,7 @@ Build & project:
 | `ecockpit_rebuild(all_messages?, harvest_lines?)` | FULL rebuild (`app.rebuild()`) — scripted Build → Clean; fixes C0106 on grown GVL arrays |
 | `ecockpit_import` / `ecockpit_compile` | halves of build, standalone |
 | `ecockpit_export(dir?)` | PLCopen XML export to `<dir>/<application>.xml` (single file; defaults to `<project root>/plcopensrc-export`) — string-return fallback if the engine refuses to write |
-| `ecockpit_snapshot(version?)` | project copy to `<snapshots>/<project>_<version>.ecp` |
-| `ecockpit_save_archive(path?)` | **DISABLED** — e!COCKPIT 11.3.1.0 engine NREs in every `save_archive` binding (all 5 forms probed live); calling it returns the explanation. Use `ecockpit_snapshot`, the working backup |
+| `ecockpit_snapshot(version?)` | project copy to `<snapshots>/<project>_<version>.ecp` — the working backup (no `save_archive` tool: the engine NREs in every binding, see `docs/SCRIPTENGINE_API.md`) |
 | `ecockpit_status` | project/application/device info (no PLC login) |
 
 Online (PLC):

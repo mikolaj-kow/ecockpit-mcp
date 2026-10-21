@@ -48,10 +48,13 @@ values — the write tool verifies via `read_value` instead),
 `set_io_mapping`, `update` — scripted hardware/parameter configuration.
 
 ### Project plumbing (IScriptProject(s)2/3/4)
-`close()`, `create`, `get_by_path`, `open_archive`, `save_archive` is
-exposed but `convert` (project conversion) and
-`create_new_project_from_template` are not; `IScriptProject3.login/logout`
-(project-level login); `dirty`, `compiler_version` properties.
+`close()`, `create`, `get_by_path`, `open_archive` are exposed but
+`convert` (project conversion) and `create_new_project_from_template`
+are not; `IScriptProject3.login/logout` (project-level login); `dirty`,
+`compiler_version` properties. `save_archive` has NO MCP tool — the
+engine NREs in every binding in this build (see SCRIPTENGINE_API.md);
+the executor keeps a self-healing probe ladder, `ecockpit_snapshot` is
+the backup path.
 
 ### Library manager (ILibManager) — EXPOSED as of feat/library-manager
 `find_library`, `install_library`/`uninstall_library`, repositories —

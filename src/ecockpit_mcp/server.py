@@ -142,7 +142,6 @@ _TIMEOUTS = {
     "export": 600,
     "plcfs": 300,
     "upload_source": 600,
-    "save_archive": 300,
     "clear_messages": 60,
     "libs": 120,
     "lib_find": 120,
@@ -595,24 +594,11 @@ def ecockpit_upload_source(path: str = "", device: str = "",
     return json.dumps(_run("upload_source", args, timeout_s), indent=2)
 
 
-@mcp.tool(
-    description="DISABLED (live 2026-10-21): e!COCKPIT 11.3.1.0 throws "
-                "'Object reference not set' in EVERY documented "
-                "save_archive binding - all 5 probed forms NRE inside the "
-                "engine. Calling this returns that explanation without "
-                "touching the relay. Use ecockpit_snapshot (plain .ecp "
-                "copy) for backups; the probe ladder stays in the "
-                "executor and self-heals if WAGO fixes the engine.")
-def ecockpit_save_archive(path: str = "", timeout_s: int = 300) -> str:
-    return json.dumps({
-        "ok": False,
-        "disabled": True,
-        "error": "save_archive is disabled - e!COCKPIT 11.3.1.0 throws "
-                 "'Object reference not set' in every documented "
-                 "save_archive binding (all 5 probed forms NRE; see "
-                 "docs/SCRIPTENGINE_API.md). Use ecockpit_snapshot for "
-                 "backups (plain .ecp copy, works live).",
-    }, indent=2)
+# NOTE: no ecockpit_save_archive tool on purpose - e!COCKPIT 11.3.1.0
+# NREs ("Object reference not set") in EVERY documented save_archive
+# binding (5 forms probed live 2026-10-21; see docs/SCRIPTENGINE_API.md
+# and the executor's cmd_save_archive ladder). ecockpit_snapshot is the
+# working backup path. Re-add a tool only once the engine is fixed.
 
 
 @mcp.tool(

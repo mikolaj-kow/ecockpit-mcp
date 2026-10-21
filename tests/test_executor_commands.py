@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Offline unit tests for the library-curation executor commands.
+"""Offline unit tests for the ecockpit-mcp executor commands
+(library curation, export reporter, save_archive ladder).
 
 The executor talks to the ScriptEngine-injected `librarymanager` global
 (ILibManager). Here a plain-Python fake following the ScriptEngine.chm

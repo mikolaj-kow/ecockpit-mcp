@@ -26,3 +26,10 @@ def test_expected_tools_registered():
                  "ecockpit_lib_install", "ecockpit_lib_uninstall",
                  "ecockpit_repos", "ecockpit_repo_move"):
         assert hasattr(srv, name), "missing tool function: " + name
+
+
+def test_save_archive_tool_absent():
+    # e!COCKPIT 11.3.1.0 NREs in every save_archive binding (see
+    # docs/SCRIPTENGINE_API.md) - the tool must stay unregistered so
+    # nobody can call it; ecockpit_snapshot is the backup path.
+    assert not hasattr(srv, "ecockpit_save_archive")
