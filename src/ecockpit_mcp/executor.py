@@ -2686,6 +2686,19 @@ def cmd_export(project, args, summary):
             "xml_files": len(files), "first_files": files[:10]}
 
 
+def _plcfs_reflect_members(odev, keyword):
+    """CLR reflection: the wrapper's REAL method names containing keyword
+    (G-02: reflection is the only reliable discovery on the interop
+    wrappers - the stubs lie in both directions, G-13)."""
+    try:
+        import clr
+        t = clr.GetClrType(odev)
+        names = sorted(set(m.Name for m in t.GetMethods()))
+    except Exception:
+        return []
+    return [n for n in names if keyword.lower() in n.lower()]
+
+
 def _plcfs_member(holder, name):
     """Fetch one plcfs member by literal name.
 
@@ -2935,10 +2948,20 @@ def cmd_plcfs(project, args):
                 # file is the overwrite-prompt trigger (prompt_answers
                 # end-to-end test, G-07-style: one clean attempt only)
                 force = bool(args.get("force", True))
-                member(remote, local, force)
-                log("OK", "plcfs put {l} -> {r} (force={f}) via {n}"
-                    .format(l=local, r=remote, f=force, n=member_name))
-                return {"local": local, "remote": remote, "force": force}
+                try:
+                    member(remote, local, force)
+                    form = "3-arg (remote, local, force)"
+                except TypeError:
+                    # LIVE 2026-10-22: the 3-arg stub form raises
+                    # "Value cannot be null. Parameter name: path"
+                    # (overload resolution failure) - try the 2-arg form
+                    member(remote, local)
+                    form = "2-arg (remote, local)"
+                log("OK", "plcfs put {l} -> {r} (force={f}, {fm}) via {n}"
+                    .format(l=local, r=remote, f=force, fm=form,
+                            n=member_name))
+                return {"local": local, "remote": remote, "force": force,
+                        "form": form}
             member(remote)
             log("OK", "plcfs rm {r} via {n}".format(r=remote, n=member_name))
             return {"deleted": remote}
@@ -2957,6 +2980,13 @@ def cmd_plcfs(project, args):
             members = {"rename": ("rename_file", "rename_directory"),
                        "mkdir": ("create_directory",),
                        "rmdir": ("delete_directory",)}
+            reflected = _plcfs_reflect_members(
+                odev, op[:4] if op != "mkdir" else "direct")
+            log("INFO", "plcfs {o}: reflected members matching "
+                "'{k}': {r}".format(o=op,
+                                    k=op[:4] if op != "mkdir" else
+                                    "direct",
+                                    r=reflected or "NONE"))
             for name in members[op]:
                 try:
                     member = _plcfs_member(odev, name)
