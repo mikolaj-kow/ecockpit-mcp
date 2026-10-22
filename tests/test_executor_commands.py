@@ -470,6 +470,19 @@ def test_system_flags_decode_and_enum_helpers():
     assert ex._enum_by_names("PromptHandling flag",
                              ["LogSimplePrompts", "LogMessageKeys"],
                              ex._PROMPT_HANDLING_FLAGS, FakePH) == 18
+
+    # G-20: the LIVE enum can lack a member the stub documents
+    # (SymbolCommentFilterType has no 'none') - stub int fallback
+    class FakeNoNone(object):
+        NormalComments = 1
+
+    assert ex._enum_by_names("SymbolCommentFilterType", ["none"],
+                             ex._SYMBOL_COMMENT_FILTER_TYPES,
+                             FakeNoNone()) == 0
+    assert ex._enum_by_names("SymbolCommentFilterType",
+                             ["NormalComments"],
+                             ex._SYMBOL_COMMENT_FILTER_TYPES,
+                             FakeNoNone()) == 1
     with pytest.raises(RuntimeError, match="unknown PromptHandling"):
         ex._enum_by_names("PromptHandling flag", ["Nope"],
                           ex._PROMPT_HANDLING_FLAGS, None)

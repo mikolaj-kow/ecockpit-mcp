@@ -1196,12 +1196,20 @@ def _enum_by_names(label, names, values, injected):
             combined |= table[name]
         return combined
     combined = None
+    table = dict(values)
     for name in names:
         try:
             member = getattr(injected, name)
         except Exception:
-            raise RuntimeError("unknown {t} '{n}' (known: {k})".format(
-                t=label, n=name, k=known))
+            if name in table:
+                # LIVE 2026-10-22 (G-20): the live enum can LACK a member
+                # the stub documents (SymbolCommentFilterType has no
+                # 'none') - fall back to the stub int, which the .NET
+                # property accepts.
+                member = table[name]
+            else:
+                raise RuntimeError("unknown {t} '{n}' (known: {k})".format(
+                    t=label, n=name, k=known))
         combined = member if combined is None else (combined | member)
     return combined
 
