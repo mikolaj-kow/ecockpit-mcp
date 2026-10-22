@@ -4870,6 +4870,22 @@ def cmd_device_info(project, args):
                        '"driver_info_set"')
 
 
+def _param_elements(param):
+    """The data elements of one ScriptDeviceParameter.
+
+    LIVE 2026-10-22: iterating the parameter's element collection raises
+    the .NET positional-index error on this build - the parameter ITSELF
+    is a ScriptDataElement, so it doubles as the single-element
+    fallback."""
+    try:
+        elements = list(param)
+    except Exception:
+        elements = None
+    if not elements:
+        return [param]
+    return elements
+
+
 def cmd_device_params(project, args):
     """Device parameter introspection and online read/write
     (ScriptDeviceParameters stub).
@@ -4918,8 +4934,18 @@ def cmd_device_params(project, args):
                            "args.id".format(o=op))
 
     def _element_summary(el, online, timeout):
-        entry = {"identifier": str(el.identifier),
-                 "visible_name": str(el.visible_name)}
+        entry = {}
+        try:
+            entry["identifier"] = str(el.identifier)
+        except Exception:
+            try:
+                entry["identifier"] = str(el.name)
+            except Exception:
+                entry["identifier"] = None
+        try:
+            entry["visible_name"] = str(el.visible_name)
+        except Exception:
+            pass
         for attr in ("unit", "description", "iec_type"):
             try:
                 entry[attr] = str(getattr(el, attr))
@@ -4988,7 +5014,7 @@ def cmd_device_params(project, args):
                 entry[attr] = str(getattr(param, attr))
             except Exception:
                 entry[attr] = None
-        for el in param:
+        for el in _param_elements(param):
             entry.setdefault("elements", []).append(
                 _element_summary(el, online_read, timeout))
         log("OK", "param {n}: read ({o})".format(
@@ -5007,7 +5033,7 @@ def cmd_device_params(project, args):
         timeout = args.get("timeout", 1000)
         target = str(args.get("element", "")).strip().lower()
         results = []
-        for el in param:
+        for el in _param_elements(param):
             if target and str(el.identifier).lower() != target:
                 continue
             try:
