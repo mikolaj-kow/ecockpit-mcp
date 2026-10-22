@@ -5,6 +5,50 @@ items move to "Done" as they land; the deferred ScriptEngine
 capabilities live in [SUMMARY.md](SUMMARY.md) (rows with status
 `possible`) and are tracked per-domain there.
 
+## Agent handoff (picking this up)
+
+You are most likely an AI agent continuing this work. Read, in order:
+[SCRIPTENGINE_EXPLORATION.md](SCRIPTENGINE_EXPLORATION.md) (how to
+discover and verify), [SCRIPTENGINE_GOTCHAS.md](SCRIPTENGINE_GOTCHAS.md)
+(trap table — every `G-nn` cited in code and docs refers here),
+[SUMMARY.md](SUMMARY.md) (done vs possible),
+[TESTING.md](TESTING.md) (live results — the authority over any doc
+claim).
+
+The open work, in priority order:
+
+1. **Live-test pass** for every row marked `PENDING` in TESTING.md —
+   read-only first; destructive/download runs only when the owner
+   explicitly asks (they do answer GUI dialogs during armed sessions).
+   Append one row per run; if reality contradicts a doc claim, fix the
+   claim in the same commit.
+2. **Implement the 🟡 `possible` rows in SUMMARY.md**, nearest-term
+   first: in-project Library Manager
+   (`app.get_library_manager()` → `add_library` / `references` /
+   `set_redirection` — ScriptLibManObject stub), then device-tree
+   authoring, user management, text lists / image pools / external
+   files (every row carries its stub chain).
+3. **ROADMAP "Next" items** below.
+
+Non-negotiable discipline:
+
+- Atomic commits per domain; gates before every commit (pytest, flake8
+  strict pair, `python -m build`, `mkdocs build --strict` when docs
+  changed).
+- The docs are a machine-readable contract: any code change updates
+  SCRIPTENGINE_GOTCHAS.md (new `G-nn` rows), SUMMARY.md (status flips),
+  SCRIPTENGINE_API.md and TESTING.md (one row per live run) **in the
+  same commit**.
+- Never import `relay.py` under CPython (it runs the poll loop at
+  module level); executor imports need `ECP_NO_RUN=1`.
+- Destructive/PLC-download live tests only on explicit owner request.
+- The ScriptLib stubs and decompiled CHM stay local and out of the
+  repo — document API facts in your own words (license findings in
+  EXPLORATION).
+- Server restarts are allowed at will (owner granted). Daemon restart
+  is required for server-side tool changes; executor changes go live on
+  re-exec without re-arming.
+
 ## Done
 
 - Packaging: src-layout package, `__version__` single-sourcing, console
