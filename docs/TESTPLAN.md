@@ -25,6 +25,17 @@ on per-op owner go, F (machine-wide), and the prompt_answers end-to-end
 (deferred into D2: plc_put without force is the identified prompt
 trigger). Snapshot naming fixed: `s4-v3.10.0-pre_<version>.ecp`.
 
+**INCIDENT (2026-10-22, G-26, FIXED):** the first D2 ramp (state /
+prepared_values / plcfs ls — all intended read-only) DEPLOYED the open
+project to the PLC: the login ladder escalated past a failed Keep, and
+`create_online_device`'s connect is itself a login-with-download.
+Impact: the PLC now runs the owner's green snapshot (the app it replaced
+was STOPPED; nothing was started). Both holes closed — read-only logins
+are Keep-only and refuse to escalate; the online-device connect refuses
+when `is_uptodate=false` without confirm. D2 ramp results: state and
+prepared_values VERIFIED; device_params online read times out while the
+app is STOPPED (state limitation); plc_ls verified.
+
 ## Live-verified so far
 
 | Domain | Verified |
