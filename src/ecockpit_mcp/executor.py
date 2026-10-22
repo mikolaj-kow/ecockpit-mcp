@@ -2917,10 +2917,14 @@ def cmd_plcfs(project, args):
                 if not os.path.isfile(local):
                     raise RuntimeError("local file not found: {l}".format(
                         l=local))
-                member(remote, local, True)
-                log("OK", "plcfs put {l} -> {r} via {n}".format(
-                    l=local, r=remote, n=member_name))
-                return {"local": local, "remote": remote}
+                # force defaults True; force=False on an EXISTING remote
+                # file is the overwrite-prompt trigger (prompt_answers
+                # end-to-end test, G-07-style: one clean attempt only)
+                force = bool(args.get("force", True))
+                member(remote, local, force)
+                log("OK", "plcfs put {l} -> {r} (force={f}) via {n}"
+                    .format(l=local, r=remote, f=force, n=member_name))
+                return {"local": local, "remote": remote, "force": force}
             member(remote)
             log("OK", "plcfs rm {r} via {n}".format(r=remote, n=member_name))
             return {"deleted": remote}

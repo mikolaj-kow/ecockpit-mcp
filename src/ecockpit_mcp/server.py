@@ -735,7 +735,8 @@ def ecockpit_plc_get(remote: str, local: str, device: str = "",
                 "(overwrites). Pass confirm=true, never without an "
                 "explicit owner instruction.")
 def ecockpit_plc_put(local: str, remote: str, device: str = "",
-                     confirm: bool = False, timeout_s: int = 300) -> str:
+                     force: bool = True, confirm: bool = False,
+                     timeout_s: int = 300) -> str:
     if not local or not remote:
         raise ValueError("local (host path) and remote (PLC path) required")
     if not confirm:
@@ -746,7 +747,8 @@ def ecockpit_plc_put(local: str, remote: str, device: str = "",
                      "call again with confirm=true only on an explicit "
                      "owner request",
         }, indent=2)
-    args = {"op": "put", "local": local, "remote": remote, "confirm": True}
+    args = {"op": "put", "local": local, "remote": remote,
+            "force": bool(force), "confirm": True}
     if device:
         args["device"] = device
     return json.dumps(_run("plcfs", args, timeout_s), indent=2)
