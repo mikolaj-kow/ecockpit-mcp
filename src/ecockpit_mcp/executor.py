@@ -2129,6 +2129,21 @@ def _online_connect(project, args, prefer_keep=False):
     changes (code deltas) when the open project differs from the PLC -
     treat deploying commands as potentially deploying.
     """
+    if prefer_keep:
+        # LIVE 2026-10-22 (G-27): with a pending change, login(Keep) on
+        # this build ATTEMPTS A DOWNLOAD anyway (stub semantics not
+        # honored), pops a modal error dialog and raises "Login failed".
+        # Refuse BEFORE touching the login when out of sync.
+        try:
+            uptodate = bool(get_application(project).is_uptodate)
+        except Exception:
+            uptodate = None
+        if uptodate is False:
+            raise RuntimeError(
+                "read-only command REFUSED - the application is NOT "
+                "uptodate (a pending change exists) and login(Keep) "
+                "would attempt a download in this build (G-27). Sync "
+                "first (deploy the change or discard it), then retry.")
     user, pw = _require_creds()
     device = get_device(project, args.get("device", ""))
     try:

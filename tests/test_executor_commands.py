@@ -1190,6 +1190,24 @@ def test_online_login_deploy_ladder_still_escalates(monkeypatch):
     assert dev.connected is True    # deploy ladder intentionally reaches connect
 
 
+def test_online_connect_refuses_out_of_sync_readonly(monkeypatch):
+    # G-27: with a pending change, login(Keep) attempts a download in
+    # this build - read-only connects must refuse BEFORE any login.
+    class FakeApp(object):
+        is_uptodate = False
+
+    class Proj(object):
+        active_application = None
+
+        def find(self, name, recursive):
+            return []
+
+    monkeypatch.setattr(ex, "get_application", lambda p: FakeApp())
+    monkeypatch.setattr(ex, "online", None)
+    with pytest.raises(RuntimeError, match="G-27"):
+        ex._online_connect(Proj(), {}, prefer_keep=True)
+
+
 def test_create_online_device_uptodate_guard(monkeypatch):
     # G-26: connecting the ScriptOnlineDevice is a login-WITH-DOWNLOAD -
     # refuse when the application is not uptodate unless confirmed.
