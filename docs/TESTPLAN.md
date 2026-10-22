@@ -64,7 +64,7 @@ app is STOPPED (state limitation); plc_ls verified.
 
 | Phase | Scope | Risk / preconditions | Owner go? |
 |---|---|---|---|
-| A1 | Daemon restart → smoke_client: tools/list shows **54**, all confirm gates refuse structured | host-side only; the RUNNING daemon still registers 49 tools (4 new ones are relay-live but not MCP-visible until restart) | no |
+| A1 | DONE 2026-10-22: daemon restarted from the branch → tools/list showed **54**, confirm gates for all new tools refuse structured | host-side only | done |
 | D2 | PLC-touching: device_params read online=true, device_params write (benign param), write (one harmless variable) + unforce_all, app_control status/activate/start, plc_get (read), plc_put/mkdir/rename/rmdir/rm on a scratch PLC dir, download (replaces the RUNNING app — schedule deliberately), stop, device_comm set_ip | touches the RUNNING PLC | yes, per op |
 | D3-follow-up | special_pou variant left IN the project (this round created + removed it) — only with a deliberate full-rebuild schedule | irreversible online-change loss while present | yes, explicit |
 | E | Wedge/last: ui.* dialogs owner answers at the GUI (info→OK, query_string, open_file_dialog→Cancel, prompt→Yes), set_prompt_handling ForwardSimplePrompts + revert, prompt_answers end-to-end against a prompt-issuing engine call (candidate: an overwrite prompt during plc_put without force), **exit very last** (kills e!COCKPIT + relay) | modal dialogs can wedge the relay if unanswered (G-08) | yes, at GUI |

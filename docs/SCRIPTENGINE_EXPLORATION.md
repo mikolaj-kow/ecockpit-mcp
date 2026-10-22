@@ -106,8 +106,10 @@ X = None`): `system`, `e_projects` (+ `projects` alias, resolved by
 `ArchiveCategories`, `OnlineChangeOption` (Never/Try/Force/Keep),
 `Severity`, `ImportReporter`/`ExportReporter` (exposure names! G-05),
 `ConflictResolve`, `PromptHandling`, `PromptResult`, `PromptChoice`,
-`PouType`, `DutType`, `KindOfTask`, `ImplementationLanguages`,
-`ResetOption`. (`DeviceID`/`device_repository` are engine-injected
+`PouType`, `SpecialPouType`, `DutType`, `KindOfTask`,
+`ImplementationLanguages`, `ResetOption`, `StopResetBehaviour`,
+`AlwaysUpdateVariablesMode`, `SymbolConfigContentFeatureFlags`,
+`SymbolAttributeFilterTypes`, `SymbolCommentFilterType`. (`DeviceID`/`device_repository` are engine-injected
 names too, but only needed by the not-yet-implemented device-tree
 authoring — no stand-ins yet.) Engine enums: use direct member access
 (`OnlineChangeOption.Try`), guarded.
