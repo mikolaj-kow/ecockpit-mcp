@@ -2725,6 +2725,17 @@ def _plcfs_member(holder, name):
         return holder.upload_file
     if name == "delete_file":
         return holder.delete_file
+    # ScriptOnlineDevice extras (stubs 3.5.9.0) - LIVE 2026-10-22: these
+    # branches were MISSING, so mkdir/rename/rmdir always failed with
+    # "no member" even though the wrapper has them
+    if name == "create_directory":
+        return holder.create_directory
+    if name == "rename_file":
+        return holder.rename_file
+    if name == "rename_directory":
+        return holder.rename_directory
+    if name == "delete_directory":
+        return holder.delete_directory
     raise AttributeError(name)
 
 
@@ -2980,13 +2991,9 @@ def cmd_plcfs(project, args):
             members = {"rename": ("rename_file", "rename_directory"),
                        "mkdir": ("create_directory",),
                        "rmdir": ("delete_directory",)}
-            reflected = _plcfs_reflect_members(
-                odev, op[:4] if op != "mkdir" else "direct")
-            log("INFO", "plcfs {o}: reflected members matching "
-                "'{k}': {r}".format(o=op,
-                                    k=op[:4] if op != "mkdir" else
-                                    "direct",
-                                    r=reflected or "NONE"))
+            reflected = _plcfs_reflect_members(odev, "")
+            log("INFO", "plcfs {o}: wrapper methods (CLR reflection): "
+                "{r}".format(o=op, r=reflected or "NONE"))
             for name in members[op]:
                 try:
                     member = _plcfs_member(odev, name)
