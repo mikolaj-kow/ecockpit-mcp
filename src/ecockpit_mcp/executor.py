@@ -4513,6 +4513,18 @@ def _device_obj(project, args):
     return get_device(project, "")
 
 
+def _gateway_label(gw):
+    """Readable gateway name (str(gw.name); the interop repr has no
+    Name= slice for ScriptGateway)."""
+    try:
+        name = str(gw.name)
+        if name:
+            return name
+    except Exception:
+        pass
+    return _short_name(gw)
+
+
 def cmd_device_scan(project, args):
     """Gateway + network device discovery (ScriptOnline gateway stack,
     3.5.8.0) - read-only.
@@ -4573,7 +4585,7 @@ def cmd_device_scan(project, args):
     if op == "scan":
         gw = _pick_gateway()
         log("INFO", "network scan on gateway '{g}' (blocks for the scan "
-            "timeout)".format(g=_short_name(gw)))
+            "timeout)".format(g=_gateway_label(gw)))
         targets = gw.perform_network_scan()
         out = []
         for t in targets:
@@ -4593,7 +4605,7 @@ def cmd_device_scan(project, args):
                 entry["device_id"] = None
             out.append(entry)
         log("OK", "scan found {n} target(s)".format(n=len(out)))
-        return {"gateway": _short_name(gw), "count": len(out),
+        return {"gateway": _gateway_label(gw), "count": len(out),
                 "targets": out}
 
     if op == "address":
@@ -4604,7 +4616,7 @@ def cmd_device_scan(project, args):
         port = int(args.get("port", 11740) or 11740)
         address = gw.find_address_by_ip(ip, port)
         log("OK", "address for {ip}: {a}".format(ip=ip, a=address))
-        return {"ip": ip, "gateway": _short_name(gw), "address": address}
+        return {"ip": ip, "gateway": _gateway_label(gw), "address": address}
     raise RuntimeError('device_scan needs args.op of "gateways", "scan" '
                        'or "address"')
 
