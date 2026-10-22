@@ -12,10 +12,10 @@ done + possible), [TESTING.md](TESTING.md) (live results),
 
 1. **Live probing** — the relay re-execs `executor.py` per command, so
    executor changes go live without re-arming. Probe recipe (file
-   protocol, no MCP needed):
+   protocol, no MCP needed; paths relative to the repo root):
 
    ```bash
-   WD="/d/wago/ecockpit-mcp-libmgr/src/ecockpit_mcp/tmp"
+   WD="src/ecockpit_mcp/tmp"
    printf '%s\n' '{"id": "probe-1", "cmd": "<command>", "args": {}}' \
        > "$WD/ecockpit_cmd.json"
    # poll "$WD/ecockpit_cmd_result.json" for the matching id
@@ -24,8 +24,8 @@ done + possible), [TESTING.md](TESTING.md) (live results),
    Discipline: read-only first; destructive/download only on an owner
    request; record every result in TESTING.md.
 2. **ScriptLib stubs** —
-   `D:\Program Files (x86)\WAGO Software\e!COCKPIT\3S CODESYS\CODESYS\
-   ScriptLib\Stubs\scriptengine\*.pyi` (29 files, ~14k lines). The
+   `ECP_INSTALL_DIR\3S CODESYS\CODESYS\ScriptLib\Stubs\scriptengine\*.pyi`
+   (29 files, ~14k lines). The
    authoritative member lists: `ScriptOnline.pyi` (online app + device +
    gateways), `ScriptProject(s).pyi`, `ScriptObject.pyi`/`ScriptTreeObject.pyi`
    (tree + build properties + native IO), `ScriptIecLanguageObjectContainer.pyi`
@@ -59,9 +59,20 @@ done + possible), [TESTING.md](TESTING.md) (live results),
   across all 2048 topics); the CODESYS EULA text in this install has no
   decompilation/reverse-engineering clause. Keep decompiled content
   internal; do not bulk-commit CHM output.
-- Pending: one-time human skim of WAGO's `LicenseEN.pdf`
-  (`e!COCKPIT\Software Utilization Agreement\`) — not text-parseable
-  here.
+- **WAGO SW-License reviewed (2026-10-22, `SW-License_(INT_1.0_EN_
+  06-2023)`, owner-extracted to local `tmp-eula.txt` — kept out of
+  git)**. §3 usage restrictions: (a) no copying/duplicating the
+  Software, (b) no public reproduction or making it available, (c) no
+  "modify, translate, analyze, decode, convert or disassemble the
+  source code of the Software", (d) no derivative works, (f) no passing
+  the Software to third parties. Factual reading for this repo's
+  workflow: the **stubs are provided for developer tooling** (their
+  stated purpose), API **facts** recorded in our own words are not a
+  reproduction, and the decompiled CHM + stub files + EULA text stay
+  **local and out of git**. Broad clause (c) ("analyze... the
+  Software") is the reason the CHM/stub contents must not be pushed
+  publicly; if the docs ever leave this private repo, get a legal
+  review first.
 
 ## Workflow (stub → tool)
 

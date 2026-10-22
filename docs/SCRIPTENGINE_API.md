@@ -1,9 +1,12 @@
 # e!COCKPIT ScriptEngine API — verified reference
 
-Distilled from the official help file shipped with this install:
+Distilled from the official help file shipped with this install. All
+install-relative paths in the SCRIPTENGINE_* docs use **`ECP_INSTALL_DIR`**
+= your e!COCKPIT install dir (this machine:
+`D:\Program Files (x86)\WAGO Software\e!COCKPIT`).
 
 ```
-D:\Program Files (x86)\WAGO Software\e!COCKPIT\3S CODESYS\CODESYS\Online Help\en\ScriptEngine.chm
+ECP_INSTALL_DIR\3S CODESYS\CODESYS\Online Help\en\ScriptEngine.chm
 ```
 
 Decompile with: `7z x ScriptEngine.chm -o%TEMP%\scriptengine_chm`
