@@ -12,16 +12,18 @@ kinds of "tested":
 
 State as of 2026-10-22, feat/system-device-io.
 
-**Progress (armed round 2, 2026-10-22):** A2, B, C and D1 are DONE and
-live-verified — including the special_pou online-change flip
-(true → false → true across create/remove) and the G-21 set_mapping
-incident with the CSV-round-trip repair (see TESTING.md). The round
-STOPPED before D2 (PLC-touching) on owner instruction; D2/D3-follow-ups
-(online read/write, PLC file ops, ui dialogs, exit), E and F remain.
-The project itself currently does NOT compile — 5 PRE-EXISTING errors
-in owner POUs (C140/C418, recorded in TESTING.md); owner attention
-needed. A snapshot taken before the round:
-`<snapshots>/..._3.10.0-pre7.ecp`.
+**Progress (armed rounds 2-3, 2026-10-22):** A1, A2, B, C, D1 and E
+are DONE and live-verified — including the special_pou online-change
+flip (true → false → true across create/remove), the G-21 set_mapping
+incident with the CSV-round-trip repair, all six ui.* dialogs with the
+owner answering, and `system exit` as the session's final command (see
+TESTING.md). The owner's manual snapshot compiles GREEN — the 5
+C140/C418 errors were the old GUI session's in-memory state (resolved);
+the in-session "Symbols" symbol config went with that rollback.
+REMAINING: D2 (PLC-touching batch) and D3-follow-up (keep a special_pou)
+on per-op owner go, F (machine-wide), and the prompt_answers end-to-end
+(deferred into D2: plc_put without force is the identified prompt
+trigger). Snapshot naming fixed: `s4-v3.10.0-pre_<version>.ecp`.
 
 ## Live-verified so far
 
