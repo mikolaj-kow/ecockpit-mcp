@@ -11,15 +11,26 @@ Decompile with: `7z x ScriptEngine.chm -o%TEMP%\scriptengine_chm`
 ScriptEngine.dll 3.5.11.1, IronPython 2.7 runtime). Everything below was
 additionally verified LIVE in e!COCKPIT 11.3.1.0 on 2026-10-20.
 
-## The one big gotcha
+## Gotchas
 
-**The `getattr()` builtin FAILS on the .NET interop objects** (project,
-Application, device, message objects) — even for members that work fine via
-direct attribute access. `getattr(app, "create_boot_application")` raises
-while `app.create_boot_application(path)` works. Never write probe helpers
-based on getattr/dir(): `dir()` is EMPTY on these dynamic wrappers too.
-Use direct attribute syntax inside try/except, and the documented names
-from the CHM.
+All ScriptEngine gotchas live in [SCRIPTENGINE_GOTCHAS.md](SCRIPTENGINE_GOTCHAS.md)
+(stable IDs `G-nn`, machine-readable table). Umbrella rules:
+
+- **G-01/G-02** — `getattr()` fails and `dir()` is empty on the interop
+  wrappers: direct attribute access inside try/except only; discovery
+  via the ScriptLib stubs or CLR reflection.
+- **G-03/G-04/G-12** — watch the object you call: the file/source API
+  lives on the `ScriptOnlineDevice` from `online.create_online_device()`,
+  not on the project-tree device; `onlineapp.source_download()` NREs
+  while `device.download_source()` is the stub-documented form.
+- **G-05/G-16** — reporter classes subclass the *injected* name
+  (`ExportReporter`) and take `*argv` callbacks.
+- **G-07/G-14** — engine-NRE class (`save_archive`, …): record the
+  verdict in TESTING.md, keep self-healing ladders, name the working
+  alternative.
+- **G-09/G-10/G-11/G-17** — deployment and path semantics: implicit
+  login-with-download, PLC root `.`, `source_download` needs a saved
+  project, `export_xml` takes a FILE path.
 
 ## IScriptApplication (project.find("Application", True)[0])
 
@@ -88,29 +99,14 @@ Build log rendering used by the executor:
   (→ `ecockpit_export`); the IScriptProject2 overload adds a 5th
   `export_folder_structure` bool (IScriptProject7 a 6th,
   `declarations_as_plaintext`). **`path` is the path of the FILE we
-  export into — NEVER a directory** (live 2026-10-21: passing a
-  directory makes .NET try to open it as a file → `Access to the path
-  '<dir>' is denied` on any directory). If `path` is null the WHOLE
-  export comes back as the return string ("The exported XML as string,
-  or null if a filepath is given") — the executor's deterministic
-  fallback: call with `path=None`, write the file itself. `objects`
-  takes a Python list of script objects (e.g. `[application]`,
-  recursive). Reporter callbacks: `error(message)`,
-  `warning(message)`, `nonexportable(obj)`, `aborting` property.
-  **EXPOSURE-NAME GOTCHA (live 2026-10-21)**: the reporter
-  class must subclass the interface under its exposed script-scope name
-  **`ExportReporter`** — `IExportReporter` is only the .NET type name and
-  is never injected; subclassing a plain-`object` placeholder named
-  IExportReporter made export_xml reject the reporter with
-  `TypeError: expected IExportReporter, got Object_1$1`. (The import
-  side is lucky: `IImportReporter` is exposed as `ImportReporter`, which
-  is the name the executor always guarded on.) **CALLBACK ARITY GOTCHA
-  (live 2026-10-21)**: the EXPORT flow calls `warning()` with TWO
-  message arguments (`warning() takes exactly 2 arguments (3 given)`
-  with the CHM's 1-arg signature) — the executor's export callbacks
-  take `*argv` and log everything.
+  export into — never a directory** (G-17); `path=None` returns the
+  whole export as the return string — the executor's deterministic
+  fallback writes it. `objects` takes a Python list of script objects
+  (e.g. `[application]`, recursive). Reporter: subclass the injected
+  **`ExportReporter`** (G-05) with `*argv` callbacks (G-16):
+  `error/warning(message)`, `nonexportable(obj)`, `aborting` property.
 - `save_archive(path)` — single-file `.projectarchive` backup
-  (NO MCP tool — removed, see the verdict). **VERDICT (live 2026-10-21
+  (NO MCP tool — removed, see the verdict; G-14). **VERDICT (live 2026-10-21
   + 10-22 retest, e!COCKPIT 11.3.1.0): BROKEN in this build — do not
   rely on it.** Every binding NREs inside the engine with
   `Object reference not set`: the 1-arg form, `(path, None)`, the
@@ -134,7 +130,7 @@ Build log rendering used by the executor:
 - `online.create_online_application(app)` → online app:
   `read_value("path.to.var")`, `create_boot_application()` (download while
   online), login/logout variants.
-- **`device.connect()` DEPLOYS (live 2026-10-21)**: a plain connect
+- **`device.connect()` DEPLOYS (G-09, live 2026-10-21)**: a plain connect
   performed an implicit login-WITH-DOWNLOAD of the open application
   during a read-only `plc_ls` — "days of untested code went live".
   FIXED: every online command now logs in via the
@@ -179,7 +175,7 @@ State properties: `is_logged_in`, `application_state` (ApplicationState),
 `source_download()` writes the source project to the PLC — EXPOSED as
 `ecockpit_source_download` (confirm-gated; distinct from
 `ecockpit_download`, which deploys the compiled application).
-**LIVE 2026-10-21**: the member exists, but NREs
+**LIVE (G-04, G-11; 2026-10-21)**: the member exists, but NREs
 ("Object reference not set") when the project has UNSAVED changes —
 `cmd_source_download` therefore runs `project.save()` first
 (best-effort, same as the snapshot command), after which the same call

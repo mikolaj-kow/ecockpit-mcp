@@ -1,68 +1,41 @@
-# ScriptEngine CHM — documented but NOT exposed
+# ScriptEngine — documented but NOT exposed (contract)
 
-Inventory of the ScriptEngine API (from the shipped `ScriptEngine.chm`,
-decompiled + parsed) **not** reachable through the ecockpit-mcp tools. The
-CHM documents **217 interfaces, ~580 methods and ~830 properties**; this
-toolset deliberately exposes a task-oriented subset (~45 members via 24 MCP
-tools). Verified-live notes come from `ecockpit_probe` runs; everything
-else is CHM-documented but not yet tried in this e!COCKPIT build.
+Machine-readable inventory of ScriptEngine capabilities that the ScriptLib
+stubs document but ecockpit-mcp does **not** expose as MCP tools yet.
+Exposed surface: [SUMMARY.md](SUMMARY.md) (master table, done + possible),
+[SCRIPTENGINE_API.md](SCRIPTENGINE_API.md) (verified reference),
+[SCRIPTENGINE_EXPLORATION.md](SCRIPTENGINE_EXPLORATION.md) (how to add
+more). Live-test results: [TESTING.md](TESTING.md).
 
-Regenerate the audit (needs the CHM extracted to `tmp/chm_decomp/`):
-`7z x "ScriptEngine.chm" -otmp/chm_decomp` then `python tmp/chm_audit.py`.
+Status: `possible` (stub-documented, unimplemented) · `partial` ·
+`broken (live)` (engine defect — see SCRIPTENGINE_API.md / GOTCHAS).
 
-## Exposed (for orientation)
+State: the CHM documents ~217 interfaces / ~580 methods / ~830
+properties; the ScriptLib stubs refine them; ecockpit-mcp exposes its
+task-oriented subset via 43 MCP tools (2026-10-22).
 
-- Build/compile: `app.build()`, `app.rebuild()`, `app.clean()` (probe),
-  `create_boot_application(path)` → `ecockpit_build/rebuild/compile/import`
-- Project: `import_xml(reporter, path)`, `export_xml(reporter, objects,
-  path, recursive)`, `save()`, `save_as`, `save_archive(path)`, `path`,
-  `find`, `get_device`, `devices`, `active_application`,
-  `e_projects.open_project/primary`
-- Online: `read_value`, `set_prepared_value` + `write/force_prepared_values`
-  + `unforce_all_values`, `create_boot_application()`, `start`, `stop`,
-  `application_state`/`operation_state`/`is_logged_in`, `connect`/
-  `disconnect`/`forced_disconnect`, PLC file ops (`ls/get/put/rm`),
-  `upload_source`
-- System/messages: `write_message`, `delay`, `get_messages`,
-  `get_message_objects`, `get_message_categories`,
-  `get_message_category_description`, `process_messageloop`,
-  `clear_messages`
-
-## Not exposed — by capability
-
-### Online change control (IScriptOnlineApplication.login) — EXPOSED as of feat/library-manager
-`login(OnlineChangeOption, delete_foreign_apps)` is exposed as
-`ecockpit_login` (option `try`/`force`/`never`/`auto`; confirm-gated;
-session stays open) and wired into every online command's login ladder
-(`device.connect()` performed an implicit login-WITH-DOWNLOAD — see
-SCRIPTENGINE_API.md). `source_download()` is exposed as
-`ecockpit_source_download` (confirm-gated).
-
-### Prepared-value extras (IScriptOnlineApplication) — EXPOSED as of feat/library-manager
-`get_prepared_value`, `get_prepared_expressions`, `get_forced_expressions`
-are exposed as the read-only `ecockpit_prepared_values` tool (staged
-values + currently forced variables).
-
-### Device management (IScriptOnlineDevice2/5, WAGO IEScriptDevice)
-`create_user_management`, `current_logged_on_username`, `connected`,
-`activate_license`, and on the WAGO side `add_module`/`delete_module`,
-`get_module`, `read_parameter`/`read_parameter_list`/`write_parameter`,
-`set_io_mapping`, `update` — scripted hardware/parameter configuration.
-
-### Project plumbing (IScriptProject(s)2/3/4)
-`close()`, `create`, `get_by_path`, `open_archive` are exposed but
-`convert` (project conversion) and `create_new_project_from_template`
-are not; `IScriptProject3.login/logout` (project-level login); `dirty`,
-`compiler_version` properties. `save_archive` has NO MCP tool — the
-engine NREs in every binding in this build (see SCRIPTENGINE_API.md);
-the executor keeps a self-healing probe ladder, `ecockpit_snapshot` is
-the backup path.
-
-### Visualization / device tree / build properties
-`IScriptBuildProperties` (compiler_defines, link_always,
-exclude_from_build, …), symbol config creation, device connectors,
-categories — deep object-model areas; use `ecockpit_probe` to explore
-live if needed.
+| Capability | Stub chain (file → call) | Status | Notes |
+|---|---|---|---|
+| Library Manager object (in-project references) | ScriptLibManObject.pyi → `app.get_library_manager()` → `add_library(name\|ManagedLib)` / `add_placeholder(name, resolution)` / `remove_library(name)` / `references[name]` (`.set_redirection`, `.default_resolution`, `.qualified_only`) / `parameters["P"] = expr` | possible | complements the exposed repository curation; nearest-term item |
+| Project user management | ScriptUserManagement.pyi → `project.user_management` → `users.create(name)` / `groups.create` / permissions (`set_permission_state`) / `login(username, password)` | possible | sensitive: creates users/ACLs |
+| Device user management (offline) | ScriptOnline.pyi (ScriptOnlineDevice) → `create_user_management(load_from_project)` → users/groups/`set_password` → `download()` (PLC-touching) / `store_to_project()` | possible | pre-3.5.16 runtimes; XML round-trip via `load`/`save` |
+| Device user management (live, SP16+) | ScriptLiveDeviceUserManagement.pyi → `create_live_user_management()` → `add_user` / `add_group` / `set_user_password` / `set_members_of_group` / `backup(dir, pw)` / `restore(path, pw)` | possible | `connect()` first; `restore()` invalidates the session (reconnect pattern in stub) |
+| Device tree authoring | ScriptDeviceObject.pyi → `project.add(name, DeviceID)` / `dev.plug`/`add`/`insert(name, DeviceID)` / `dev.update(DeviceID)` / `dev.unplug()`; ScriptExplicitConnectorObjects.pyi → `connector.add/insert(name, DeviceID)` + `allowed_interfaces_at(index)` | possible | `DeviceID` via injected `DeviceID(type, id, version)`; `unplug` destructive |
+| IO mapping CSV | ScriptDeviceObject.pyi → `dev.export_io_mappings_as_csv(file)` / `import_io_mappings_from_csv(file)` (also on explicit connectors) | possible | import modifies IO config |
+| WAGO module + legacy params | ScriptDeviceObject.pyi (WAGO IEScriptDevice) → `add_module` / `delete_module` / `get_module` / `read_parameter(_list)` / `write_parameter` / `set_io_mapping` / `update` | partial | partly superseded by `ecockpit_device_params` (ScriptDeviceParameters set) |
+| Project convert / template | ScriptProjects.pyi → `convert(path, output_path, converter, primary)` / `create_new_project_from_template` | possible | V2.3 `.pro`/`.lib` converter GUIDs documented in the stub |
+| License activation | ScriptOnline.pyi (ScriptOnlineDevice) → `activate_license(ticket, url, license_names)` | possible | writes a license to the device |
+| Gateway add/remove | ScriptOnline.pyi (ScriptGateways) → `add_new_gateway(name, parameters, driver)` / `remove_gateway(gateway)` / `convert_gateway_parameter` | possible | scan/list are exposed (`ecockpit_device_scan`); add/remove mutates CODESYS config |
+| Build properties | ScriptObject.pyi → `obj.build_properties.{external, enable_system_call, compiler_defines, link_always, exclude_from_build}` (+ `effectively_excluded_from_build`) | possible | per-object build exclusion |
+| Project settings / sourcedownload config | ScriptProject.pyi → `project.project_settings.set_sourcedownload(timing, content, compact, device)` / `available_download_content` | possible | 3.5.12.10; configures what `download_source` packs |
+| Text lists | ScriptTextListObject.pyi → `project.create_textlist(name)` / `get_global_textlist()` → `rows.add(id, defaulttext)` / `row.setlanguagetext(lang, text)` / `importfile(csv)` / `export(csv)` | possible | visualization texts |
+| Image pools | ScriptImagePoolObject.pyi → `project.create_imagepool(name)` / `get_global_imagepool()` → `images.add(id, path, linktype)` / `remove(id)` | possible | visualization images |
+| External files | ScriptExternalFileObject.pyi → `create_external_file_object(path, name, reference_mode, auto_update_mode)` → `get_data(file)` / `update()` | possible | project-embedded files with runtime sync |
+| Native import/export | ScriptProject.pyi → `export_native(objects, destination, ...)` / `import_native(filenames, ...)`; ScriptObject.pyi → object-level `export_native`/`import_native` | possible | native (non-PLCopen) format |
+| Project compare | ScriptProject.pyi → `compare_to(right_project, flags)` → `get_changed_objects(ObjectDifferences.CONTENT_CHANGED)` | possible | 3.5.12.0; regression diffs |
+| Compiled library build | ScriptProject.pyi → `save_as_compiled_library(destination)` / `check_all_pool_objects()` | possible | library projects |
+| Runtime system files | ScriptProject.pyi → `generate_runtime_system_files(destination, generate_m4, generate_c)` | possible | niche |
+| Archive categories metadata | ScriptLibManObject.pyi (LibManager) → `categories` / `top_level_categories` / `get_category(guid)` | partial | enums injected; tools not needed yet |
 
 ## Not in this build (probed live — do not retry)
 
