@@ -147,17 +147,12 @@ Online (PLC):
 |---|---|
 | `ecockpit_read(variable, device?)` | online variable read (`.env` PLC creds) |
 | `ecockpit_write(values, force?, confirm)` | **destructive** — write/force values on the RUNNING PLC; confirm-gated, reads back after write |
-| `ecockpit_unforce_all` | release all forced values |
 | `ecockpit_prepared_values(expression?, device?)` | read-only — staged (prepared) values + currently forced variables |
-| `ecockpit_state(device?)` | login/application/operation state readout |
 | `ecockpit_login(option?, delete_foreign_apps?, device?, confirm)` | **destructive** — explicit login with online-change control (`try` = deltas if possible, `force` = deltas or nothing, `never` = full download, `auto` = ladder); session stays open, logout via disconnect |
-| `ecockpit_source_download(confirm)` | **destructive** — writes the SOURCE project to the PLC (not the compiled app) |
+| `ecockpit_source_download(confirm)` | **destructive** — writes the SOURCE project to the PLC (not the compiled app); saves the project first |
 | `ecockpit_download(confirm)` | **destructive** — replaces the RUNNING PLC app; `confirm=true` only on explicit owner request |
 | `ecockpit_stop(confirm)` | **destructive** — stops the running PLC application |
 | `ecockpit_disconnect(force?)` | PLC logout (`force=true` → forced_disconnect) |
-| `ecockpit_login(option?, delete_foreign_apps?, device?, confirm)` | **destructive** — explicit login with online-change control (`try` = deltas if possible, `force` = deltas or nothing, `never` = full download, `auto` = ladder); session stays open, logout via disconnect |
-| `ecockpit_source_download(confirm)` | **destructive** — writes the SOURCE project to the PLC (not the compiled app); saves the project first |
-| `ecockpit_prepared_values(expression?, device?)` | read-only — staged (prepared) values + currently forced variables |
 
 CAUTION — every online command logs in via the online-change ladder
 (read-only tools prefer `OnlineChangeOption.Keep`: login without

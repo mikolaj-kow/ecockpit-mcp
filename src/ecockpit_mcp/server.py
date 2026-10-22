@@ -1223,24 +1223,25 @@ def ecockpit_project_control(op: str, path: str = "",
         destructiveHint=True,
         readOnlyHint=False,
         openWorldHint=True),
-    description="DESTRUCTIVE - requires explicit owner request. PLC file "
-                "system manipulation on the ScriptOnlineDevice: op="
-                "rename (args remote + new_name), op=mkdir (args "
-                "remote), op=rmdir (args remote; recursive=true deletes "
-                "recursively). All modify the PLC file system; pass "
-                "confirm=true, never without an explicit owner "
-                "instruction.")
+    description="PLC file system operations on the ScriptOnlineDevice. "
+                "op=ls is READ-ONLY (list a directory; the runtime root "
+                "is '.' — '/' is refused, the result reports the probed "
+                "directory). DESTRUCTIVE - requires explicit owner "
+                "request + confirm: op=rename (remote + new_name), "
+                "op=mkdir (remote), op=rmdir (remote; recursive=true "
+                "deletes recursively). ls needs no confirm; the others "
+                "never without an explicit owner instruction.")
 def ecockpit_plc_fs_ops(op: str, remote: str, new_name: str = "",
                         recursive: bool = False, device: str = "",
                         confirm: bool = False,
                         timeout_s: int = 300) -> str:
-    if op not in ("rename", "mkdir", "rmdir"):
-        raise ValueError("op must be rename|mkdir|rmdir")
+    if op not in ("ls", "rename", "mkdir", "rmdir"):
+        raise ValueError("op must be ls|rename|mkdir|rmdir")
     if not remote:
         raise ValueError("remote (PLC path) required")
     if op == "rename" and not new_name:
         raise ValueError("new_name required for op=rename")
-    if not confirm:
+    if op != "ls" and not confirm:
         return json.dumps({
             "ok": False,
             "refused": True,
@@ -1248,7 +1249,9 @@ def ecockpit_plc_fs_ops(op: str, remote: str, new_name: str = "",
                      "system; call again with confirm=true only on an "
                      "explicit owner request".format(o=op),
         }, indent=2)
-    args = {"op": op, "remote": remote, "confirm": True}
+    args = {"op": op, "remote": remote}
+    if op != "ls":
+        args["confirm"] = True
     if op == "rename":
         args["new_name"] = new_name
     if op == "rmdir":
