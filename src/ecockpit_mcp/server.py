@@ -45,6 +45,7 @@ import time
 
 import anyio
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 
@@ -433,6 +434,7 @@ async def ecockpit_build(
                 "harvest_lines": int(harvest_lines),
             },
             timeout_s,
+            ctx,
         ),
         indent=2,
     )
@@ -443,7 +445,7 @@ async def ecockpit_build(
     "project and delete stale POUs - no compile. Takes ~15-30 s."
 )
 async def ecockpit_import(timeout_s: int = 600, ctx: Context | None = None) -> str:
-    return json.dumps(await _run_async("import", {}, timeout_s), indent=2)
+    return json.dumps(await _run_async("import", {}, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -458,7 +460,7 @@ async def ecockpit_export(
     dir: str = "", timeout_s: int = 600, ctx: Context | None = None
 ) -> str:
     args: dict[str, object] = {"dir": dir} if dir else {}
-    return json.dumps(await _run_async("export", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("export", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -478,6 +480,7 @@ async def ecockpit_compile(
             "compile",
             {"all_messages": bool(all_messages), "harvest_lines": int(harvest_lines)},
             timeout_s,
+            ctx,
         ),
         indent=2,
     )
@@ -503,6 +506,7 @@ async def ecockpit_rebuild(
             "rebuild",
             {"all_messages": bool(all_messages), "harvest_lines": int(harvest_lines)},
             timeout_s,
+            ctx,
         ),
         indent=2,
     )
@@ -523,7 +527,7 @@ def ecockpit_status() -> str:
 )
 def ecockpit_read(variable: str, device: str = "") -> str:
     if not variable:
-        raise ValueError("variable path is required, e.g. 'GVLName.Variable'")
+        raise ToolError("variable path is required, e.g. 'GVLName.Variable'")
     args: dict[str, object] = {"path": variable}
     if device:
         args["device"] = device
@@ -559,7 +563,7 @@ def ecockpit_write(
     timeout_s: int = 180,
 ) -> str:
     if not isinstance(values, dict) or not values:
-        raise ValueError("values must be a non-empty {variable: value} map")
+        raise ToolError("values must be a non-empty {variable: value} map")
     if not confirm:
         return json.dumps(
             {
@@ -678,16 +682,16 @@ def ecockpit_system(
         "progress",
     )
     if op not in valid:
-        raise ValueError("op must be one of " + "|".join(valid))
+        raise ToolError("op must be one of " + "|".join(valid))
     args: dict[str, object] = {"op": op}
     if op == "write_message":
         if not text:
-            raise ValueError("text required for op=write_message")
+            raise ToolError("text required for op=write_message")
         args["text"] = text
         args["severity"] = severity
     if op == "set_prompt_handling":
         if not value:
-            raise ValueError("value required for op=set_prompt_handling")
+            raise ToolError("value required for op=set_prompt_handling")
         names = [t for t in value.replace(",", "+").replace(" ", "+").split("+") if t]
         if "ForwardSimplePrompts" in names and not confirm:
             return json.dumps(
@@ -705,12 +709,12 @@ def ecockpit_system(
         args["confirm"] = True
     if op == "set_prompt_answer":
         if not key or not result:
-            raise ValueError("key and result required for op=set_prompt_answer")
+            raise ToolError("key and result required for op=set_prompt_answer")
         args["key"] = key
         args["result"] = result
     if op == "set_flags":
         if trace is None and abortable is None and abort_autocheck is None:
-            raise ValueError(
+            raise ToolError(
                 "at least one of trace, abortable, abort_autocheck required"
             )
         if trace is not None:
@@ -721,7 +725,7 @@ def ecockpit_system(
             args["abort_autocheck"] = bool(abort_autocheck)
     if op == "progress":
         if not action:
-            raise ValueError("action required for op=progress")
+            raise ToolError("action required for op=progress")
         args["action"] = action
         if description:
             args["description"] = description
@@ -797,7 +801,7 @@ async def ecockpit_system_ui(
     ctx: Context | None = None,
 ) -> str:
     if op not in ("ui", "exit"):
-        raise ValueError("op must be ui|exit")
+        raise ToolError("op must be ui|exit")
     if not confirm:
         return json.dumps(
             {
@@ -820,10 +824,10 @@ async def ecockpit_system_ui(
     if op == "exit":
         args["code"] = int(code)
         return json.dumps(
-            await _run_async("system", args, min(int(timeout_s), 30)), indent=2
+            await _run_async("system", args, min(int(timeout_s), 30), ctx), indent=2
         )
     if not method:
-        raise ValueError("method required for op=ui")
+        raise ToolError("method required for op=ui")
     args["method"] = method
     for k, v in (
         ("message", message),
@@ -860,7 +864,7 @@ async def ecockpit_system_ui(
         args[k] = flag
     if filter_index is not None:
         args["filter_index"] = int(filter_index)
-    return json.dumps(await _run_async("system", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("system", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -873,7 +877,7 @@ async def ecockpit_system_ui(
 )
 async def ecockpit_snapshot(version: str = "", ctx: Context | None = None) -> str:
     args: dict[str, object] = {"version": version} if version else {}
-    return json.dumps(await _run_async("snapshot", args), indent=2)
+    return json.dumps(await _run_async("snapshot", args, ctx), indent=2)
 
 
 @mcp.tool(
@@ -928,7 +932,7 @@ async def ecockpit_plc_ls(
     args: dict[str, object] = {"op": "ls", "remote": directory or "/"}
     if device:
         args["device"] = device
-    return json.dumps(await _run_async("plcfs", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("plcfs", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -944,11 +948,11 @@ async def ecockpit_plc_get(
     ctx: Context | None = None,
 ) -> str:
     if not remote or not local:
-        raise ValueError("remote (PLC path) and local (host path) required")
+        raise ToolError("remote (PLC path) and local (host path) required")
     args: dict[str, object] = {"op": "get", "remote": remote, "local": local}
     if device:
         args["device"] = device
-    return json.dumps(await _run_async("plcfs", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("plcfs", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -970,7 +974,7 @@ async def ecockpit_plc_put(
     ctx: Context | None = None,
 ) -> str:
     if not local or not remote:
-        raise ValueError("local (host path) and remote (PLC path) required")
+        raise ToolError("local (host path) and remote (PLC path) required")
     if not confirm:
         return json.dumps(
             {
@@ -991,7 +995,7 @@ async def ecockpit_plc_put(
     }
     if device:
         args["device"] = device
-    return json.dumps(await _run_async("plcfs", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("plcfs", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -1010,7 +1014,7 @@ async def ecockpit_plc_rm(
     ctx: Context | None = None,
 ) -> str:
     if not remote:
-        raise ValueError("remote (PLC path) required")
+        raise ToolError("remote (PLC path) required")
     if not confirm:
         return json.dumps(
             {
@@ -1025,7 +1029,7 @@ async def ecockpit_plc_rm(
     args: dict[str, object] = {"op": "rm", "remote": remote, "confirm": True}
     if device:
         args["device"] = device
-    return json.dumps(await _run_async("plcfs", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("plcfs", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -1043,7 +1047,7 @@ async def ecockpit_upload_source(
     args: dict[str, object] = {"path": path} if path else {}
     if device:
         args["device"] = device
-    return json.dumps(await _run_async("upload_source", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("upload_source", args, timeout_s, ctx), indent=2)
 
 
 # NOTE: no ecockpit_save_archive tool on purpose - e!COCKPIT 11.3.1.0
@@ -1078,7 +1082,7 @@ async def ecockpit_download(
             indent=2,
         )
     return json.dumps(
-        await _run_async("download", {"confirm": True}, timeout_s), indent=2
+        await _run_async("download", {"confirm": True}, timeout_s, ctx), indent=2
     )
 
 
@@ -1105,7 +1109,7 @@ def ecockpit_login(
     timeout_s: int = 180,
 ) -> str:
     if option not in ("try", "force", "never", "auto"):
-        raise ValueError("option must be try|force|never|auto")
+        raise ToolError("option must be try|force|never|auto")
     if not confirm:
         return json.dumps(
             {
@@ -1153,7 +1157,7 @@ async def ecockpit_source_download(
             indent=2,
         )
     return json.dumps(
-        await _run_async("source_download", {"confirm": True}, timeout_s), indent=2
+        await _run_async("source_download", {"confirm": True}, timeout_s, ctx), indent=2
     )
 
 
@@ -1204,7 +1208,7 @@ def ecockpit_tree(
     timeout_s: int = 120,
 ) -> str:
     if op not in ("list", "rename", "remove", "move", "folder"):
-        raise ValueError("op must be list|rename|remove|move|folder")
+        raise ToolError("op must be list|rename|remove|move|folder")
     if op != "list" and not confirm:
         return json.dumps(
             {
@@ -1280,7 +1284,7 @@ async def ecockpit_object_create(
         )
     if kind == "special_pou":
         if not special_type:
-            raise ValueError("special_type required for kind=special_pou")
+            raise ToolError("special_type required for kind=special_pou")
         args: dict[str, object] = {
             "kind": kind,
             "special_type": special_type,
@@ -1288,9 +1292,11 @@ async def ecockpit_object_create(
         }
         if parent:
             args["parent"] = parent
-        return json.dumps(await _run_async("object_create", args, timeout_s), indent=2)
+        return json.dumps(
+            await _run_async("object_create", args, timeout_s, ctx), indent=2
+        )
     if not kind or not name:
-        raise ValueError("kind and name required")
+        raise ToolError("kind and name required")
     args = {"kind": kind, "name": name, "confirm": True}
     if parent:
         args["parent"] = parent
@@ -1304,7 +1310,7 @@ async def ecockpit_object_create(
         args["declaration"] = declaration
     if implementation:
         args["implementation"] = implementation
-    return json.dumps(await _run_async("object_create", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("object_create", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -1317,7 +1323,7 @@ async def ecockpit_object_create(
 )
 def ecockpit_textual_read(name: str, part: str = "", timeout_s: int = 120) -> str:
     if not name:
-        raise ValueError("name (object name) required")
+        raise ToolError("name (object name) required")
     args: dict[str, object] = {"op": "read", "name": name}
     if part:
         args["part"] = part
@@ -1343,9 +1349,9 @@ def ecockpit_textual_write(
     timeout_s: int = 120,
 ) -> str:
     if not name or text is None:
-        raise ValueError("name and text required")
+        raise ToolError("name and text required")
     if part not in ("declaration", "implementation"):
-        raise ValueError("part must be declaration|implementation")
+        raise ToolError("part must be declaration|implementation")
     if not confirm:
         return json.dumps(
             {
@@ -1409,7 +1415,7 @@ def ecockpit_task_create(
     timeout_s: int = 120,
 ) -> str:
     if not name:
-        raise ValueError("name (task name) required")
+        raise ToolError("name (task name) required")
     if not confirm:
         return json.dumps(
             {
@@ -1463,7 +1469,7 @@ async def ecockpit_symbol_config_variables(
     args: dict[str, object] = {"compile": bool(compile)}
     if application:
         args["application"] = application
-    return json.dumps(await _run_async("symbol_config", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("symbol_config", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -1537,7 +1543,7 @@ async def ecockpit_symbol_config_options(
     ctx: Context | None = None,
 ) -> str:
     if op not in ("config", "config_set", "xsd"):
-        raise ValueError("op must be config|config_set|xsd")
+        raise ToolError("op must be config|config_set|xsd")
     if op == "config_set":
         if not confirm:
             return json.dumps(
@@ -1556,7 +1562,7 @@ async def ecockpit_symbol_config_options(
             or attribute_filter_data
             or comment_filter_type
         ):
-            raise ValueError(
+            raise ToolError(
                 "config_set needs content_feature_flags "
                 "and/or attribute_filter_type(+data) / "
                 "comment_filter_type"
@@ -1576,7 +1582,7 @@ async def ecockpit_symbol_config_options(
         args["confirm"] = True
     if op == "xsd" and file:
         args["file"] = file
-    return json.dumps(await _run_async("symbol_config", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("symbol_config", args, timeout_s, ctx), indent=2)
 
 
 # --------------------------------------------------------------------------
@@ -1605,16 +1611,16 @@ async def ecockpit_device_scan(
     ctx: Context | None = None,
 ) -> str:
     if op not in ("gateways", "scan", "address"):
-        raise ValueError("op must be gateways|scan|address")
+        raise ToolError("op must be gateways|scan|address")
     if op == "address" and not ip:
-        raise ValueError("ip required for op=address")
+        raise ToolError("ip required for op=address")
     args: dict[str, object] = {"op": op}
     if gateway:
         args["gateway"] = gateway
     if op == "address":
         args["ip"] = ip
         args["port"] = int(port)
-    return json.dumps(await _run_async("device_scan", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("device_scan", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -1638,10 +1644,10 @@ def ecockpit_device_comm(
     timeout_s: int = 120,
 ) -> str:
     if op not in ("get", "set_ip"):
-        raise ValueError("op must be get|set_ip")
+        raise ToolError("op must be get|set_ip")
     if op == "set_ip":
         if not ip:
-            raise ValueError("ip required for op=set_ip")
+            raise ToolError("ip required for op=set_ip")
         if not confirm:
             return json.dumps(
                 {
@@ -1713,7 +1719,7 @@ def ecockpit_device_info(
         "driver_info",
         "driver_info_set",
     ):
-        raise ValueError(
+        raise ToolError(
             "op must be identification|simulation|"
             "simulation_set|driver_info|driver_info_set"
         )
@@ -1798,7 +1804,7 @@ async def ecockpit_device_io(
     ctx: Context | None = None,
 ) -> str:
     if op not in ("mappings", "set_mapping", "export_csv", "import_csv"):
-        raise ValueError("op must be mappings|set_mapping|export_csv|import_csv")
+        raise ToolError("op must be mappings|set_mapping|export_csv|import_csv")
     if op in ("set_mapping", "import_csv") and not confirm:
         return json.dumps(
             {
@@ -1817,9 +1823,9 @@ async def ecockpit_device_io(
         args["connector_id"] = int(connector_id)
     if op == "set_mapping":
         if not name and id is None:
-            raise ValueError("name or id required for op=set_mapping")
+            raise ToolError("name or id required for op=set_mapping")
         if not variable and not manual_iec_address and not automatic:
-            raise ValueError(
+            raise ToolError(
                 "variable and/or manual_iec_address/"
                 "automatic required for op=set_mapping"
             )
@@ -1842,9 +1848,9 @@ async def ecockpit_device_io(
         args["file"] = file
     if op == "import_csv":
         if not file:
-            raise ValueError("file required for op=import_csv")
+            raise ToolError("file required for op=import_csv")
         args["file"] = file
-    return json.dumps(await _run_async("device_io", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("device_io", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -1873,7 +1879,7 @@ def ecockpit_device_params(
     timeout_s: int = 180,
 ) -> str:
     if op not in ("list", "read", "write"):
-        raise ValueError("op must be list|read|write")
+        raise ToolError("op must be list|read|write")
     args: dict[str, object] = {"op": op, "timeout": int(timeout)}
     if device:
         args["device"] = device
@@ -1881,7 +1887,7 @@ def ecockpit_device_params(
         args["connector_id"] = int(connector_id)
     if op in ("read", "write"):
         if not name and id is None:
-            raise ValueError("name or id required")
+            raise ToolError("name or id required")
         if name:
             args["name"] = name
         if id is not None:
@@ -1890,7 +1896,7 @@ def ecockpit_device_params(
         args["online"] = True
     if op == "write":
         if value == "":
-            raise ValueError("value required for op=write")
+            raise ToolError("value required for op=write")
         if not confirm:
             return json.dumps(
                 {
@@ -1954,7 +1960,7 @@ async def ecockpit_app_control(
     ctx: Context | None = None,
 ) -> str:
     if op not in ("status", "activate", "boot", "start", "reset"):
-        raise ValueError("op must be status|activate|boot|start|reset")
+        raise ToolError("op must be status|activate|boot|start|reset")
     if op != "status" and not confirm:
         return json.dumps(
             {
@@ -1971,12 +1977,12 @@ async def ecockpit_app_control(
         args["application"] = application
     if op == "boot":
         if not path:
-            raise ValueError("path (host .bootapp file) required for op=boot")
+            raise ToolError("path (host .bootapp file) required for op=boot")
         args["path"] = path
     if op == "reset":
         args["option"] = reset_option
         args["force_kill"] = bool(force_kill)
-    return json.dumps(await _run_async("app_control", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("app_control", args, timeout_s, ctx), indent=2)
 
 
 @mcp.tool(
@@ -2015,7 +2021,7 @@ async def ecockpit_project_control(
         "open_archive",
         "close",
     ):
-        raise ValueError("op must be info|info_set|save|create|open|open_archive|close")
+        raise ToolError("op must be info|info_set|save|create|open|open_archive|close")
     gated = op in ("info_set", "create", "open", "open_archive", "close")
     if gated and not confirm:
         return json.dumps(
@@ -2034,11 +2040,11 @@ async def ecockpit_project_control(
         args["confirm"] = True
     if op == "create" or op == "open":
         if not path:
-            raise ValueError("path required for op=" + op)
+            raise ToolError("path required for op=" + op)
         args["path"] = path
     if op == "open_archive":
         if not archive or not project_path:
-            raise ValueError("archive and project_path required for op=open_archive")
+            raise ToolError("archive and project_path required for op=open_archive")
         args["archive"] = archive
         args["project_path"] = project_path
         args["overwrite"] = bool(overwrite)
@@ -2053,7 +2059,9 @@ async def ecockpit_project_control(
             }.get(key, "")
             if value:
                 args[key] = value
-    return json.dumps(await _run_async("project_control", args, timeout_s), indent=2)
+    return json.dumps(
+        await _run_async("project_control", args, timeout_s, ctx), indent=2
+    )
 
 
 # --------------------------------------------------------------------------
@@ -2085,11 +2093,11 @@ async def ecockpit_plc_fs_ops(
     ctx: Context | None = None,
 ) -> str:
     if op not in ("ls", "rename", "mkdir", "rmdir"):
-        raise ValueError("op must be ls|rename|mkdir|rmdir")
+        raise ToolError("op must be ls|rename|mkdir|rmdir")
     if not remote:
-        raise ValueError("remote (PLC path) required")
+        raise ToolError("remote (PLC path) required")
     if op == "rename" and not new_name:
-        raise ValueError("new_name required for op=rename")
+        raise ToolError("new_name required for op=rename")
     if op != "ls" and not confirm:
         return json.dumps(
             {
@@ -2110,7 +2118,119 @@ async def ecockpit_plc_fs_ops(
         args["recursive"] = bool(recursive)
     if device:
         args["device"] = device
-    return json.dumps(await _run_async("plcfs", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("plcfs", args, timeout_s, ctx), indent=2)
+
+
+# --------------------------------------------------------------------------
+# MCP resources + prompts (protocol surface beyond tools)
+# --------------------------------------------------------------------------
+async def _resource_payload(cmd, args):
+    """Run one read-only command for a resource read. Never raises: an
+    unarmed relay or a dead engine reads back an ok:false payload with
+    the rearm hint instead of a protocol error, so agents can discover
+    state without exception handling."""
+    try:
+        result = await _run_async(cmd, args)
+    except NotArmedError:
+        return json.dumps(
+            {"ok": False, "error": "relay not armed", "hint": REARM_HINT}, indent=2
+        )
+    except (TimeoutError, OSError) as exc:
+        return json.dumps(
+            {
+                "ok": False,
+                "error": "engine unreachable: {e}".format(e=exc)[:200],
+                "hint": REARM_HINT,
+            },
+            indent=2,
+        )
+    return json.dumps(result, indent=2)
+
+
+@mcp.resource(
+    "ecockpit://project/tree",
+    name="project-tree",
+    mime_type="application/json",
+    description="The open e!COCKPIT project tree as JSON: every object "
+    "with name, GUID and kind markers (device/application/folder/symbol "
+    "config/textual flags), recursive, limit 1000. Requires the armed "
+    "command relay; an unarmed relay reads back an ok:false payload with "
+    "the rearm hint.",
+)
+async def ecockpit_resource_project_tree() -> str:
+    return await _resource_payload("tree", {"recursive": True, "limit": 1000})
+
+
+@mcp.resource(
+    "ecockpit://messages",
+    name="compiler-messages",
+    mime_type="application/json",
+    description="The e!COCKPIT scripting message store as JSON: the last "
+    "build/compile diagnostics plus the active IGNORE_CODES filter and "
+    "category map (the data behind the harvest in build results). "
+    "Requires the armed command relay; an unarmed relay reads back an "
+    "ok:false payload with the rearm hint.",
+)
+async def ecockpit_resource_messages() -> str:
+    return await _resource_payload("messages", {})
+
+
+@mcp.resource(
+    "ecockpit://project/textual/{name}",
+    name="project-textual",
+    mime_type="application/json",
+    description="ST source of one project object as JSON: the "
+    "declaration and implementation text of a textual object (POU, GVL, "
+    "DUT, ...), read via ScriptTextDocument. {name} is the project-tree "
+    "object name; requires the armed command relay.",
+)
+async def ecockpit_resource_textual(name: str) -> str:
+    return await _resource_payload("textual", {"op": "read", "name": name})
+
+
+@mcp.prompt(
+    name="diagnose-failed-build",
+    description="Structured diagnosis pass for a failed ecockpit_build / "
+    "ecockpit_compile / ecockpit_rebuild result. Paste the tool's JSON "
+    "output as build_result (or leave empty for the generic checklist).",
+)
+def diagnose_failed_build(build_result: str = "") -> list:
+    checklist = (
+        "Diagnose this e!COCKPIT build failure step by step:\n"
+        "1. Parse the structured harvest (C-code, severity, text, POU, "
+        "line). Group the entries by C-code before reading anything "
+        "else - one root cause usually repeats.\n"
+        "2. Check the IGNORE_CODES filter: the result was filtered by "
+        "default. Re-run with all_messages=true (ecockpit_compile or "
+        "ecockpit_build) before concluding an error list is complete - "
+        "a filtered C-code can still be the real cause.\n"
+        "3. C0106 'out of global data memory' on grown GVL arrays is an "
+        "incremental-build artifact: use ecockpit_rebuild (scripted "
+        "Build -> Clean), not another compile.\n"
+        "4. Empty harvest but ok=false: the failure is NOT a compile "
+        "error. Read log_tail for the import step (XML parse, "
+        "REMOVED_POUS) and check ecockpit_messages for engine-level "
+        "messages; a stale message store hides causes - "
+        "ecockpit_clear_messages, then compile again.\n"
+        "5. For errors in a specific POU, read the ST source "
+        "(ecockpit://project/textual/{name} resource or "
+        "ecockpit_textual_read), fix with ecockpit_textual_write / "
+        "ecockpit_object_create (both confirm-gated - owner request "
+        "first), then rebuild.\n"
+        "6. Report: root-cause C-codes, the POUs/lines involved, whether "
+        "IGNORE_CODES filtered anything, and the exact next command you "
+        "recommend - never a broad 'rebuild everything' on a running "
+        "PLC project without saying what it costs.\n"
+    )
+    if build_result.strip():
+        user_text = checklist + "\nFailed build result (JSON):\n" + build_result
+    else:
+        user_text = (
+            checklist + "\nNo build result was pasted. Run ecockpit_build (or "
+            "ecockpit_compile with all_messages=true) first, then apply "
+            "this checklist to its JSON output."
+        )
+    return [{"role": "user", "content": user_text}]
 
 
 # --------------------------------------------------------------------------
@@ -2235,7 +2355,7 @@ def ecockpit_lib_find(
     name: str, repo: str = "", exact: bool = False, timeout_s: int = 120
 ) -> str:
     if not name:
-        raise ValueError("name (library name or display name) required")
+        raise ToolError("name (library name or display name) required")
     args: dict[str, object] = {"name": name}
     if repo:
         args["repo"] = repo
@@ -2264,7 +2384,7 @@ def ecockpit_lib_install(
     timeout_s: int = 120,
 ) -> str:
     if not path:
-        raise ValueError("path (compiled-library file) required")
+        raise ToolError("path (compiled-library file) required")
     if overwrite and not confirm:
         return json.dumps(
             {
@@ -2300,7 +2420,7 @@ def ecockpit_lib_uninstall(
     name: str, repo: str = "", confirm: bool = False, timeout_s: int = 120
 ) -> str:
     if not name:
-        raise ValueError("name (library name or display name) required")
+        raise ToolError("name (library name or display name) required")
     if not confirm:
         return json.dumps(
             {
@@ -2350,7 +2470,7 @@ def ecockpit_repo_add(
     timeout_s: int = 120,
 ) -> str:
     if not rootfolder or not name:
-        raise ValueError("rootfolder (existing directory) and name required")
+        raise ToolError("rootfolder (existing directory) and name required")
     if not confirm:
         return json.dumps(
             {
@@ -2392,7 +2512,7 @@ def ecockpit_repo_remove(
     name: str, delete_on_disk: bool = False, confirm: bool = False, timeout_s: int = 120
 ) -> str:
     if not name:
-        raise ValueError("name (repository name) required")
+        raise ToolError("name (repository name) required")
     if not confirm:
         return json.dumps(
             {
@@ -2435,9 +2555,9 @@ def ecockpit_repo_update(
     timeout_s: int = 120,
 ) -> str:
     if not name:
-        raise ValueError("name (repository name) required")
+        raise ToolError("name (repository name) required")
     if not new_name and not new_location:
-        raise ValueError("new_name and/or new_location required")
+        raise ToolError("new_name and/or new_location required")
     if not confirm:
         return json.dumps(
             {
@@ -2474,7 +2594,7 @@ def ecockpit_repo_update(
 )
 def ecockpit_repo_move(name: str, index: int, timeout_s: int = 120) -> str:
     if not name:
-        raise ValueError("name (repository name) required")
+        raise ToolError("name (repository name) required")
     return json.dumps(
         _run("repo_move", {"name": name, "index": int(index)}, timeout_s), indent=2
     )
