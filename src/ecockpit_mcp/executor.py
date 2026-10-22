@@ -2945,7 +2945,11 @@ def cmd_plcfs(project, args):
                 d = os.path.dirname(local)
                 if d and not os.path.isdir(d):
                     os.makedirs(d)
-                member(local, remote, True)
+                # LIVE 2026-10-22 (G-13): this build's download_file is
+                # (remote_file, local_file) - REMOTE FIRST, opposite of
+                # the stub; (local, remote) made it look for the local
+                # path as the source ("Could not find file")
+                member(remote, local, True)
                 log("OK", "plcfs get {r} -> {l} via {n}".format(
                     r=remote, l=local, n=member_name))
                 return {"remote": remote, "local": local,
@@ -2959,15 +2963,16 @@ def cmd_plcfs(project, args):
                 # file is the overwrite-prompt trigger (prompt_answers
                 # end-to-end test, G-07-style: one clean attempt only)
                 force = bool(args.get("force", True))
+                # LIVE 2026-10-22 (G-13): upload is (local_file,
+                # remote_file) on this build - LOCAL FIRST (mirror of the
+                # download order); the stub's (remote, local) order made
+                # the engine treat the remote path as a local file
                 try:
-                    member(remote, local, force)
-                    form = "3-arg (remote, local, force)"
+                    member(local, remote, force)
+                    form = "3-arg (local, remote, force)"
                 except TypeError:
-                    # LIVE 2026-10-22: the 3-arg stub form raises
-                    # "Value cannot be null. Parameter name: path"
-                    # (overload resolution failure) - try the 2-arg form
-                    member(remote, local)
-                    form = "2-arg (remote, local)"
+                    member(local, remote)
+                    form = "2-arg (local, remote)"
                 log("OK", "plcfs put {l} -> {r} (force={f}, {fm}) via {n}"
                     .format(l=local, r=remote, f=force, fm=form,
                             n=member_name))
