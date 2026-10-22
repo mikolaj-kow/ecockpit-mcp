@@ -119,6 +119,12 @@ if "ArchiveCategories" not in globals():
     # ArchiveCategories"); its .default/.none members give save_archive a
     # TYPED category that disambiguates the IronPython overload maze.
     ArchiveCategories = None
+if "OnlineChangeOption" not in globals():
+    # _3S.CoDeSys.OnlineUI.OnlineChangeOption, injected like Severity (per
+    # CHM): Never (0, online change never -> full download forced), Try
+    # (1, online change if possible else full download), Force (2, online
+    # change or nothing).
+    OnlineChangeOption = None
 if "ConflictResolve" not in globals():
     ConflictResolve = None
 if "ImportReporter" not in globals():
@@ -1476,10 +1482,72 @@ def compile_project(app, project, summary, args=None, rebuild=False):
 # --------------------------------------------------------------------------
 # Online commands (read / download / disconnect / status / probe)
 # --------------------------------------------------------------------------
-def _online_connect(project, args):
+def _online_login(onlineapp, device, prefer_keep=False):
+    """Explicit login ladder - online change control.
+
+    device.connect() performed an IMPLICIT login-with-download (live
+    2026-10-21: a read-only plc_ls deployed the open, untested
+    application to the live PLC). The controlled form is
+    onlineapp.login(OnlineChangeOption, delete_foreign_apps) with the
+    enum per CHM: Try (online change if possible, else full download),
+    Force (online change or nothing), Never (full download forced).
+    OnlineChangeOption.Keep (stub-only, NOT in the CHM: "Try to login.
+    Do not online update. Do not download. Keep as it is.") is the
+    safe login for read-only commands - enabled with prefer_keep.
+    Default order: Try, Force, Never, then the legacy device.connect()
+    fallback. Returns the form used; raises when every form fails.
+    """
+    options = []
+    if OnlineChangeOption is not None:
+        names = (["Keep"] if prefer_keep else []) + \
+                ["Try", "Force", "Never"]
+        for name in names:
+            try:
+                if name == "Try":
+                    options.append(("login(OnlineChangeOption.Try)",
+                                    OnlineChangeOption.Try))
+                elif name == "Force":
+                    options.append(("login(OnlineChangeOption.Force)",
+                                    OnlineChangeOption.Force))
+                elif name == "Never":
+                    options.append(("login(OnlineChangeOption.Never)",
+                                    OnlineChangeOption.Never))
+                else:
+                    options.append(("login(OnlineChangeOption.Keep)",
+                                    OnlineChangeOption.Keep))
+            except Exception as exc:
+                log("INFO", "OnlineChangeOption.{n} unavailable: "
+                    "{e}".format(n=name, e=exc))
+    options.append(("device.connect()", None))
+    attempts = []
+    for label, option in options:
+        try:
+            if option is None:
+                device.connect()
+            else:
+                onlineapp.login(option, False)
+            log("OK", "logged in via {l}".format(l=label))
+            return label
+        except Exception as exc:
+            attempts.append("{l}: {c}: {m}".format(
+                l=label, c=type(exc).__name__, m=str(exc)[:160]))
+            log("INFO", "login via {l} failed: {c}: {m}".format(
+                l=label, c=type(exc).__name__, m=str(exc)[:160]))
+    raise RuntimeError("all login forms failed:\n  " +
+                       "\n  ".join(attempts))
+
+
+def _online_connect(project, args, prefer_keep=False):
     """Connect to the PLC (login) and return (device, onlineapp).
 
     Requires PLC_USER/PLC_PASS (.env or env vars). Caller disconnects.
+    Logs in via the online-change ladder (_online_login) - NEVER via
+    the implicit-download device.connect() unless every explicit form
+    fails. Read-only callers pass prefer_keep=True: OnlineChangeOption.
+    Keep (stub-only, not in the CHM) logs in WITHOUT applying online
+    changes or downloading. WARNING: even a Try login applies online
+    changes (code deltas) when the open project differs from the PLC -
+    treat deploying commands as potentially deploying.
     """
     user, pw = _require_creds()
     device = get_device(project, args.get("device", ""))
@@ -1491,9 +1559,8 @@ def _online_connect(project, args):
     log("INFO", "connecting to PLC as user '{u}' (login)".format(
         u=user[0] + "***" if len(user) > 1 else "***"))
     online.set_default_credentials(user, pw)
-    device.connect()
-    log("OK", "connected (logged in)")
     onlineapp = online.create_online_application(app)
+    _online_login(onlineapp, device, prefer_keep=prefer_keep)
     return device, onlineapp
 
 
@@ -1560,7 +1627,7 @@ def cmd_read(project, args):
     if not path:
         raise RuntimeError("read needs args.path, e.g. "
                            "{\"path\": \"GVLName.Variable\"}")
-    device, onlineapp = _online_connect(project, args)
+    device, onlineapp = _online_connect(project, args, prefer_keep=True)
     try:
         value = onlineapp.read_value(path)
         log("OK", "read {p} = {v}".format(p=path, v=value))
@@ -1600,6 +1667,197 @@ def cmd_disconnect(project, args):
         except Exception as exc:
             log("WARN", "forced_disconnect raised: {e}".format(e=exc))
     _online_disconnect(device)
+
+
+def cmd_login(project, args):
+    """Explicit login with online-change control (login + STAY connected).
+
+    args: {"option": "try"|"force"|"never"|"auto" (default "auto" = the
+    ladder order Try -> Force -> Never -> device.connect()),
+    "delete_foreign_apps": false, "device": "", "confirm": true}.
+
+    CONFIRM-GATED: a login can apply online changes (code deltas) to the
+    RUNNING application. Logout afterwards with ecockpit_disconnect.
+    """
+    if not args.get("confirm"):
+        raise RuntimeError("login REFUSED - requires args.confirm=true. A "
+                           "login can apply online changes (code deltas) "
+                           "to the RUNNING PLC application.")
+    option = str(args.get("option", "auto")).lower()
+    delete_foreign_apps = bool(args.get("delete_foreign_apps"))
+    user, pw = _require_creds()
+    device = get_device(project, args.get("device", ""))
+    try:
+        aa = project.active_application
+        app = aa if aa is not None else get_application(project)
+    except Exception:
+        app = get_application(project)
+    log("INFO", "login to PLC as user '{u}' (option={o}, "
+        "delete_foreign_apps={d})".format(
+            u=user[0] + "***" if len(user) > 1 else "***",
+            o=option, d=delete_foreign_apps))
+    online.set_default_credentials(user, pw)
+    onlineapp = online.create_online_application(app)
+
+    if option == "auto":
+        _online_login(onlineapp, device)
+        log("OK", "login complete (auto ladder) - session stays open; "
+            "logout with ecockpit_disconnect")
+        return {"logged_in": True, "via": "auto", "stays_connected": True}
+
+    members = {"try": "Try", "force": "Force", "never": "Never"}
+    if option not in members or OnlineChangeOption is None:
+        raise RuntimeError('login needs args.option of "try", "force", '
+                           '"never" or "auto"{suffix}'.format(
+                               suffix="" if OnlineChangeOption is not None
+                               else " (OnlineChangeOption is unavailable "
+                                    "outside e!COCKPIT)"))
+    try:
+        if option == "try":
+            change_option = OnlineChangeOption.Try
+        elif option == "force":
+            change_option = OnlineChangeOption.Force
+        else:
+            change_option = OnlineChangeOption.Never
+    except Exception as exc:
+        raise RuntimeError("OnlineChangeOption.{m} unavailable: "
+                           "{e}".format(m=members[option], e=exc))
+    try:
+        onlineapp.login(change_option, delete_foreign_apps)
+    except Exception as exc:
+        raise RuntimeError(
+            "login({o}) failed: {c}: {m}".format(
+                o=members[option], c=type(exc).__name__,
+                m=str(exc)[:200]))
+    log("OK", "login complete (OnlineChangeOption.{m}) - session stays "
+        "open; logout with ecockpit_disconnect".format(m=members[option]))
+    return {"logged_in": True, "via": members[option],
+            "delete_foreign_apps": delete_foreign_apps,
+            "stays_connected": True}
+
+
+def cmd_source_download(project, args):
+    """Push the SOURCE project to the PLC (device.download_source).
+
+    CONFIRM-GATED - it writes to the PLC. Deliberately not the same as
+    ecockpit_download (which deploys the compiled application): this
+    ships the source archive so the PLC carries its own sources.
+    Saves the open project FIRST (best-effort, same as cmd_snapshot):
+    live 2026-10-21 - with unsaved changes the engine NRE'd; after the
+    user saved (GUI prompt) the same operation uploaded fine, so we
+    save by default.
+    The source push lives on the ScriptOnlineDevice (created via
+    online.create_online_device) as download_source(bCompact,
+    additional_items) - ScriptLib stubs; the online APPLICATION's
+    source_download() NREs (wrong object, live 2026-10-21).
+    """
+    if not args.get("confirm"):
+        raise RuntimeError("source_download REFUSED - requires "
+                           "args.confirm=true (it writes the source "
+                           "project to the PLC)")
+    log("INFO", "saving the open project first (source_download needs a "
+                "saved project)")
+    try:
+        project.save()
+        log("OK", "project saved")
+    except Exception as exc:
+        # LIVE 2026-10-21: "Current project is stored with a temporary
+        # file-name" = the project was never saved as a .ecp. Proceeding
+        # is still correct when a human can answer the engine's save
+        # prompt in the GUI (that is exactly the flow that uploaded
+        # fine); unattended runs will NRE instead.
+        log("WARN", "pre-save failed (continuing - if e!COCKPIT shows a "
+            "save dialog, answer it there; unattended runs will likely "
+            "fail): {e}".format(e=exc))
+    user, pw = _require_creds()
+    online.set_default_credentials(user, pw)
+    device_obj = get_device(project, args.get("device", ""))
+    odev = _create_online_device(project, args)
+    try:
+        try:
+            odev.connect()
+            log("INFO", "online device connected")
+        except Exception as exc:
+            log("WARN", "online device connect failed (download_source "
+                "may still work): {e}".format(e=exc))
+        errors = []
+        try:
+            odev.download_source(False, None)
+            log("OK", "source project written to the PLC "
+                "(download_source)")
+            return {"source_download": True, "via": "download_source"}
+        except Exception as exc:
+            errors.append("download_source: {c}: {m}".format(
+                c=type(exc).__name__, m=str(exc)[:200]))
+            log("WARN", "download_source failed: {e}".format(
+                e=str(exc)[:200]))
+        # Fallback: the online APPLICATION's source_download (NRE'd live
+        # 2026-10-21 - kept as a last rung for other builds).
+        onlineapp = online.create_online_application(
+            get_application(project))
+        try:
+            onlineapp.source_download()
+            log("OK", "source project written to the PLC "
+                "(source_download fallback)")
+            return {"source_download": True, "via": "source_download"}
+        except Exception as exc:
+            errors.append("source_download: {c}: {m}".format(
+                c=type(exc).__name__, m=str(exc)[:200]))
+        raise RuntimeError("source push failed:\n  " +
+                           "\n  ".join(errors))
+    finally:
+        try:
+            odev.Dispose()
+        except Exception:
+            try:
+                odev.disconnect()
+            except Exception:
+                pass
+
+
+def cmd_prepared_values(project, args):
+    """Read back staged (prepared) and forced values from the online app.
+
+    args: {"expression": optional single variable} - with it, that
+    expression's staged value via get_prepared_value(expression);
+    without, every staged expression via get_prepared_expressions.
+    Also lists currently forced variables (get_forced_expressions).
+    Read-only - never touches the PLC state beyond the login.
+    """
+    device, onlineapp = _online_connect(project, args, prefer_keep=True)
+    try:
+        expression = str(args.get("expression", "")).strip()
+
+        def _staged_value(expr):
+            try:
+                return {"expression": str(expr),
+                        "value": str(onlineapp.get_prepared_value(expr))}
+            except Exception as exc:
+                return {"expression": str(expr),
+                        "error": str(exc)[:150]}
+
+        staged = []
+        if expression:
+            staged.append(_staged_value(expression))
+        else:
+            try:
+                exprs = list(onlineapp.get_prepared_expressions())
+            except Exception as exc:
+                exprs = []
+                log("WARN", "get_prepared_expressions failed: "
+                    "{e}".format(e=exc))
+            for expr in exprs:
+                staged.append(_staged_value(expr))
+        forced = []
+        try:
+            forced = [str(e) for e in onlineapp.get_forced_expressions()]
+        except Exception as exc:
+            log("WARN", "get_forced_expressions failed: {e}".format(e=exc))
+        log("OK", "prepared values: {s} staged, {f} forced".format(
+            s=len(staged), f=len(forced)))
+        return {"staged": staged, "forced": forced}
+    finally:
+        _online_disconnect(device)
 
 
 def cmd_write(project, args):
@@ -1685,7 +1943,7 @@ def cmd_state(project, args):
     Direct-syntax attribute access throughout - getattr() fails on these
     .NET interop objects even for members that work via direct access.
     """
-    device, onlineapp = _online_connect(project, args)
+    device, onlineapp = _online_connect(project, args, prefer_keep=True)
     try:
         info = {}
         try:
@@ -1733,16 +1991,20 @@ def cmd_export(project, args, summary):
     """Export the application objects to PLCopen XML.
 
     args: {"dir": target directory} (default
-    <project root>/plcopensrc-export). The XML lands at
-    <dir>/<application>.xml - ONE PLCopen file, not the multi-file
-    Application.*.xml tree the import side reads. export_xml's `path`
-    is a FILE path (see _export_target_path). Ladder: 4-arg call, 5-arg
-    IScriptProject2 retry on TypeError, then the string-return form
-    (path=None -> the CHM guarantees the whole XML as the return value)
-    written by us. Reporter errors/warnings count into the command
-    summary (import parity). The reporter must subclass the REAL
-    injected interface - exposed as `ExportReporter`, NOT
-    `IExportReporter` (see _export_reporter_base).
+    <project root>/plcopensrc-export). Exports TWO files:
+    <dir>/<application>.xml (the whole application) and
+    <dir>/<application>.Library Manager.xml (the application-scope
+    Library Manager - owner-directed LM reconciliation 2026-10-21: the
+    LM XML must reach plcopensrc/ like the POUs do, it carries the
+    library-reference state the application compiles against).
+    export_xml's `path` is a FILE path (see _export_target_path).
+    Ladder per file: 4-arg call, 5-arg IScriptProject2 retry on
+    TypeError, then the string-return form (path=None -> the CHM
+    guarantees the whole XML as the return value) written by us.
+    Reporter errors/warnings count into the command summary (import
+    parity). The reporter must subclass the REAL injected interface -
+    exposed as `ExportReporter`, NOT `IExportReporter` (see
+    _export_reporter_base).
     """
     out_dir = args.get("dir") or ""
     if not out_dir and PROJECT_ROOT:
@@ -1753,35 +2015,132 @@ def cmd_export(project, args, summary):
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
     app = get_application(project)
-    target = _export_target_path(out_dir, _short_name(app))
     reporter = make_export_reporter(summary)
 
-    mode = "file"
-    try:
+    def _export_one(objs, target):
+        """One export_xml ladder. Returns the mode string."""
         try:
-            project.export_xml(reporter, [app], target, True)
-        except TypeError:
-            log("INFO", "retrying export_xml with folder-structure arg "
-                        "(IScriptProject2 overload)")
-            project.export_xml(reporter, [app], target, True, True)
-        if not os.path.isfile(target):
-            raise RuntimeError("export_xml reported success but wrote no "
-                               "file: {t}".format(t=target))
-    except Exception as exc:
-        log("INFO", "file-based export failed ({c}: {m}) - falling back "
-                    "to the string-return form".format(
-                        c=type(exc).__name__, m=str(exc)[:160]))
-        xml = project.export_xml(reporter, [app], None, True)
-        with open(target, "wb") as fh:
-            fh.write(_to_bytes(xml))
-        mode = "string-fallback"
+            try:
+                project.export_xml(reporter, objs, target, True)
+            except TypeError:
+                log("INFO", "retrying export_xml with folder-structure arg "
+                            "(IScriptProject2 overload)")
+                project.export_xml(reporter, objs, target, True, True)
+            if not os.path.isfile(target):
+                raise RuntimeError("export_xml reported success but wrote no "
+                                   "file: {t}".format(t=target))
+        except Exception as exc:
+            log("INFO", "file-based export failed ({c}: {m}) - falling back "
+                        "to the string-return form".format(
+                            c=type(exc).__name__, m=str(exc)[:160]))
+            xml = project.export_xml(reporter, objs, None, True)
+            with open(target, "wb") as fh:
+                fh.write(_to_bytes(xml))
+            return "string-fallback"
+        return "file"
 
+    jobs = [([app], _export_target_path(out_dir, _short_name(app)))]
+    try:
+        lms = app.find("Library Manager", True)
+    except Exception:
+        lms = None
+    n_lm = 0
+    if lms is not None:
+        try:
+            n_lm = lms.Count
+        except Exception:
+            n_lm = len(lms) if isinstance(lms, (list, tuple)) else 0
+    for i in range(n_lm):
+        try:
+            lm = lms[i]
+            lm_name = "{}.{}".format(_short_name(app), _short_name(lm))
+            jobs.append(([lm], _export_target_path(out_dir, lm_name)))
+        except Exception:
+            continue
+
+    modes = []
+    for objs, target in jobs:
+        modes.append(_export_one(objs, target))
+
+    target, mode = jobs[0][1], modes[0]
     files = sorted(glob.glob(os.path.join(out_dir, "*.xml")))
     size = os.path.getsize(target) if os.path.isfile(target) else None
-    log("OK", "export wrote {t} ({b} bytes, mode {m}, {e} error(s))".format(
-        t=target, b=size, m=mode, e=summary["errors"]))
+    log("OK", "export wrote {n} file(s) ({b} bytes for the first, modes "
+              "{m}, {e} error(s))".format(
+        n=len(jobs), b=size, m=modes, e=summary["errors"]))
     return {"dir": out_dir, "file": target, "mode": mode, "bytes": size,
             "xml_files": len(files), "first_files": files[:10]}
+
+
+def _plcfs_member(holder, name):
+    """Fetch one plcfs member by literal name.
+
+    getattr() is unreliable on the interop wrappers (false negatives per
+    the gotcha at the top of this file), so every candidate gets its own
+    direct-access branch. Raises AttributeError when the member is not
+    present.
+    """
+    if name == "get_file_list_of_directory":
+        return holder.get_file_list_of_directory
+    if name == "get_files_of_directory":
+        return holder.get_files_of_directory
+    if name == "get_file_list":
+        return holder.get_file_list
+    if name == "get_directory_listing":
+        return holder.get_directory_listing
+    if name == "list_files":
+        return holder.list_files
+    if name == "get_files":
+        return holder.get_files
+    if name == "download_file":
+        return holder.download_file
+    if name == "upload_file":
+        return holder.upload_file
+    if name == "delete_file":
+        return holder.delete_file
+    raise AttributeError(name)
+
+
+_LS_CANDIDATES = ("get_file_list_of_directory", "get_files_of_directory",
+                  "get_file_list", "get_directory_listing", "list_files",
+                  "get_files")
+_FILE_CANDIDATES = {"get": ("download_file",), "put": ("upload_file",),
+                    "rm": ("delete_file",)}
+
+
+def _create_online_device(project, args):
+    """ScriptOnlineDevice via online.create_online_device - the holder
+    of the PLC file API + source archive (ScriptLib stubs). Ladder: the
+    no-arg form (per stubs: the engine then uses the device of the
+    active application), then the device's ScriptObject via
+    project.find (the raw interop device from project.devices is
+    REJECTED - "expected IExtendedObject[IScriptObject]"). Callers
+    must Dispose() the result.
+    """
+    try:
+        odev = online.create_online_device()
+        log("INFO", "created online device (active application's device)")
+        return odev
+    except Exception as exc:
+        attempts = ["no-arg: {e}".format(e=str(exc)[:140])]
+    device = get_device(project, args.get("device", ""))
+    name = _short_name(device)
+    if name.startswith("Name="):
+        name = name[len("Name="):].strip() or "Device"
+    found = project.find(name, True)
+    if not found:
+        raise RuntimeError("create_online_device failed: " +
+                           "; ".join(attempts) +
+                           " - and project.find found no device named "
+                           "'{n}'".format(n=name))
+    try:
+        odev = online.create_online_device(found[0])
+        log("INFO", "created online device (device ScriptObject)")
+        return odev
+    except Exception as exc:
+        raise RuntimeError("create_online_device failed in both forms: " +
+                           "; ".join(attempts) + "; script-object form: "
+                           "{e}".format(e=str(exc)[:160]))
 
 
 def cmd_plcfs(project, args):
@@ -1800,76 +2159,161 @@ def cmd_plcfs(project, args):
     if op in ("put", "rm") and not args.get("confirm"):
         raise RuntimeError("plcfs {o} REFUSED - requires args.confirm=true "
                            "(it modifies files on the PLC)".format(o=op))
-    device, onlineapp = _online_connect(project, args)
+    user, pw = _require_creds()
+    online.set_default_credentials(user, pw)
+    device_obj = get_device(project, args.get("device", ""))
+    # LIVE 2026-10-21 (ScriptLib stubs + reflection): the PLC file API
+    # lives on the ScriptOnlineDevice created via
+    # online.create_online_device() - NOT on the project-tree device
+    # object (EScriptDevice: 32 members, none file-related).
+    odev = _create_online_device(project, args)
+    conn_state = [False]
+
+    def _ensure_connected():
+        try:
+            if bool(odev.connected):
+                return
+        except Exception:
+            pass
+        try:
+            odev.connect()
+            conn_state[0] = True
+            log("INFO", "online device connected")
+        except Exception as exc:
+            log("WARN", "online device connect failed (ops may still "
+                "work): {e}".format(e=exc))
+
+    def _dispose():
+        try:
+            odev.Dispose()
+        except Exception:
+            try:
+                odev.disconnect()
+            except Exception:
+                pass
+
     try:
         if op == "ls":
             remote_dir = args.get("remote", "/")
-            infos = device.get_file_list_of_directory(remote_dir)
-            out = []
-            for fi in infos:
-                entry = {"name": ""}
-                for attr in ("name", "is_directory", "is_file", "size",
-                             "last_modification_time"):
+            # LIVE 2026-10-22: the connected device refused "/" with
+            # "Get directory entries failed" - PLC layouts vary, so on
+            # failure we probe well-known directories and report which
+            # one listed.
+            dir_candidates = [remote_dir]
+            for candidate in ("/", "/tmp", "/PlcLogic", "."):
+                if candidate not in dir_candidates:
+                    dir_candidates.append(candidate)
+            last_errors = []
+            for name in _LS_CANDIDATES:
+                try:
+                    fn = _plcfs_member(odev, name)
+                except AttributeError:
+                    continue
+                _ensure_connected()
+                for attempt_dir in dir_candidates:
                     try:
-                        if attr == "name":
-                            entry["name"] = str(fi.name)
-                        elif attr == "is_directory":
-                            entry["is_directory"] = bool(fi.is_directory)
-                        elif attr == "is_file":
-                            entry["is_file"] = bool(fi.is_file)
-                        elif attr == "size":
-                            entry["size"] = str(fi.size)
-                        elif attr == "last_modification_time":
-                            entry["last_modification_time"] = \
-                                str(fi.last_modification_time)
-                    except Exception:
+                        infos = fn(attempt_dir)
+                    except TypeError as exc:
+                        # member exists but rejected (dir) - keep it in
+                        # the log, try the next candidate
+                        log("INFO", "plcfs: odev.{n} rejected the "
+                            "arguments: {e}".format(n=name, e=exc))
+                        last_errors.append("odev.{n}: {e}".format(
+                            n=name, e=str(exc)[:120]))
+                        break
+                    except Exception as exc:
+                        log("INFO", "plcfs: odev.{n}({d}) failed: "
+                            "{e}".format(n=name, d=attempt_dir,
+                                         e=str(exc)[:120]))
+                        last_errors.append("odev.{n}({d}): {e}".format(
+                            n=name, d=attempt_dir, e=str(exc)[:120]))
                         continue
-                out.append(entry)
-            log("OK", "plcfs ls {d}: {n} entries".format(
-                d=remote_dir, n=len(out)))
-            return {"dir": remote_dir, "entries": out}
-        if op == "get":
+                    out = []
+                    for fi in infos:
+                        entry = {"name": ""}
+                        for attr in ("name", "is_directory", "is_file",
+                                     "size", "last_modification_time"):
+                            try:
+                                if attr == "name":
+                                    entry["name"] = str(fi.name)
+                                elif attr == "is_directory":
+                                    entry["is_directory"] = \
+                                        bool(fi.is_directory)
+                                elif attr == "is_file":
+                                    entry["is_file"] = bool(fi.is_file)
+                                elif attr == "size":
+                                    entry["size"] = str(fi.size)
+                                elif attr == "last_modification_time":
+                                    entry["last_modification_time"] = \
+                                        str(fi.last_modification_time)
+                            except Exception:
+                                continue
+                        out.append(entry)
+                log("OK", "plcfs ls {d} via create_online_device.{n}: "
+                    "{c} entries".format(d=attempt_dir, n=name, c=len(out)))
+                return {"dir": attempt_dir, "requested_dir": remote_dir,
+                        "via": "create_online_device.{n}".format(n=name),
+                        "entries": out}
+            raise RuntimeError(
+                "no file-listing member worked on the ScriptOnlineDevice "
+                "(created via online.create_online_device; stubs confirm "
+                "get_file_list_of_directory on it - if you see this, the "
+                "runtime object differs from the stub). Probed: "
+                "{c}.".format(c=", ".join(_LS_CANDIDATES)))
+        if op in ("get", "put", "rm"):
             remote = args.get("remote", "")
             local = args.get("local", "")
-            if not remote or not local:
-                raise RuntimeError('plcfs get needs args.remote (PLC path) '
-                                   'and args.local (host path)')
-            d = os.path.dirname(local)
-            if d and not os.path.isdir(d):
-                os.makedirs(d)
-            device.download_file(local, remote, True)
-            log("OK", "plcfs get {r} -> {l}".format(r=remote, l=local))
-            return {"remote": remote, "local": local,
-                    "bytes": os.path.getsize(local) if
-                    os.path.isfile(local) else None}
-        if op == "put":
-            remote = args.get("remote", "")
-            local = args.get("local", "")
-            if not remote or not local:
-                raise RuntimeError('plcfs put needs args.local (host path) '
-                                   'and args.remote (PLC path)')
-            if not os.path.isfile(local):
-                raise RuntimeError("local file not found: {l}".format(
-                    l=local))
-            device.upload_file(remote, local, True)
-            log("OK", "plcfs put {l} -> {r}".format(l=local, r=remote))
-            return {"local": local, "remote": remote}
-        if op == "rm":
-            remote = args.get("remote", "")
-            if not remote:
+            if op in ("get", "put") and (not remote or not local):
+                raise RuntimeError("plcfs {o} needs args.remote (PLC path) "
+                                   "and args.local (host path)".format(o=op))
+            if op == "rm" and not remote:
                 raise RuntimeError("plcfs rm needs args.remote (PLC path)")
-            device.delete_file(remote)
-            log("OK", "plcfs rm {r}".format(r=remote))
+            fn = None
+            for name in _FILE_CANDIDATES[op]:
+                try:
+                    fn = (name, _plcfs_member(odev, name))
+                    break
+                except AttributeError:
+                    continue
+            if fn is None:
+                raise RuntimeError(
+                    "no {o} member on the ScriptOnlineDevice (probed "
+                    "{c})".format(o=_FILE_CANDIDATES[op][0],
+                                  c=", ".join(_FILE_CANDIDATES[op])))
+            member_name, member = fn
+            _ensure_connected()
+            if op == "get":
+                d = os.path.dirname(local)
+                if d and not os.path.isdir(d):
+                    os.makedirs(d)
+                member(local, remote, True)
+                log("OK", "plcfs get {r} -> {l} via {n}".format(
+                    r=remote, l=local, n=member_name))
+                return {"remote": remote, "local": local,
+                        "bytes": os.path.getsize(local) if
+                        os.path.isfile(local) else None}
+            if op == "put":
+                if not os.path.isfile(local):
+                    raise RuntimeError("local file not found: {l}".format(
+                        l=local))
+                member(remote, local, True)
+                log("OK", "plcfs put {l} -> {r} via {n}".format(
+                    l=local, r=remote, n=member_name))
+                return {"local": local, "remote": remote}
+            member(remote)
+            log("OK", "plcfs rm {r} via {n}".format(r=remote, n=member_name))
             return {"deleted": remote}
     finally:
-        _online_disconnect(device)
+        _dispose()
 
 
 def cmd_upload_source(project, args):
     """Upload (read back) the source project archive from the PLC.
 
     args: {"path": host archive path} (default <work dir>/
-    plc_source_upload.projectarchive). IScriptOnlineDevice3.
+    plc_source_upload.projectarchive). Lives on the ScriptOnlineDevice
+    (online.create_online_device) - the CHM's IScriptOnlineDevice3
+    section; the project-tree device object never had it.
     """
     path = args.get("path", "")
     if not path:
@@ -1877,14 +2321,29 @@ def cmd_upload_source(project, args):
     d = os.path.dirname(path)
     if d and not os.path.isdir(d):
         os.makedirs(d)
-    device, onlineapp = _online_connect(project, args)
+    user, pw = _require_creds()
+    online.set_default_credentials(user, pw)
+    device_obj = get_device(project, args.get("device", ""))
+    odev = _create_online_device(project, args)
     try:
-        device.upload_source(path)
+        try:
+            odev.connect()
+            log("INFO", "online device connected")
+        except Exception as exc:
+            log("WARN", "online device connect failed (upload_source may "
+                "still work): {e}".format(e=exc))
+        odev.upload_source(path)
         log("OK", "source archive written to {p}".format(p=path))
         return {"path": path, "bytes": os.path.getsize(path) if
                 os.path.isfile(path) else None}
     finally:
-        _online_disconnect(device)
+        try:
+            odev.Dispose()
+        except Exception:
+            try:
+                odev.disconnect()
+            except Exception:
+                pass
 
 
 def cmd_save_archive(project, args):
@@ -1931,9 +2390,9 @@ def cmd_save_archive(project, args):
         os.makedirs(d)
 
     forms = [
-        (1, (path,)),
-        (2, (path, None)),
-        (3, (path, None, None, None)),
+        (1, (path,), {}),
+        (2, (path, None), {}),
+        (3, (path, None, None, None), {}),
     ]
     if ArchiveCategories is not None:
         # direct member access only - getattr() fails on the interop
@@ -1949,14 +2408,20 @@ def cmd_save_archive(project, args):
                 log("INFO", "ArchiveCategories.{p} unavailable: "
                     "{e}".format(p=prop, e=exc))
                 continue
-            forms.append((len(forms) + 1, (path, "", category)))
+            forms.append((len(forms) + 1, (path, "", category), {}))
+    # NAMED-ARGS rung (post-save-retest): positional forms NRE'd in all
+    # shapes even with a saved, named project - the named IScriptProject9
+    # form may bind the overload positional calls cannot disambiguate.
+    forms.append((len(forms) + 1, (), {
+        "path": path, "comment": None, "additional_files": None,
+        "additional_categories": None}))
     attempts = []
-    for number, argv in forms:
+    for number, argv, kwargs in forms:
         log("INFO", "save_archive: trying form {n} "
             "save_archive(path{dots})".format(
                 n=number, dots=", None" * (number - 1)))
         try:
-            project.save_archive(*argv)
+            project.save_archive(*argv, **kwargs)
         except Exception as exc:
             attempts.append("form {n}: {c}: {m}".format(
                 n=number, c=type(exc).__name__, m=str(exc)[:200]))
@@ -2696,7 +3161,8 @@ KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
                   "clear_messages",
                   "libs", "lib_find", "lib_install", "lib_uninstall",
                   "repos", "repo_add", "repo_remove", "repo_update",
-                  "repo_move")
+                  "repo_move",
+                  "login", "source_download", "prepared_values")
 
 
 def run_command(request):
@@ -2836,6 +3302,19 @@ def run_command(request):
             summary["ok"] = True
         elif cmd == "repo_move":
             result["value"] = cmd_repo_move(args)
+            summary["ok"] = True
+        elif cmd == "login":
+            # Online-change control: login and STAY connected.
+            project = get_project()
+            result["value"] = cmd_login(project, args)
+            summary["ok"] = True
+        elif cmd == "source_download":
+            project = get_project()
+            result["value"] = cmd_source_download(project, args)
+            summary["ok"] = True
+        elif cmd == "prepared_values":
+            project = get_project()
+            result["value"] = cmd_prepared_values(project, args)
             summary["ok"] = True
         else:
             raise RuntimeError("unknown command '{c}' (known: {k})".format(

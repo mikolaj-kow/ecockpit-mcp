@@ -110,24 +110,21 @@ Build log rendering used by the executor:
   with the CHM's 1-arg signature) — the executor's export callbacks
   take `*argv` and log everything.
 - `save_archive(path)` — single-file `.projectarchive` backup
-  (NO MCP tool — removed, see the verdict). **VERDICT (live 2026-10-21, e!COCKPIT
-  11.3.1.0): BROKEN in this build — do not rely on it.** Every binding
-  NREs inside the engine with `Object reference not set`: the 1-arg
-  form, `(path, None)`, the IScriptProject9 `(path, None, None, None)`
-  (which IronPython first rejects with `Multiple targets could match`
-  across the 7 overlapping IScriptProject8/9 overloads), and the fully
-  disambiguated `(path, "", ArchiveCategories.default|.none)` via the
-  injected **`ArchiveCategories`** global. Binding quirks worth
-  remembering: IronPython needs a TYPED argument in the category slot
-  (None leaves multiple overloads matching; a lone category into
-  `IEnumerable` slots casts badly). The executor's `save_archive`
-  command keeps the probe ladder + full attempt log so a fixed engine
-  self-heals, and points at `ecockpit_snapshot` (plain `.ecp` copy —
-  works live) for
-  backups today. The MCP tool is **disabled at the server layer** — it
-  returns the explanation without touching the relay (the executor
-  ladder remains for file-protocol users and self-heals if the engine
-  gets fixed).
+  (NO MCP tool — removed, see the verdict). **VERDICT (live 2026-10-21
+  + 10-22 retest, e!COCKPIT 11.3.1.0): BROKEN in this build — do not
+  rely on it.** Every binding NREs inside the engine with
+  `Object reference not set`: the 1-arg form, `(path, None)`, the
+  IScriptProject9 `(path, None, None, None)` (which IronPython first
+  rejects with `Multiple targets could match` across the 7 overlapping
+  IScriptProject8/9 overloads), the fully disambiguated
+  `(path, "", ArchiveCategories.default|.none)` via the injected
+  **`ArchiveCategories`** global, and the named-args IScriptProject9
+  form — **retested AFTER the project was saved/named**: unlike
+  `source_download` (which needed exactly that), the NREs persist, so
+  the unnamed project explains `source_download` but NOT
+  `save_archive`. The executor's ladder + attempt log stay (self-heals
+  if WAGO fixes the engine); `ecockpit_snapshot` (plain `.ecp` copy —
+  works live) is the backup path.
 - `path` — the on-disk project path (prefer over disk-searching).
 - `active_application`, `devices`, `find(name, recursive=True)`,
   `get_device(name)`, `get_children(...)`.
@@ -137,6 +134,15 @@ Build log rendering used by the executor:
 - `online.create_online_application(app)` → online app:
   `read_value("path.to.var")`, `create_boot_application()` (download while
   online), login/logout variants.
+- **`device.connect()` DEPLOYS (live 2026-10-21)**: a plain connect
+  performed an implicit login-WITH-DOWNLOAD of the open application
+  during a read-only `plc_ls` — "days of untested code went live".
+  FIXED: every online command now logs in via the
+  `_online_login` ladder — `onlineapp.login(OnlineChangeOption,
+  delete_foreign_apps)` with read-only commands preferring
+  **`OnlineChangeOption.Keep`** (stub-only: "Do not online update. Do
+  not download. Keep as it is."), deploy commands Try → Force → Never
+  → connect fallback.
 - `online.set_default_credentials(user, password)`; also
   `set_specific_credentials`, `clear_all_credentials`, `gateways`.
 - `device.connect()` / `disconnect()` / `start()` / `stop()` /
@@ -145,8 +151,16 @@ Build log rendering used by the executor:
 - `forced_disconnect()` (IScriptOnlineDevice2) — logout that cannot hang;
   exposed as `ecockpit_disconnect(force=true)`.
 - `IScriptOnlineApplication.login(OnlineChangeOption, delete_foreign_apps)`
-  exists per docs (richer than the WAGO samples show) — candidate for
-  explicit online-change control later.
+  — EXPOSED (live 2026-10-21): `ecockpit_login` (option
+  `try`/`force`/`never`/`auto`, confirm-gated, session stays open), and
+  it is the login path for every online command. `OnlineChangeOption`
+  per CHM: `Never` (0, online change never → full download forced),
+  `Try` (1, online change if possible else full download), `Force`
+  (2, online change or nothing). Reflected live: `login`/`logout`
+  exist on the online application. Background: plain
+  `device.connect()` performed an implicit login-WITH-DOWNLOAD of the
+  open application during a read-only `plc_ls` — the ladder
+  (`_online_login`: Try → Force → Never → connect) replaced it.
 
 ### Prepared values — online writes (→ `ecockpit_write` / `ecockpit_unforce_all`)
 
@@ -157,23 +171,54 @@ literal STRING: `"TRUE"`, `"42"`, `"'text'"`); then exactly one of:
 - `force_prepared_values()` — values stay forced,
 - `unforce_all_values()` — release all forces.
 
-Readbacks: `get_prepared_value(expression)`, `get_prepared_expressions()`.
+Readbacks: `get_prepared_value(expression)`, `get_prepared_expressions()`,
+`get_forced_expressions()` (currently forced variables) — EXPOSED as the
+read-only `ecockpit_prepared_values` tool.
 State properties: `is_logged_in`, `application_state` (ApplicationState),
 `operation_state` (OperatingState), `timeout` (→ `ecockpit_state`).
-`source_download()` writes the source project to the PLC (NOT exposed —
-`ecockpit_download` covers the app-deployment case).
+`source_download()` writes the source project to the PLC — EXPOSED as
+`ecockpit_source_download` (confirm-gated; distinct from
+`ecockpit_download`, which deploys the compiled application).
+**LIVE 2026-10-21**: the member exists, but NREs
+("Object reference not set") when the project has UNSAVED changes —
+`cmd_source_download` therefore runs `project.save()` first
+(best-effort, same as the snapshot command), after which the same call
+uploaded fine (user-verified).
 
-### PLC file system (IScriptOnlineDevice4 → `ecockpit_plc_ls/get/put/rm`)
+### PLC file system (ScriptOnlineDevice via `online.create_online_device()` → `ecockpit_plc_ls/get/put/rm`)
 
-MIND THE ARGUMENT ORDER (from the CHM):
+**CORRECTED (2026-10-22, ScriptLib stubs at `...\CODESYS\ScriptLib\
+Stubs\scriptengine\ScriptOnline.pyi`)**: the file API EXISTS — but on
+the **`ScriptOnlineDevice` created by `online.create_online_device()`**,
+NOT on the project-tree device object (`EScriptDevice` — 32 members,
+none file-related; our first reflection round targeted the wrong
+object). `OnlineChangeOption.Keep = 3` is also stub-only (not in the
+CHM): "Try to login. Do not online update. Do not download. Keep as it
+is." — the safe login for read-only commands.
 
-- `download_file(local_file, remote_file, force_overwrite)` — PLC → host
-  (local first!)
-- `upload_file(remote_file, local_file, force_overwrite)` — host → PLC
-  (remote first!)
-- `get_file_list_of_directory(remote_dir)` → `IScriptDirectoryInfo[]`
+`ScriptOnlineDevice` members (3.5.9.0+ for the file block; connect/
+disconnect/connected/shared_connected/forced_disconnect also on it —
+it keeps an internal connection, so **Dispose() it when done**):
+
+- `get_file_list_of_directory(remote_directory)` → dir info objects
   (`name`, `is_directory`, `is_file`, `size`, `last_modification_time`)
-- `delete_file(remote_file)`
+- `download_file(local_file, remote_file, force_overwrite)` — PLC →
+  host (local first!)
+- `upload_file(remote_file, local_file, force_overwrite)` — host → PLC
+- `delete_file(remote_file)`, `rename_file`, `create_directory`,
+  `rename_directory`, `delete_directory(remote_directory, recursive)`
+- `download_source(bCompact=False, additional_items=None)` — push the
+  source archive TO the PLC (→ `ecockpit_source_download`)
+- `upload_source(archive_path)` — read the source archive back
+  (→ `ecockpit_upload_source`)
+- plus `reset_origin()`, `create_user_management(...)`,
+  `activate_license(...)`, `change_user_password(...)`,
+  `current_logged_on_username`
+
+EARLIER (still true): the project-tree `EScriptDevice` has no file
+members, and `onlineapp.source_download()` (online APPLICATION object)
+NREs — the executor's first plc_ls run failed on exactly that wrong
+object.
 
 `upload_source(archive_path)` (IScriptOnlineDevice3) reads the source
 project archive back from the PLC (→ `ecockpit_upload_source`).

@@ -384,3 +384,15 @@ def test_save_archive_ladder(tmp_path):
     liar.save_archive = lambda *a: None
     with pytest.raises(RuntimeError, match="ecockpit_snapshot"):
         ex.cmd_save_archive(liar, {"path": str(tmp_path / "d.parch")})
+
+
+def test_online_commands_reach_dispatch_without_unbound_project():
+    # regression: the dispatch branches for login / source_download /
+    # prepared_values must call get_project() before using it (live
+    # 2026-10-21: UnboundLocalError because the branch referenced the
+    # dispatcher-local `project` without assigning it)
+    for cmd in ("login", "source_download", "prepared_values"):
+        out = ex.run_command({"id": "t-" + cmd, "cmd": cmd,
+                              "args": {"confirm": True}})
+        assert "referenced before assignment" not in (out.get("error") or "")
+        assert out["error"], "expected a real offline error (no project)"
