@@ -313,6 +313,18 @@ feat/scriptlib-tools:
   `write_online_value(value)`, enums (`allowed_values`), ranges,
   struct sub-elements. → `ecockpit_device_params` (write is
   confirm-gated, PLC-touching).
+- **IO mappings** (ScriptDeviceParameters 3.5.8.0 +
+  ScriptDeviceObject): elements carry `is_mappable_io` →
+  `io_mapping` (ScriptIoMapping: `variable` get/set — unqualified
+  creates a new variable, qualified maps to an existing one;
+  `default_variable`; `mapping_creates_variable`;
+  `maps_to_existing_variable`; `automatic_iec_address` get/set;
+  `manual_iec_address` get/set — setting an address switches auto
+  off, setting None switches it back on) and
+  `dev.export_io_mappings_as_csv(file_path)` /
+  `dev.import_io_mappings_from_csv(file_path)` (absolute host paths).
+  → `ecockpit_device_io` (mappings inspection read-only;
+  set_mapping / import_csv confirm-gated).
 - **Application** (ScriptApplication, 3.5.10.0 fields): `is_uptodate`,
   `is_online_change_possible`, `create_boot_application(path,
   update_compile_info=False, write_visu_files=False)` (offline boot

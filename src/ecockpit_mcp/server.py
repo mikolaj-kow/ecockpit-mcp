@@ -154,6 +154,7 @@ _TIMEOUTS = {
     "device_comm": 120,
     "device_info": 120,
     "device_params": 180,
+    "device_io": 300,
     "app_control": 300,
     "project_control": 300,
     "clear_messages": 60,
@@ -1308,6 +1309,77 @@ def ecockpit_device_info(op: str = "identification", device: str = "",
             args["show_io_warnings_as_errors"] = bool(
                 show_io_warnings_as_errors)
     return json.dumps(_run("device_info", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="IO mapping inspection + CSV round-trip. op=mappings "
+                "(read-only): every mappable parameter element with its "
+                "io_mapping (variable, default_variable, "
+                "mapping_creates_variable, maps_to_existing_variable, "
+                "automatic_iec_address, manual_iec_address); "
+                "connector_id scopes to one connector. op=set_mapping "
+                "(DESTRUCTIVE - requires explicit owner request + "
+                "confirm): set variable and/or manual_iec_address "
+                "(automatic=true resets to the automatic address) on a "
+                "parameter's elements (name or id, optional element). "
+                "op=export_csv {file?}: export the device's IO mappings "
+                "to CSV (default <ECP_PROJECT_ROOT>/io-mappings/"
+                "<device>_io_mappings.csv). op=import_csv {file, "
+                "confirm}: DESTRUCTIVE - import IO mappings from a CSV "
+                "(modifies the IO configuration).")
+def ecockpit_device_io(op: str = "mappings", device: str = "",
+                       connector_id: int = None, name: str = "",
+                       id: int = None, element: str = "",
+                       variable: str = "", manual_iec_address: str = "",
+                       automatic: bool = False, file: str = "",
+                       confirm: bool = False,
+                       timeout_s: int = 300) -> str:
+    if op not in ("mappings", "set_mapping", "export_csv", "import_csv"):
+        raise ValueError("op must be mappings|set_mapping|export_csv|"
+                         "import_csv")
+    if op in ("set_mapping", "import_csv") and not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "device_io {o} refused - it modifies the IO "
+                     "configuration; call again with confirm=true only "
+                     "on an explicit owner request".format(o=op),
+        }, indent=2)
+    args = {"op": op}
+    if device:
+        args["device"] = device
+    if connector_id is not None:
+        args["connector_id"] = int(connector_id)
+    if op == "set_mapping":
+        if not name and id is None:
+            raise ValueError("name or id required for op=set_mapping")
+        if not variable and not manual_iec_address and not automatic:
+            raise ValueError("variable and/or manual_iec_address/"
+                             "automatic required for op=set_mapping")
+        if name:
+            args["name"] = name
+        if id is not None:
+            args["id"] = int(id)
+        if element:
+            args["element"] = element
+        if variable:
+            args["variable"] = variable
+        if manual_iec_address:
+            args["manual_iec_address"] = manual_iec_address
+        if automatic:
+            args["automatic"] = True
+        args["confirm"] = True
+    if op == "export_csv" and file:
+        args["file"] = file
+    if op == "import_csv":
+        if not file:
+            raise ValueError("file required for op=import_csv")
+        args["file"] = file
+    return json.dumps(_run("device_io", args, timeout_s), indent=2)
 
 
 @mcp.tool(

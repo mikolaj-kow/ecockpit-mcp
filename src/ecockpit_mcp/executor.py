@@ -44,6 +44,9 @@ Commands (request = {"id": ..., "cmd": ..., "args": {...}}):
     device_info  device identification / simulation mode / driver info
                (bus cycle task, IO application, stop behaviour,
                diagnosis); the setters are confirm-gated
+    device_io  IO mapping inspection + CSV export/import
+               (export/import_io_mappings_as_csv); set_mapping and
+               import_csv are confirm-gated (modify the IO config)
     probe      dump dir() of the scripting API objects to
                tmp/logs/ecockpit_api_probe.txt (API-surface discovery).
 
@@ -4774,6 +4777,253 @@ def cmd_device_params(project, args):
                        '"write"')
 
 
+def _mapping_sets(dev, connector_id):
+    """(label, parameter set) pairs to walk for io mappings: the device
+    parameter set plus every connector's host_parameters - or just the
+    one named connector (ScriptDeviceParameters stub: mappings live on
+    ScriptDataElement.io_mapping, 3.5.8.0)."""
+    pairs = [("device", dev.device_parameters)]
+    if connector_id is not None:
+        conn = dev.connectors.by_id(int(connector_id))
+        return [("connector {c}".format(c=connector_id),
+                 conn.host_parameters)]
+    try:
+        for conn in dev.connectors:
+            try:
+                cid = str(conn.id)
+            except Exception:
+                cid = "?"
+            try:
+                pairs.append(("connector {c}".format(c=cid),
+                              conn.host_parameters))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return pairs
+
+
+def _mapping_summary(el):
+    """One element -> mapping summary dict, or None when it is not a
+    mappable IO (ScriptDataElement.is_mappable_io / .io_mapping)."""
+    try:
+        if not el.is_mappable_io:
+            return None
+    except Exception:
+        return None
+    entry = {"identifier": str(el.identifier)}
+    try:
+        entry["visible_name"] = str(el.visible_name)
+    except Exception:
+        pass
+    try:
+        m = el.io_mapping
+    except Exception:
+        m = None
+    if m is None:
+        entry["io_mapping"] = None
+        return entry
+    md = {}
+    for name, reader in (
+            ("id", lambda: str(m.Id)),
+            ("variable", lambda: str(m.variable)),
+            ("default_variable", lambda: str(m.default_variable)),
+            ("mapping_creates_variable",
+             lambda: bool(m.mapping_creates_variable)),
+            ("maps_to_existing_variable",
+             lambda: bool(m.maps_to_existing_variable)),
+            ("automatic_iec_address",
+             lambda: bool(m.automatic_iec_address)),
+            ("manual_iec_address", lambda: str(m.manual_iec_address)),
+    ):
+        try:
+            md[name] = reader()
+        except Exception:
+            md[name] = None
+    entry["io_mapping"] = md
+    return entry
+
+
+def _walk_mapping_elements(el, out):
+    """Depth-first collection of mappable elements (struct parameters
+    carry their mappings on sub-elements)."""
+    entry = _mapping_summary(el)
+    if entry is not None:
+        out.append(entry)
+    try:
+        if el.has_sub_elements:
+            for sub in el:
+                _walk_mapping_elements(sub, out)
+    except Exception:
+        pass
+
+
+def cmd_device_io(project, args):
+    """IO mapping inspection and CSV round-trip
+    (ScriptDeviceObject.export/import_io_mappings_as_csv, 3.5.8.0).
+
+    ops:
+      mappings    {device?, connector_id?} -> every mappable parameter
+                  element with its io_mapping (variable, default_variable,
+                  mapping_creates_variable, maps_to_existing_variable,
+                  automatic_iec_address, manual_iec_address) - read-only
+      set_mapping {device?, connector_id?, name?|id?, element?,
+                  variable?, manual_iec_address?, automatic?, confirm}
+                  -> set mapping.variable and/or manual_iec_address
+                  (automatic=true resets to the automatic address;
+                  CONFIRM-GATED - modifies the IO configuration)
+      export_csv  {device?, file?} -> export_io_mappings_as_csv (default
+                  <ECP_PROJECT_ROOT>/io-mappings/<device>_io_mappings.csv)
+      import_csv  {device?, file, confirm} -> import_io_mappings_from_csv
+                  (CONFIRM-GATED - modifies the IO configuration)
+    """
+    op = args.get("op", "mappings")
+    dev = _device_obj(project, args)
+
+    if op == "mappings":
+        out = []
+        for label, params in _mapping_sets(dev, args.get("connector_id")):
+            for param in params:
+                try:
+                    pname = str(param.name)
+                except Exception:
+                    pname = "?"
+                entries = []
+                try:
+                    for el in param:
+                        _walk_mapping_elements(el, entries)
+                except Exception:
+                    continue
+                for e in entries:
+                    e["parameter"] = pname
+                    e["source"] = label
+                out.extend(entries)
+        log("OK", "io mappings: {n} mappable element(s)".format(n=len(out)))
+        return {"device": _short_name(dev), "count": len(out),
+                "mappings": out}
+
+    if op == "set_mapping":
+        if not args.get("confirm"):
+            raise RuntimeError("device_io set_mapping REFUSED - requires "
+                               "args.confirm=true (it modifies the IO "
+                               "configuration)")
+        variable = args.get("variable")
+        set_auto = bool(args.get("automatic", False))
+        manual = args.get("manual_iec_address")
+        if variable is None and not set_auto and manual is None:
+            raise RuntimeError("device_io set_mapping needs args.variable "
+                               "and/or args.manual_iec_address / "
+                               "args.automatic")
+        pname = args.get("name", "")
+        pid = args.get("id")
+        for label, params in _mapping_sets(dev, args.get("connector_id")):
+            try:
+                if pid is not None:
+                    param = params.by_id(int(pid))
+                elif pname:
+                    param = params[pname]
+                else:
+                    continue
+            except Exception:
+                continue
+            break
+        else:
+            raise RuntimeError("device_io set_mapping needs args.name or "
+                               "args.id (of a parameter)")
+        target = str(args.get("element", "")).strip().lower()
+        results = []
+        for el in param:
+            if target and str(el.identifier).lower() != target:
+                continue
+            try:
+                m = el.io_mapping
+            except Exception:
+                m = None
+            if m is None:
+                continue
+            touched = {}
+            if variable is not None:
+                m.variable = str(variable)
+                touched["variable"] = str(variable)
+            if set_auto:
+                m.manual_iec_address = None
+                touched["manual_iec_address"] = None
+            elif manual is not None:
+                m.manual_iec_address = str(manual)
+                touched["manual_iec_address"] = str(manual)
+            readback = {}
+            for name, reader in (
+                    ("variable", lambda: str(m.variable)),
+                    ("automatic_iec_address",
+                     lambda: bool(m.automatic_iec_address)),
+                    ("manual_iec_address",
+                     lambda: str(m.manual_iec_address))):
+                try:
+                    readback[name] = reader()
+                except Exception:
+                    readback[name] = None
+            results.append({"identifier": str(el.identifier),
+                            "set": touched, "readback": readback})
+        if not results:
+            raise RuntimeError("no mappable element matched "
+                               "'{t}'".format(t=target or "<any>"))
+        ok = all(r["readback"].get("variable") is not None
+                 for r in results)
+        log("OK" if ok else "WARN",
+            "mapping set on {n} element(s): {u}".format(
+                n=len(results), u=sorted(
+                    k for r in results for k in r["set"])))
+        return {"parameter": str(param.name), "ok": ok,
+                "elements": results}
+
+    if op == "export_csv":
+        path = str(args.get("file", "") or "").strip()
+        if not path:
+            base = PROJECT_ROOT or WORK_DIR
+            if not base:
+                raise RuntimeError("device_io export_csv needs args.file "
+                                   "(or ECP_PROJECT_ROOT / ECP_WORK_DIR "
+                                   "for the default location)")
+            target_dir = os.path.join(base, "io-mappings")
+            if not os.path.isdir(target_dir):
+                os.makedirs(target_dir)
+            sane = _short_name(dev)
+            if sane.startswith("Name="):
+                sane = sane[len("Name="):]
+            sane = re.sub(r"[^A-Za-z0-9_.-]+", "_", sane).strip("_")
+            path = os.path.join(
+                target_dir, "{d}_io_mappings.csv".format(d=sane or "device"))
+        path = os.path.abspath(path)
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        dev.export_io_mappings_as_csv(path)
+        if not os.path.isfile(path):
+            raise RuntimeError("export_io_mappings_as_csv reported "
+                               "success but wrote no file: {p}".format(
+                                   p=path))
+        size = os.path.getsize(path)
+        log("OK", "io mappings exported: {p} ({n} bytes)".format(
+            p=path, n=size))
+        return {"device": _short_name(dev), "file": path, "bytes": size}
+
+    if op == "import_csv":
+        if not args.get("confirm"):
+            raise RuntimeError("device_io import_csv REFUSED - requires "
+                               "args.confirm=true (it modifies the IO "
+                               "configuration)")
+        path = str(args.get("file", "") or "").strip()
+        if not path or not os.path.isfile(path):
+            raise RuntimeError("device_io import_csv needs args.file of "
+                               "an existing CSV (got '{p}')".format(p=path))
+        dev.import_io_mappings_from_csv(os.path.abspath(path))
+        log("OK", "io mappings imported from {p}".format(p=path))
+        return {"device": _short_name(dev), "file": os.path.abspath(path),
+                "imported": True}
+    raise RuntimeError('device_io needs args.op of "mappings", '
+                       '"set_mapping", "export_csv" or "import_csv"')
+
+
 def cmd_app_control(project, args):
     """Application status / activate / offline boot application / start /
     reset (ScriptApplication + ScriptOnlineApplication stubs).
@@ -5023,8 +5273,8 @@ KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
                   "login", "source_download", "prepared_values",
                   "tree", "object_create", "textual", "task_config",
                   "symbol_config", "device_scan", "device_comm",
-                  "device_info", "device_params", "app_control",
-                  "project_control")
+                  "device_info", "device_params", "device_io",
+                  "app_control", "project_control")
 
 
 def run_command(request):
@@ -5206,6 +5456,10 @@ def run_command(request):
         elif cmd == "device_params":
             project = get_project()
             result["value"] = cmd_device_params(project, args)
+            summary["ok"] = True
+        elif cmd == "device_io":
+            project = get_project()
+            result["value"] = cmd_device_io(project, args)
             summary["ok"] = True
         elif cmd == "app_control":
             project = get_project()

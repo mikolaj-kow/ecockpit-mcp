@@ -90,9 +90,9 @@ more). Live results: [TESTING.md](TESTING.md).
 | Device params | ecockpit_device_params | ✅ | element `.value` / `allowed_values` / `min-max` / sub-elements | op=read (offline) |
 | Device params | ecockpit_device_params | ✅ | `el.read_online_value(timeout)` | op=read online=true |
 | Device params | ecockpit_device_params | ✅ | `el.write_online_value(value)` (enums validated) | op=write (confirm; PLC-touching) |
-| Device params | — | 🟡 | `dev.export_io_mappings_as_csv(file)` / `import_io_mappings_from_csv(file)` | import modifies IO config |
+| Device params | ecockpit_device_io | ✅ | `dev.export_io_mappings_as_csv(file)` / `import_io_mappings_from_csv(file)` | op=export_csv (default `<ECP_PROJECT_ROOT>/io-mappings/`) / import_csv (confirm; modifies IO config) |
 | Device params | ecockpit_device_info | ✅ | `dev.driver_info.*` (bus cycle task, IO application, stop behaviour, diagnosis) | op=driver_info (read-only) / driver_info_set (confirm; set_bus_cycle_task / set_io_application + bool/enum setters) |
-| Device params | — | 🟡 | `mapping.variable` / `manual_iec_address` (IO mapping inspection) | — |
+| Device params | ecockpit_device_io | ✅ | `ScriptDataElement.is_mappable_io` → `io_mapping` (`mapping.variable` / `manual_iec_address` / `automatic_iec_address` / ...) | op=mappings (inspection, read-only) / set_mapping (confirm) |
 | Online app | ecockpit_login | ✅ | `onlineapp.login(OnlineChangeOption, delete_foreign_apps)` | LIVE: Try, 15 s; Keep = non-deploying login (G-09) |
 | Online app | (internal, G-09) | ✅ | `OnlineChangeOption.Never/Try/Force/Keep` | Keep is stub-only; every online command uses the ladder |
 | Online app | ecockpit_disconnect | ✅ | `onlineapp.logout()` | force=true → forced_disconnect |

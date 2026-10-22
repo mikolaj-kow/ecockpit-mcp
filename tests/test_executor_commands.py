@@ -714,3 +714,203 @@ def test_device_info_driver_info_read_and_set(devobj):
                 if c[0] == "set_io_application"]
     assert len(io_calls) == 1 and isinstance(io_calls[0][1], FakeAppMarker)
     assert out["driver_info"]["bus_cycle_task_by_name"] == "PlcTask"
+
+
+class FakeIoMapping(object):
+    """ScriptIoMapping per the stub: setting manual_iec_address to an
+    address flips automatic off; None flips it back on."""
+
+    def __init__(self, variable="", default_variable="",
+                 auto=True, manual=None):
+        self.Id = 1
+        self.variable = variable
+        self.default_variable = default_variable
+        self.mapping_creates_variable = True
+        self.maps_to_existing_variable = False
+        self._auto = auto
+        self._manual = manual
+
+    @property
+    def automatic_iec_address(self):
+        return self._auto
+
+    @automatic_iec_address.setter
+    def automatic_iec_address(self, value):
+        self._auto = bool(value)
+
+    @property
+    def manual_iec_address(self):
+        return self._manual
+
+    @manual_iec_address.setter
+    def manual_iec_address(self, value):
+        if value is None:
+            self._auto = True
+            self._manual = None
+        else:
+            self._auto = False
+            self._manual = value
+
+
+class FakeIoElement(object):
+    def __init__(self, identifier, mapping=None):
+        self.identifier = identifier
+        self.visible_name = identifier
+        self._mapping = mapping
+        self.has_sub_elements = False
+
+    @property
+    def is_mappable_io(self):
+        return self._mapping is not None
+
+    @property
+    def io_mapping(self):
+        if self._mapping is None:
+            raise RuntimeError("no mapping (device parameter)")
+        return self._mapping
+
+    def __iter__(self):
+        return iter(())
+
+
+class FakeParamSet(object):
+    """Parameter set: iterable of FakeParam + by-name lookup."""
+
+    def __init__(self, params):
+        self._params = [FakeParam(name, els) for name, els in params]
+        self._by_name = dict((p.name, p) for p in self._params)
+
+    def __iter__(self):
+        return iter(self._params)
+
+    def __getitem__(self, name):
+        return self._by_name[name]
+
+
+class FakeParam(object):
+    def __init__(self, name, elements):
+        self.name = name
+        self._elements = elements
+
+    def __iter__(self):
+        return iter(self._elements)
+
+
+class FakeConnector(object):
+    def __init__(self, cid, params):
+        self.id = cid
+        self.host_parameters = params
+
+
+class FakeIoDevice(object):
+    def __init__(self, device_set, connectors=()):
+        self._device_set = device_set
+        self._connectors = list(connectors)
+        self.exported = None
+        self.imported = None
+
+    def __str__(self):
+        return "ScriptDeviceObject{Name=FakeDev}"
+
+    @property
+    def device_parameters(self):
+        return self._device_set
+
+    @property
+    def connectors(self):
+        return self._connectors
+
+    def export_io_mappings_as_csv(self, path):
+        self.exported = path
+        with open(path, "wb") as fh:
+            fh.write(b"a,b\n1,2\n")
+
+    def import_io_mappings_from_csv(self, path):
+        self.imported = path
+
+
+@pytest.fixture()
+def iodev(monkeypatch):
+    input_map = FakeIoMapping(variable="old_var", auto=True)
+    conn_map = FakeIoMapping(variable="c_var", auto=False, manual="%QW0")
+    device = FakeIoDevice(
+        FakeParamSet([("IO-Params", [FakeIoElement("plain_param", None)]),
+                      ("IO-Map", [FakeIoElement("input_io", input_map)])]),
+        [FakeConnector(1, FakeParamSet([
+            ("ConnIo", [FakeIoElement("conn_io", conn_map)])]))])
+    monkeypatch.setattr(ex, "get_device", lambda project, name="": device)
+    device.input_map = input_map
+    device.conn_map = conn_map
+    return device
+
+
+def test_device_io_mappings_walk(iodev):
+    out = ex.cmd_device_io(None, {"op": "mappings"})
+    assert out["count"] == 2
+    by_id = dict((m["identifier"], m) for m in out["mappings"])
+    assert "plain_param" not in by_id          # not mappable -> skipped
+    assert by_id["input_io"]["io_mapping"]["variable"] == "old_var"
+    assert by_id["input_io"]["io_mapping"]["automatic_iec_address"] is True
+    assert by_id["conn_io"]["parameter"] == "ConnIo"
+    assert by_id["conn_io"]["source"] == "connector 1"
+    assert by_id["conn_io"]["io_mapping"]["manual_iec_address"] == "%QW0"
+
+
+def test_device_io_set_mapping_gates_and_effects(iodev):
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_device_io(None, {"op": "set_mapping", "name": "x",
+                                "variable": "GVL.new"})
+
+    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "IO-Map",
+                                  "variable": "GVL.new", "confirm": True})
+    assert out["elements"][0]["set"] == {"variable": "GVL.new"}
+    assert out["elements"][0]["readback"]["variable"] == "GVL.new"
+
+    # automatic=true resets the address (manual -> None -> auto)
+    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "ConnIo",
+                                  "automatic": True, "confirm": True})
+    assert iodev.conn_map.manual_iec_address is None
+    assert iodev.conn_map.automatic_iec_address is True
+    assert out["elements"][0]["set"] == {"manual_iec_address": None}
+
+    # manual address flips automatic off
+    ex.cmd_device_io(None, {"op": "set_mapping", "name": "ConnIo",
+                            "manual_iec_address": "%QW7", "confirm": True})
+    assert iodev.conn_map.automatic_iec_address is False
+    assert iodev.conn_map.manual_iec_address == "%QW7"
+
+    with pytest.raises(RuntimeError, match="no mappable element"):
+        ex.cmd_device_io(None, {"op": "set_mapping", "name": "IO-Params",
+                                "variable": "GVL.x", "confirm": True})
+    with pytest.raises(RuntimeError, match="needs args.variable"):
+        ex.cmd_device_io(None, {"op": "set_mapping", "name": "ConnIo",
+                                "confirm": True})
+
+
+def test_device_io_csv_round_trip(iodev, tmp_path, monkeypatch):
+    out = ex.cmd_device_io(None, {"op": "export_csv",
+                                  "file": str(tmp_path / "m.csv")})
+    assert out["bytes"] == 8
+    assert iodev.exported == os.path.abspath(str(tmp_path / "m.csv"))
+
+    # default location derives from PROJECT_ROOT + sanitized device name
+    monkeypatch.setattr(ex, "PROJECT_ROOT", str(tmp_path))
+    out = ex.cmd_device_io(None, {"op": "export_csv"})
+    expected = os.path.join(str(tmp_path), "io-mappings",
+                            "FakeDev_io_mappings.csv")
+    assert os.path.isfile(expected)
+    assert out["file"] == os.path.abspath(expected)
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_device_io(None, {"op": "import_csv",
+                                "file": str(tmp_path / "m.csv")})
+    out = ex.cmd_device_io(None, {"op": "import_csv",
+                                  "file": str(tmp_path / "m.csv"),
+                                  "confirm": True})
+    assert out["imported"] is True
+    assert iodev.imported == os.path.abspath(str(tmp_path / "m.csv"))
+
+    with pytest.raises(RuntimeError, match="existing CSV"):
+        ex.cmd_device_io(None, {"op": "import_csv",
+                                "file": str(tmp_path / "gone.csv"),
+                                "confirm": True})
