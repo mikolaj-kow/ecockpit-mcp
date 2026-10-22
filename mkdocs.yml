@@ -1,0 +1,28 @@
+site_name: ecockpit-mcp
+site_description: MCP server exposing WAGO e!COCKPIT PLC automation to LLM editors — build, import, online read/write, libraries, project lifecycle.
+repo_url: https://github.com/mikolaj-kow/ecockpit-mcp
+docs_dir: docs
+theme:
+  name: material
+  features:
+    - content.tables
+    - navigation.sections
+markdown_extensions:
+  - tables
+  - admonition
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Testing (live results): TESTING.md
+  - ScriptEngine reference:
+      - API reference (verified): SCRIPTENGINE_API.md
+      - Gotchas (G-nn): SCRIPTENGINE_GOTCHAS.md
+      - Function summary (done + possible): SUMMARY.md
+      - Not exposed: SCRIPTENGINE_NOT_EXPOSED.md
+      - Exploring the API: SCRIPTENGINE_EXPLORATION.md
+  - Roadmap: ROADMAP.md

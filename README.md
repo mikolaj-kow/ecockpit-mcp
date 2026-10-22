@@ -147,11 +147,9 @@ Online (PLC):
 |---|---|
 | `ecockpit_read(variable, device?)` | online variable read (`.env` PLC creds) |
 | `ecockpit_write(values, force?, confirm)` | **destructive** — write/force values on the RUNNING PLC; confirm-gated, reads back after write |
-| `ecockpit_unforce_all` | release all forced values |
 | `ecockpit_prepared_values(expression?, device?)` | read-only — staged (prepared) values + currently forced variables |
-| `ecockpit_state(device?)` | login/application/operation state readout |
 | `ecockpit_login(option?, delete_foreign_apps?, device?, confirm)` | **destructive** — explicit login with online-change control (`try` = deltas if possible, `force` = deltas or nothing, `never` = full download, `auto` = ladder); session stays open, logout via disconnect |
-| `ecockpit_source_download(confirm)` | **destructive** — writes the SOURCE project to the PLC (not the compiled app) |
+| `ecockpit_source_download(confirm)` | **destructive** — writes the SOURCE project to the PLC (not the compiled app); saves the project first |
 | `ecockpit_download(confirm)` | **destructive** — replaces the RUNNING PLC app; `confirm=true` only on explicit owner request |
 | `ecockpit_stop(confirm)` | **destructive** — stops the running PLC application |
 | `ecockpit_disconnect(force?)` | PLC logout (`force=true` → forced_disconnect) |
@@ -161,13 +159,53 @@ CAUTION — every online command logs in via the online-change ladder
 applying changes or downloading) but deploying commands may still
 apply code deltas to the RUNNING application.
 
+Project tree + ST authoring:
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_tree(op?, ...)` | `list` (find/get_children + kind markers, read-only), `rename`/`remove`/`move`/`folder` (**destructive**, confirm-gated) |
+| `ecockpit_object_create(kind, name, ..., confirm)` | **destructive** — create pou/gvl/dut/interface/folder/method/property/action/transition; optional `declaration`/`implementation` ST text written on create |
+| `ecockpit_textual_read(name, part?)` | read the ST declaration/implementation text |
+| `ecockpit_textual_write(name, text, part?, confirm)` | **destructive** — replace the whole declaration or implementation |
+
+Task + symbol configuration:
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_task_config(application?)` | inspect tasks (kind, priority, interval, watchdog, POUs) — read-only |
+| `ecockpit_task_create(application, name, ..., confirm)` | **destructive** — create a task (kind/interval/priority/watchdog/POUs); creates the task configuration when missing |
+| `ecockpit_symbol_config_variables(application?, compile?)` | full signature + variable inventory (`compile=true` builds first — slow but safe) |
+| `ecockpit_symbol_config_create(application?, ..., confirm)` | **destructive** — add the symbol configuration object |
+
+Device scan / communication / parameters:
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_device_scan(op?, gateway?, ip?, port?)` | gateway list, network scan (discovered targets), IP→CODESYS-address resolution — read-only |
+| `ecockpit_device_comm(op?, ...)` | communication settings read / set IP via gateway (`set_ip` **destructive**, confirm-gated) |
+| `ecockpit_device_params(op, ...)` | parameter `list` / `read` (offline or `online=true`) / `write` (**destructive**, confirm-gated, enums validated) |
+
+Application + project lifecycle:
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_app_status(application?)` | is_active, is_uptodate, is_online_change_possible — read-only |
+| `ecockpit_app_control(op, ...)` | `activate` / `boot` (offline boot file on host) / `start` / `reset` warm\|cold\|original — **destructive** except status, confirm-gated |
+
+Project lifecycle + info:
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_project_control(op, ...)` | `info`/`save` safe; `info_set`/`create`/`open`/`open_archive`/`close` **destructive** (session-mutating; `close` discards unsaved changes) — confirm-gated |
+| `ecockpit_plc_fs_ops(op, remote, ...)` | **destructive** — PLC file rename/mkdir/rmdir (recursive) on the ScriptOnlineDevice — confirm-gated |
+
 PLC file system (works via the `ScriptOnlineDevice` created by
 `online.create_online_device` — the project-tree device object has no
 file API):
 
 | Tool | Notes |
 |---|---|
-| `ecockpit_plc_ls(directory?)` | list a PLC directory |
+| `ecockpit_plc_ls(directory?)` | list a PLC directory (the runtime root is `.` — `/` is refused; the result reports the probed directory) |
 | `ecockpit_plc_get(remote, local)` | download a file from the PLC |
 | `ecockpit_plc_put(local, remote, confirm)` | **destructive** — upload a file onto the PLC |
 | `ecockpit_plc_rm(remote, confirm)` | **destructive** — delete a PLC file |

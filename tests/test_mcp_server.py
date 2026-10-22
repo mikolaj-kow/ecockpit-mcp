@@ -25,10 +25,22 @@ def test_expected_tools_registered():
                  "ecockpit_login", "ecockpit_source_download",
                  "ecockpit_prepared_values",
                  "ecockpit_plc_ls", "ecockpit_plc_get", "ecockpit_plc_put",
-                 "ecockpit_plc_rm", "ecockpit_upload_source",
+                 "ecockpit_plc_rm", "ecockpit_plc_fs_ops",
+                 "ecockpit_upload_source",
                  "ecockpit_libs", "ecockpit_lib_find",
                  "ecockpit_lib_install", "ecockpit_lib_uninstall",
-                 "ecockpit_repos", "ecockpit_repo_move"):
+                 "ecockpit_repos", "ecockpit_repo_move",
+                 "ecockpit_repo_add", "ecockpit_repo_remove",
+                 "ecockpit_repo_update",
+                 "ecockpit_tree", "ecockpit_object_create",
+                 "ecockpit_textual_read", "ecockpit_textual_write",
+                 "ecockpit_task_config", "ecockpit_task_create",
+                 "ecockpit_symbol_config_variables",
+                 "ecockpit_symbol_config_create",
+                 "ecockpit_device_scan", "ecockpit_device_comm",
+                 "ecockpit_device_params",
+                 "ecockpit_app_status", "ecockpit_app_control",
+                 "ecockpit_project_control"):
         assert hasattr(srv, name), "missing tool function: " + name
 
 

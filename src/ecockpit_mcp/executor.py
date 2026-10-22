@@ -123,8 +123,37 @@ if "OnlineChangeOption" not in globals():
     # _3S.CoDeSys.OnlineUI.OnlineChangeOption, injected like Severity (per
     # CHM): Never (0, online change never -> full download forced), Try
     # (1, online change if possible else full download), Force (2, online
-    # change or nothing).
+    # change or nothing). Keep (3, stub-only): login without online
+    # update or download.
     OnlineChangeOption = None
+if "PromptHandling" not in globals():
+    # ScriptUI prompt simulation enum (ScriptSystem stub); LogSimplePrompts
+    # keeps simple prompts out of the GUI and into the message store.
+    PromptHandling = None
+if "PouType" not in globals():
+    # ST object creation (ScriptIecLanguageObjectContainer stub):
+    # Program=1, FunctionBlock=2, Function=3.
+    PouType = None
+if "DutType" not in globals():
+    # DutType: Structure/Enumeration/Alias/Union/EnumerationWithTextList.
+    DutType = None
+if "KindOfTask" not in globals():
+    # KindOfTask: Cyclic=1, Freewheeling=2, Event=3, ExternalEvent=4,
+    # Status=5, ParentSynchron=6.
+    KindOfTask = None
+if "ImplementationLanguages" not in globals():
+    # ST/CFC/FBD/... implementation language GUIDs (injected global).
+    ImplementationLanguages = None
+if "ResetOption" not in globals():
+    # Online application reset options: Warm=0, Cold=1, Original=2
+    # (Original erases applications + boot project + retain data).
+    ResetOption = None
+if "projects" not in globals():
+    # CHM/stub name for IScriptProjects; this live build injects
+    # e_projects (the executor's get_project has used it all along) -
+    # cmd_project_control resolves whichever exists via
+    # _projects_global().
+    projects = None
 if "ConflictResolve" not in globals():
     ConflictResolve = None
 if "ImportReporter" not in globals():
@@ -140,6 +169,28 @@ if "ExportReporter" not in globals():
 if "IExportReporter" not in globals():
     class IExportReporter(object):
         """Placeholder base; the real class only exists inside e!COCKPIT."""
+
+
+_headless_done = [False]
+
+
+def _headless_hardening():
+    """ScriptSystem stub: the relay cannot answer GUI dialogs, so simple
+    prompts are logged into the message store instead of popping up and
+    wedging the GUI (see the PLC-dialog wedge hazard). Runs once per
+    executor process (the relay re-execs this file per command)."""
+    if _headless_done[0]:
+        return
+    _headless_done[0] = True
+    try:
+        if PromptHandling is not None:
+            system.prompt_handling = PromptHandling.LogSimplePrompts
+        else:
+            system.prompt_handling = 2  # PromptHandling.LogSimplePrompts
+        log("INFO", "headless: simple prompts are logged, not shown "
+            "(prompt_handling=LogSimplePrompts)")
+    except Exception as exc:
+        log("WARN", "headless hardening unavailable: {e}".format(e=exc))
 
 
 # --------------------------------------------------------------------------
@@ -2106,6 +2157,9 @@ _LS_CANDIDATES = ("get_file_list_of_directory", "get_files_of_directory",
                   "get_files")
 _FILE_CANDIDATES = {"get": ("download_file",), "put": ("upload_file",),
                     "rm": ("delete_file",)}
+# ScriptOnlineDevice extras (ScriptLib stubs, 3.5.9.0): rename_file,
+# create_directory, rename_directory, delete_directory(remote, recursive)
+_MANIP_OPS = ("rename", "mkdir", "rmdir")
 
 
 def _create_online_device(project, args):
@@ -2153,10 +2207,11 @@ def cmd_plcfs(project, args):
     upload_file(remote, local, force)   - host -> PLC.
     """
     op = args.get("op", "")
-    if op not in ("ls", "get", "put", "rm"):
-        raise RuntimeError('plcfs needs args.op of "ls", "get", "put" or '
-                           '"rm"')
-    if op in ("put", "rm") and not args.get("confirm"):
+    if op not in ("ls", "get", "put", "rm") + _MANIP_OPS:
+        raise RuntimeError('plcfs needs args.op of "ls", "get", "put", '
+                           '"rm", "rename", "mkdir" or "rmdir"')
+    if op in ("put", "rm", "rename", "mkdir", "rmdir") and \
+            not args.get("confirm"):
         raise RuntimeError("plcfs {o} REFUSED - requires args.confirm=true "
                            "(it modifies files on the PLC)".format(o=op))
     user, pw = _require_creds()
@@ -2303,6 +2358,40 @@ def cmd_plcfs(project, args):
             member(remote)
             log("OK", "plcfs rm {r} via {n}".format(r=remote, n=member_name))
             return {"deleted": remote}
+        if op in _MANIP_OPS:
+            remote = args.get("remote", "")
+            new_name = str(args.get("new_name", "")).strip()
+            if op == "rename" and (not remote or not new_name):
+                raise RuntimeError("plcfs rename needs args.remote and "
+                                   "args.new_name")
+            if op == "mkdir" and not remote:
+                raise RuntimeError("plcfs mkdir needs args.remote (new "
+                                   "directory path)")
+            if op == "rmdir" and not remote:
+                raise RuntimeError("plcfs rmdir needs args.remote "
+                                   "(directory path)")
+            members = {"rename": ("rename_file", "rename_directory"),
+                       "mkdir": ("create_directory",),
+                       "rmdir": ("delete_directory",)}
+            for name in members[op]:
+                try:
+                    member = _plcfs_member(odev, name)
+                except AttributeError:
+                    continue
+                _ensure_connected()
+                if op == "rename":
+                    member(remote, new_name)
+                elif op == "mkdir":
+                    member(remote)
+                else:
+                    member(remote, bool(args.get("recursive", False)))
+                log("OK", "plcfs {o} {r} via {n}".format(
+                    o=op, r=remote, n=name))
+                return {"op": op, "remote": remote,
+                        "new_name": new_name or None, "via": name}
+            raise RuntimeError(
+                "no {o} member on the ScriptOnlineDevice (probed "
+                "{c})".format(o=op, c=", ".join(members[op])))
     finally:
         _dispose()
 
@@ -3152,6 +3241,1085 @@ def cmd_repo_move(args):
 
 
 # --------------------------------------------------------------------------
+# Project tree + ST authoring (ScriptTreeObject/ScriptObject/
+# ScriptIecLanguageObjectContainer/ScriptTextualObject stubs)
+# --------------------------------------------------------------------------
+_TREE_MARKER_ATTRS = ("is_folder", "is_device", "is_application",
+                      "is_task_configuration", "is_symbol_config",
+                      "is_libman", "is_textlist", "is_imagepool",
+                      "is_explicit_connector", "is_project_info",
+                      "has_textual_declaration",
+                      "has_textual_implementation")
+
+
+def _obj_attr(obj, attr):
+    """Direct-access read of one ScriptObject attribute by literal name
+    (getattr() fails on the interop wrappers)."""
+    if attr == "guid":
+        return str(obj.guid)
+    if attr == "is_folder":
+        return bool(obj.is_folder)
+    if attr == "is_device":
+        return bool(obj.is_device)
+    if attr == "is_application":
+        return bool(obj.is_application)
+    if attr == "is_task_configuration":
+        return bool(obj.is_task_configuration)
+    if attr == "is_symbol_config":
+        return bool(obj.is_symbol_config)
+    if attr == "is_libman":
+        return bool(obj.is_libman)
+    if attr == "is_textlist":
+        return bool(obj.is_textlist)
+    if attr == "is_imagepool":
+        return bool(obj.is_imagepool)
+    if attr == "is_explicit_connector":
+        return bool(obj.is_explicit_connector)
+    if attr == "is_project_info":
+        return bool(obj.is_project_info)
+    if attr == "has_textual_declaration":
+        return bool(obj.has_textual_declaration)
+    if attr == "has_textual_implementation":
+        return bool(obj.has_textual_implementation)
+    raise AttributeError(attr)
+
+
+def _obj_summary(obj):
+    """Name + kind markers for one tree object (all guarded)."""
+    out = {"name": _short_name(obj)}
+    try:
+        out["name"] = str(obj.get_name())
+    except Exception:
+        pass
+    try:
+        out["guid"] = str(obj.guid)
+    except Exception:
+        pass
+    for attr in _TREE_MARKER_ATTRS:
+        try:
+            out[attr] = _obj_attr(obj, attr)
+        except Exception:
+            out[attr] = None
+    return out
+
+
+def _find_one(project, name):
+    found = project.find(name, True)
+    if not found:
+        raise RuntimeError('no object named "{n}" in the '
+                           "project".format(n=name))
+    return found[0]
+
+
+def _resolve_textual(obj, part):
+    """Return the ScriptTextDocument for 'declaration' or 'implementation'.
+
+    Guards the marker first - textual_declaration/textual_implementation
+    only exist on objects with has_textual_declaration/implementation.
+    """
+    try:
+        if part == "declaration":
+            if not obj.has_textual_declaration:
+                raise RuntimeError("object '{n}' has no textual "
+                                   "declaration".format(
+                                       n=_short_name(obj)))
+            return obj.textual_declaration
+        if part == "implementation":
+            if not obj.has_textual_implementation:
+                raise RuntimeError("object '{n}' has no textual "
+                                   "implementation".format(
+                                       n=_short_name(obj)))
+            return obj.textual_implementation
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("textual {p} access failed on '{n}': "
+                           "{e}".format(p=part, n=_short_name(obj),
+                                        e=exc))
+    raise RuntimeError("textual part must be declaration or implementation")
+
+
+def cmd_tree(project, args):
+    """Inspect / manipulate the project tree (ScriptTreeObject,
+    ScriptObject stubs).
+
+    ops:
+      list    {name?: find-filter, recursive?: bool (default true),
+               limit?: int (default 200)} -> object summaries
+      rename  {name, new_name, confirm}          -> renames an object
+      remove  {name, confirm}                    -> DESTRUCTIVE: deletes
+      move    {name, new_parent, index?: -1, confirm} -> moves in tree
+      folder  {parent?, new_name, confirm}       -> creates a folder
+    list is read-only; everything else modifies the project and needs
+    args.confirm=true.
+    """
+    op = args.get("op", "list")
+    if op == "list":
+        name = str(args.get("name", "")).strip()
+        limit = int(args.get("limit", 200) or 200)
+        if name:
+            items = list(project.find(name, bool(args.get("recursive", True))))
+        else:
+            items = list(project.get_children(
+                bool(args.get("recursive", True))))
+        out = [_obj_summary(obj) for obj in items[:limit]]
+        log("OK", "tree list: {n} objects (matched {t})".format(
+            n=len(out), t=len(items)))
+        return {"count": len(out), "total": len(items), "objects": out}
+
+    if op == "rename":
+        if not args.get("confirm"):
+            raise RuntimeError("tree rename REFUSED - requires "
+                               "args.confirm=true (it modifies the "
+                               "project)")
+        obj = _find_one(project, str(args.get("name", "")))
+        new_name = str(args.get("new_name", "")).strip()
+        if not new_name:
+            raise RuntimeError("tree rename needs args.new_name")
+        obj.rename(new_name)
+        log("OK", "renamed to {n}".format(n=new_name))
+        return {"renamed": True, "new_name": new_name}
+
+    if op == "remove":
+        if not args.get("confirm"):
+            raise RuntimeError("tree remove REFUSED - requires "
+                               "args.confirm=true (it DELETES the object "
+                               "from the project)")
+        obj = _find_one(project, str(args.get("name", "")))
+        summary = _obj_summary(obj)
+        obj.remove()
+        log("OK", "removed object (was: {n})".format(
+            n=summary.get("name")))
+        return {"removed": True, "was": summary}
+
+    if op == "move":
+        if not args.get("confirm"):
+            raise RuntimeError("tree move REFUSED - requires "
+                               "args.confirm=true (it modifies the "
+                               "project)")
+        obj = _find_one(project, str(args.get("name", "")))
+        parent = _find_one(project, str(args.get("new_parent", "")))
+        try:
+            index = int(args.get("index", -1))
+        except (TypeError, ValueError):
+            index = -1
+        obj.move(parent, index)
+        log("OK", "moved into {p} at {i}".format(
+            p=args.get("new_parent"), i=index))
+        return {"moved": True, "new_parent": args.get("new_parent"),
+                "index": index}
+
+    if op == "folder":
+        if not args.get("confirm"):
+            raise RuntimeError("tree folder REFUSED - requires "
+                               "args.confirm=true (it modifies the "
+                               "project)")
+        new_name = str(args.get("new_name", "")).strip()
+        if not new_name:
+            raise RuntimeError("tree folder needs args.new_name")
+        parent_name = str(args.get("parent", "")).strip()
+        if parent_name:
+            parent = _find_one(project, parent_name)
+            parent.create_folder(new_name)
+        else:
+            project.create_folder(new_name)
+        log("OK", "folder '{n}' created".format(n=new_name))
+        return {"folder": new_name,
+                "parent": parent_name or "<project root>"}
+
+    raise RuntimeError('tree needs args.op of "list", "rename", "remove", '
+                       '"move" or "folder"')
+
+
+def cmd_object_create(project, args):
+    """Create project objects (ScriptIecLanguageObjectContainer stub).
+
+    args: {"kind": "pou"|"gvl"|"dut"|"interface"|"folder"|"method"|
+           "property"|"action"|"transition",
+           "name": required,
+           "pou_type": "program"|"functionblock"|"function" (pou only),
+           "base_type"?: (dut/interface/method return),
+           "parent"?: object name (container; default the project),
+           "declaration"?: ST text (textual objects),
+           "implementation"?: ST text,
+           "confirm": true}
+
+    CONFIRM-GATED - it modifies the project. ImplementationLanguages.st
+    is the default language; method/property take return_type.
+    """
+    if not args.get("confirm"):
+        raise RuntimeError("object_create REFUSED - requires "
+                           "args.confirm=true (it modifies the project)")
+    kind = str(args.get("kind", "")).lower()
+    name = str(args.get("name", "")).strip()
+    if not name:
+        raise RuntimeError("object_create needs args.name")
+    parent_name = str(args.get("parent", "")).strip()
+    container = _find_one(project, parent_name) if parent_name else project
+
+    created = None
+    if kind == "pou":
+        pou_types = {"program": "Program", "functionblock": "FunctionBlock",
+                     "function": "Function"}
+        pou_type = str(args.get("pou_type", "functionblock")).lower()
+        if pou_type not in pou_types:
+            raise RuntimeError("object_create: pou_type must be program, "
+                               "functionblock or function")
+        try:
+            langs = ImplementationLanguages
+        except NameError:
+            langs = None
+        if langs is not None:
+            created = container.create_pou(
+                name, type=getattr(PouType, pou_types[pou_type]),
+                language=langs.st, return_type=args.get("return_type") or None)
+        else:
+            created = container.create_pou(
+                name, type=getattr(PouType, pou_types[pou_type]),
+                return_type=args.get("return_type") or None)
+    elif kind == "gvl":
+        created = container.create_gvl(name)
+    elif kind == "dut":
+        created = container.create_dut(
+            name, type=DutType.Structure,
+            baseType=args.get("base_type") or None)
+    elif kind == "interface":
+        created = container.create_interface(
+            name, args.get("base_type") or "__System.IQueryInterface")
+    elif kind in ("method", "property", "action", "transition"):
+        if not parent_name:
+            raise RuntimeError("object_create {k} needs args.parent (the "
+                               "POU to attach to)".format(k=kind))
+        if kind == "method":
+            created = container.create_method(
+                name, return_type=args.get("return_type") or None)
+        elif kind == "property":
+            created = container.create_property(
+                name, return_type=args.get("return_type") or "int")
+        elif kind == "action":
+            created = container.create_action(name)
+        else:
+            created = container.create_transition(name)
+    else:
+        raise RuntimeError('object_create needs args.kind of "pou", "gvl", '
+                           '"dut", "interface", "folder", "method", '
+                           '"property", "action" or "transition"')
+    log("OK", "created {k} '{n}'".format(k=kind, n=name))
+
+    declaration = args.get("declaration")
+    implementation = args.get("implementation")
+    if declaration:
+        _resolve_textual(created, "declaration").replace(
+            new_text=str(declaration))
+        log("OK", "declaration text set ({c} chars)".format(
+            c=len(str(declaration))))
+    if implementation:
+        _resolve_textual(created, "implementation").replace(
+            new_text=str(implementation))
+        log("OK", "implementation text set ({c} chars)".format(
+            c=len(str(implementation))))
+    return {"created": name, "kind": kind,
+            "summary": _obj_summary(created)}
+
+
+def cmd_textual(project, args):
+    """Read / write the ST text of a textual object.
+
+    args: {"op": "read"|"write", "name": object name,
+           "part": "declaration"|"implementation" (default: both for
+           read, implementation for write),
+           "text": ST text (write only), "confirm": true (write)}.
+
+    read is read-only; write replaces the whole part
+    (ScriptTextDocument.replace(new_text=...)) and is CONFIRM-GATED -
+    it modifies project code.
+    """
+    op = args.get("op", "read")
+    obj = _find_one(project, str(args.get("name", "")))
+    if op == "read":
+        out = {"name": args.get("name")}
+        part = args.get("part", "")
+        parts = (part,) if part in ("declaration", "implementation") else \
+            ("declaration", "implementation")
+        for p in parts:
+            doc = _resolve_textual(obj, p)
+            out[p] = doc.text
+        return out
+    if op == "write":
+        if not args.get("confirm"):
+            raise RuntimeError("textual write REFUSED - requires "
+                               "args.confirm=true (it replaces project "
+                               "code)")
+        text = args.get("text")
+        if text is None:
+            raise RuntimeError("textual write needs args.text")
+        part = args.get("part", "implementation")
+        doc = _resolve_textual(obj, part)
+        doc.replace(new_text=str(text))
+        log("OK", "textual {p} of '{n}' replaced ({c} chars)".format(
+            p=part, n=args.get("name"), c=len(str(text))))
+        return {"written": True, "name": args.get("name"), "part": part,
+                "chars": len(str(text))}
+    raise RuntimeError('textual needs args.op of "read" or "write"')
+
+
+def _get_application_obj(project, args):
+    """The application ScriptObject (args.application name overrides the
+    first found application)."""
+    app_name = str(args.get("application", "")).strip()
+    if app_name:
+        return _find_one(project, app_name)
+    return get_application(project)
+
+
+def cmd_task_config(project, args):
+    """Inspect / create the task configuration (ScriptTaskConfigObject
+    stub, 3.5.10.0).
+
+    ops:
+      inspect {application?} -> tasks with kind, priority, interval,
+              watchdog and assigned POUs (read-only)
+      create_task {application?, name, kind?: cyclic|freewheeling|event|
+              external_event|status|parent_synchron, interval?: "200",
+              interval_unit?: "ms", priority?: "1", watchdog_enabled?,
+              watchdog_time?, pous?: [names], confirm} -> creates the
+              task configuration object when missing, then the task
+
+    create_task modifies the project - CONFIRM-GATED. KindOfTask is an
+    injected enum (Cyclic=1, Freewheeling=2, Event=3, ExternalEvent=4,
+    Status=5, ParentSynchron=6).
+    """
+    op = args.get("op", "inspect")
+    app = _get_application_obj(project, args)
+    tc = None
+    for child in app.get_children(True):
+        try:
+            if child.is_task_configuration:
+                tc = child
+                break
+        except Exception:
+            continue
+
+    if op == "inspect":
+        tasks = []
+        if tc is not None:
+            for child in tc.get_children(True):
+                try:
+                    if not child.is_task:
+                        continue
+                except Exception:
+                    continue
+                task = {"name": _short_name(child)}
+                for attr in ("priority", "interval", "interval_unit",
+                             "event", "external_event", "core_binding",
+                             "parent_synchron_task"):
+                    try:
+                        if attr == "core_binding":
+                            task[attr] = str(child.core_binding)
+                        elif attr == "parent_synchron_task":
+                            task[attr] = str(child.parent_synchron_task)
+                        else:
+                            task[attr] = str(getattr(child, attr))
+                    except Exception:
+                        task[attr] = None
+                try:
+                    wd = child.watchdog
+                    task["watchdog"] = {
+                        "enabled": bool(wd.enabled),
+                        "time": str(wd.time),
+                        "time_unit": str(wd.time_unit),
+                        "sensitivity": str(wd.sensitivity),
+                    }
+                except Exception:
+                    task["watchdog"] = None
+                try:
+                    pous = []
+                    for entry in child.pous:
+                        pous.append(str(entry[0]))
+                    task["pous"] = pous
+                except Exception:
+                    task["pous"] = None
+                tasks.append(task)
+        log("OK", "task config: {n} task(s), config object "
+            "{p}".format(n=len(tasks),
+                         p="present" if tc is not None else "MISSING"))
+        return {"application": _short_name(app),
+                "has_task_configuration": tc is not None,
+                "tasks": tasks}
+
+    if op == "create_task":
+        if not args.get("confirm"):
+            raise RuntimeError("task create_task REFUSED - requires "
+                               "args.confirm=true (it modifies the "
+                               "project)")
+        name = str(args.get("name", "")).strip()
+        if not name:
+            raise RuntimeError("task create_task needs args.name")
+        if tc is None:
+            tc = app.create_task_configuration()
+            log("OK", "task configuration object created")
+        task = tc.create_task(name)
+        kind_map = {"cyclic": "Cyclic", "freewheeling": "Freewheeling",
+                    "event": "Event", "external_event": "ExternalEvent",
+                    "status": "Status", "parent_synchron": "ParentSynchron"}
+        kind = str(args.get("kind", "cyclic")).lower()
+        if KindOfTask is not None and kind in kind_map:
+            task.kind_of_task = getattr(KindOfTask, kind_map[kind])
+        if args.get("interval"):
+            task.interval = str(args["interval"])
+        if args.get("interval_unit"):
+            task.interval_unit = str(args["interval_unit"])
+        if args.get("priority"):
+            task.priority = str(args["priority"])
+        if args.get("watchdog_enabled") is not None:
+            task.watchdog.enabled = bool(args["watchdog_enabled"])
+        if args.get("watchdog_time"):
+            task.watchdog.time = str(args["watchdog_time"])
+        for pou in (args.get("pous") or []):
+            task.pous.add(str(pou))
+        log("OK", "task '{n}' created ({k})".format(n=name, k=kind))
+        return {"created": name, "kind": kind,
+                "pous": [str(p) for p in (args.get("pous") or [])]}
+    raise RuntimeError('task_config needs args.op of "inspect" or '
+                       '"create_task"')
+
+
+def cmd_symbol_config(project, args):
+    """Create the symbol configuration / dump the variable inventory
+    (ScriptSymbolConfigObject stub, 3.5.10.0).
+
+    ops:
+      variables {application?, compile?: true} -> full signature +
+              variable inventory (get_all_signatures; compile=true
+              builds first - takes time, read-only)
+      create  {application?, export_comments?: false,
+               support_opc_ua?: true, confirm} -> adds the symbol
+              configuration object to the application
+
+    create modifies the project - CONFIRM-GATED.
+    """
+    op = args.get("op", "variables")
+    app = _get_application_obj(project, args)
+    sym = None
+    for child in app.get_children(True):
+        try:
+            if child.is_symbol_config:
+                sym = child
+                break
+        except Exception:
+            continue
+
+    if op == "create":
+        if not args.get("confirm"):
+            raise RuntimeError("symbol_config create REFUSED - requires "
+                               "args.confirm=true (it modifies the "
+                               "project)")
+        if sym is not None:
+            return {"created": False,
+                    "note": "symbol configuration already present",
+                    "name": _short_name(sym)}
+        sym = app.create_symbol_config(
+            bool(args.get("export_comments", False)),
+            bool(args.get("support_opc_ua", True)),
+            False)  # client_side_layout_calculator: none
+        log("OK", "symbol configuration created")
+        return {"created": True, "name": _short_name(sym)}
+
+    if op == "variables":
+        if sym is None:
+            raise RuntimeError("no symbol configuration object under the "
+                               "application - create it first "
+                               "(op=create)")
+        compile_first = bool(args.get("compile", True))
+        signatures = sym.get_all_signatures(compile=compile_first)
+        out = []
+        for sig in signatures:
+            entry = {"name": str(sig.name),
+                     "full_qualified_name": str(sig.full_qualified_name),
+                     "variables": []}
+            try:
+                for var in sig.variables:
+                    v = {"name": str(var.name), "type": str(var.type)}
+                    try:
+                        v["effective_access"] = str(var.effective_access)
+                    except Exception:
+                        pass
+                    entry["variables"].append(v)
+            except Exception:
+                pass
+            out.append(entry)
+        total = sum(len(e["variables"]) for e in out)
+        log("OK", "symbol inventory: {s} signatures, {v} "
+            "variables".format(s=len(out), v=total))
+        return {"signatures": len(out), "variables": total,
+                "compiled": compile_first, "content": out}
+    raise RuntimeError('symbol_config needs args.op of "variables" or '
+                       '"create"')
+
+
+# --------------------------------------------------------------------------
+# Device domain (ScriptDeviceObject/ScriptDeviceParameters/ScriptOnline
+# gateway stack stubs)
+# --------------------------------------------------------------------------
+def _device_obj(project, args):
+    """The device ScriptObject (args.device name overrides the first
+    device)."""
+    device_name = str(args.get("device", "")).strip()
+    if device_name:
+        return _find_one(project, device_name)
+    return get_device(project, "")
+
+
+def cmd_device_scan(project, args):
+    """Gateway + network device discovery (ScriptOnline gateway stack,
+    3.5.8.0) - read-only.
+
+    ops:
+      gateways  -> configured gateways + drivers
+      scan      {gateway?: name} -> network scan (blocks for the scan
+              timeout); returns discovered targets (name, address,
+              vendor, id, version)
+      address   {gateway?, ip, port?} -> resolve a CODESYS address from
+              an IP (find_address_by_ip)
+    """
+    op = args.get("op", "gateways")
+    gw_name = str(args.get("gateway", "")).strip()
+
+    def _pick_gateway():
+        gateways = online.gateways
+        if gw_name:
+            try:
+                return gateways.find_with_name(gw_name)
+            except Exception:
+                raise RuntimeError("gateway '{g}' not found".format(
+                    g=gw_name))
+        if len(gateways) == 0:
+            raise RuntimeError("no gateways configured in e!COCKPIT")
+        return gateways[0]
+
+    if op == "gateways":
+        out = []
+        try:
+            for gw in online.gateways:
+                entry = {"name": str(gw.name), "guid": str(gw.guid)}
+                try:
+                    entry["driver"] = str(gw.gateway_driver)
+                except Exception:
+                    pass
+                out.append(entry)
+        except Exception as exc:
+            out.append({"error": str(exc)[:150]})
+        drivers = []
+        try:
+            drivers = [str(d.name) for d in online.gateway_drivers]
+        except Exception:
+            pass
+        log("OK", "gateways: {n}, drivers: {d}".format(
+            n=len(out), d=len(drivers)))
+        return {"gateways": out, "drivers": drivers}
+
+    if op == "scan":
+        gw = _pick_gateway()
+        log("INFO", "network scan on gateway '{g}' (blocks for the scan "
+            "timeout)".format(g=_short_name(gw)))
+        targets = gw.perform_network_scan()
+        out = []
+        for t in targets:
+            entry = {}
+            for attr in ("device_name", "type_name", "vendor_name",
+                         "address", "parent_address", "block_driver",
+                         "block_driver_address", "locked_in_cache"):
+                try:
+                    entry[attr] = str(getattr(t, attr))
+                except Exception:
+                    entry[attr] = None
+            try:
+                entry["device_id"] = "{t} {i} v{v}".format(
+                    t=t.device_id.type, i=t.device_id.id,
+                    v=t.device_id.version)
+            except Exception:
+                entry["device_id"] = None
+            out.append(entry)
+        log("OK", "scan found {n} target(s)".format(n=len(out)))
+        return {"gateway": _short_name(gw), "count": len(out),
+                "targets": out}
+
+    if op == "address":
+        ip = str(args.get("ip", "")).strip()
+        if not ip:
+            raise RuntimeError("device_scan address needs args.ip")
+        gw = _pick_gateway()
+        port = int(args.get("port", 11740) or 11740)
+        address = gw.find_address_by_ip(ip, port)
+        log("OK", "address for {ip}: {a}".format(ip=ip, a=address))
+        return {"ip": ip, "gateway": _short_name(gw), "address": address}
+    raise RuntimeError('device_scan needs args.op of "gateways", "scan" '
+                       'or "address"')
+
+
+def cmd_device_comm(project, args):
+    """Read / set the device communication settings
+    (ScriptDeviceObject.set_gateway_and_* + ScriptCommunicationSettings).
+
+    ops:
+      get {device?} -> gateway guid, address, scanned_* values
+              (read-only)
+      set_ip {device?, gateway?, ip, confirm} -> point the device at an
+              IP via the gateway (modifies the project device
+              configuration - CONFIRM-GATED)
+    """
+    op = args.get("op", "get")
+    dev = _device_obj(project, args)
+
+    def _settings():
+        out = {}
+        try:
+            s = dev.get_device_communication_settings()
+        except Exception as exc:
+            return {"error": str(exc)[:150]}
+        for attr in ("gateway_guid", "device_address", "device_name",
+                     "scanned_device_name", "scanned_ip_address_and_port",
+                     "scanned_target_id", "scanned_target_name",
+                     "scanned_target_type", "scanned_target_vendor"):
+            try:
+                out[attr] = str(getattr(s, attr))
+            except Exception:
+                out[attr] = None
+        return out
+
+    if op == "get":
+        settings = _settings()
+        log("OK", "comm settings read")
+        return {"device": _short_name(dev), "settings": settings}
+
+    if op == "set_ip":
+        if not args.get("confirm"):
+            raise RuntimeError("device_comm set_ip REFUSED - requires "
+                               "args.confirm=true (it modifies the "
+                               "project device configuration)")
+        ip = str(args.get("ip", "")).strip()
+        if not ip:
+            raise RuntimeError("device_comm set_ip needs args.ip")
+        gw = str(args.get("gateway", "")).strip()
+        gateways = online.gateways
+        gw_obj = None
+        if gw:
+            try:
+                gw_obj = gateways.find_with_name(gw)
+            except Exception:
+                gw_obj = gateways[gw]
+        else:
+            gw_obj = gateways[0]
+        if args.get("device_name"):
+            dev.set_gateway_and_device_name(gw_obj,
+                                            str(args["device_name"]))
+        else:
+            dev.set_gateway_and_ip_address(gw_obj, ip)
+        log("OK", "device {d}: gateway/address set to {ip}".format(
+            d=_short_name(dev), ip=ip))
+        return {"device": _short_name(dev), "set": True,
+                "settings": _settings()}
+    raise RuntimeError('device_comm needs args.op of "get" or "set_ip"')
+
+
+def cmd_device_params(project, args):
+    """Device parameter introspection and online read/write
+    (ScriptDeviceParameters stub).
+
+    ops:
+      list  {device?, connector_id?} -> parameter inventory
+      read  {device?, name?|id?, online?, timeout?} -> parameter value
+            (online=true reads from the PLC)
+      write {device?, name?|id?, value, element?, confirm} -> ONLINE
+            PARAMETER WRITE (CONFIRM-GATED, PLC-touching); enums are
+            validated against allowed values
+    """
+    op = args.get("op", "list")
+    dev = _device_obj(project, args)
+    params = dev.device_parameters
+    connector_id = args.get("connector_id")
+    if connector_id is not None:
+        params = dev.connectors.by_id(int(connector_id)).host_parameters
+
+    def _find_param():
+        pname = args.get("name", "")
+        pid = args.get("id")
+        if pid is not None:
+            return params.by_id(int(pid))
+        if pname:
+            return params[pname]
+        raise RuntimeError("device_params {o} needs args.name or "
+                           "args.id".format(o=op))
+
+    def _element_summary(el, online, timeout):
+        entry = {"identifier": str(el.identifier),
+                 "visible_name": str(el.visible_name)}
+        for attr in ("unit", "description", "iec_type"):
+            try:
+                entry[attr] = str(getattr(el, attr))
+            except Exception:
+                entry[attr] = None
+        try:
+            entry["can_access_online"] = bool(el.can_access_online)
+        except Exception:
+            entry["can_access_online"] = None
+        if online and entry["can_access_online"]:
+            try:
+                entry["online_value"] = str(
+                    el.read_online_value(int(timeout or 1000)))
+            except Exception as exc:
+                entry["online_value"] = "error: {e}".format(
+                    e=str(exc)[:120])
+        else:
+            try:
+                entry["value"] = str(el.value)
+            except Exception:
+                entry["value"] = None
+        try:
+            if el.is_enumeration:
+                entry["allowed_values"] = [
+                    str(v.identifier) for v in el.allowed_values]
+        except Exception:
+            pass
+        try:
+            if el.is_range_type:
+                entry["min_value"] = str(el.min_value)
+                entry["max_value"] = str(el.max_value)
+        except Exception:
+            pass
+        try:
+            if el.has_sub_elements:
+                subs = []
+                for sub in el:
+                    subs.append(_element_summary(sub, False, timeout))
+                entry["sub_elements"] = subs
+        except Exception:
+            pass
+        return entry
+
+    if op == "list":
+        out = []
+        for param in params:
+            entry = {}
+            for attr in ("id", "name", "type_string", "section",
+                         "iec_type", "param_type", "channel_type"):
+                try:
+                    entry[attr] = str(getattr(param, attr))
+                except Exception:
+                    entry[attr] = None
+            out.append(entry)
+        log("OK", "device params: {n}".format(n=len(out)))
+        return {"device": _short_name(dev), "count": len(out),
+                "parameters": out}
+
+    if op == "read":
+        param = _find_param()
+        online_read = bool(args.get("online", False))
+        timeout = args.get("timeout", 1000)
+        entry = {"id": str(param.id), "name": str(param.name)}
+        for attr in ("type_string", "iec_type"):
+            try:
+                entry[attr] = str(getattr(param, attr))
+            except Exception:
+                entry[attr] = None
+        for el in param:
+            entry.setdefault("elements", []).append(
+                _element_summary(el, online_read, timeout))
+        log("OK", "param {n}: read ({o})".format(
+            n=param.name, o="online" if online_read else "offline"))
+        return entry
+
+    if op == "write":
+        if not args.get("confirm"):
+            raise RuntimeError("device_params write REFUSED - requires "
+                               "args.confirm=true (it writes a parameter "
+                               "to the DEVICE)")
+        param = _find_param()
+        value = args.get("value")
+        if value is None:
+            raise RuntimeError("device_params write needs args.value")
+        timeout = args.get("timeout", 1000)
+        target = str(args.get("element", "")).strip().lower()
+        results = []
+        for el in param:
+            if target and str(el.identifier).lower() != target:
+                continue
+            try:
+                if el.is_enumeration:
+                    match = None
+                    for allowed in el.allowed_values:
+                        if str(allowed.identifier) == str(value):
+                            match = allowed
+                            break
+                    if match is None:
+                        raise RuntimeError(
+                            "value '{v}' not in allowed values {a}".format(
+                                v=value,
+                                a=[str(v.identifier)
+                                   for v in el.allowed_values]))
+                    el.write_online_value(match)
+                else:
+                    el.write_online_value(str(value))
+                try:
+                    readback = str(el.read_online_value(int(timeout)))
+                except Exception:
+                    readback = None
+                results.append({"identifier": str(el.identifier),
+                                "written": str(value),
+                                "readback": readback})
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                results.append({"identifier": str(el.identifier),
+                                "error": str(exc)[:150]})
+        ok = bool(results) and all("error" not in r for r in results)
+        log("OK" if ok else "ERROR",
+            "param write {n}: {r}".format(n=param.name, r=results))
+        if not results:
+            raise RuntimeError("no parameter element matched "
+                               "'{t}'".format(t=target or "<any>"))
+        return {"parameter": str(param.name), "ok": ok,
+                "elements": results}
+    raise RuntimeError('device_params needs args.op of "list", "read" or '
+                       '"write"')
+
+
+def cmd_app_control(project, args):
+    """Application status / activate / offline boot application / start /
+    reset (ScriptApplication + ScriptOnlineApplication stubs).
+
+    ops:
+      status  {application?} -> is_active, is_uptodate,
+              is_online_change_possible (read-only; 3.5.10.0 fields)
+      activate {application?, confirm} -> set project.active_application
+      boot    {application?, path, confirm} -> OFFLINE boot application
+              file on this host (create_boot_application; NOT a PLC
+              download; update_compile_info stays False to preserve
+              online-change compatibility)
+      start   {application?, confirm} -> online application start
+              (PLC-touching; requires login)
+      reset   {application?, option?: warm|cold|original, force_kill?,
+              confirm} -> DESTRUCTIVE: PLC reset; 'original' erases
+              applications, boot project and retain data
+    """
+    op = args.get("op", "status")
+    app = _get_application_obj(project, args)
+
+    if op == "status":
+        out = {"application": _short_name(app)}
+        for attr, key in (("is_active_application", "is_active"),
+                          ("is_uptodate", "is_uptodate"),
+                          ("is_online_change_possible",
+                           "is_online_change_possible")):
+            try:
+                out[key] = bool(getattr(app, attr))
+            except Exception:
+                out[key] = None
+        log("OK", "app status: {s}".format(s=out))
+        return out
+
+    if op == "activate":
+        if not args.get("confirm"):
+            raise RuntimeError("app activate REFUSED - requires "
+                               "args.confirm=true (it changes which "
+                               "application is the active one)")
+        project.active_application = app
+        log("OK", "active application set to {n}".format(
+            n=_short_name(app)))
+        return {"activated": _short_name(app)}
+
+    if op == "boot":
+        if not args.get("confirm"):
+            raise RuntimeError("app boot REFUSED - requires "
+                               "args.confirm=true (it writes a boot "
+                               "application file)")
+        path = str(args.get("path", "")).strip()
+        if not path:
+            raise RuntimeError("app boot needs args.path (host .bootapp "
+                               "file path)")
+        d = os.path.dirname(path)
+        if d and not os.path.isdir(d):
+            os.makedirs(d)
+        app.create_boot_application(path)
+        log("OK", "offline boot application written to {p}".format(p=path))
+        return {"bootapp": path,
+                "bytes": os.path.getsize(path) if
+                os.path.isfile(path) else None}
+
+    if op == "start":
+        if not args.get("confirm"):
+            raise RuntimeError("app start REFUSED - requires "
+                               "args.confirm=true (it STARTS the program "
+                               "on the RUNNING PLC)")
+        user, pw = _require_creds()
+        online.set_default_credentials(user, pw)
+        onlineapp = online.create_online_application(app)
+        onlineapp.start()
+        log("OK", "application started on the PLC")
+        return {"started": True}
+
+    if op == "reset":
+        if not args.get("confirm"):
+            raise RuntimeError("app reset REFUSED - requires "
+                               "args.confirm=true. DESTRUCTIVE: resets "
+                               "the PLC; option 'original' deletes ALL "
+                               "applications, boot project and retain "
+                               "data.")
+        option_map = {"warm": "Warm", "cold": "Cold", "original": "Original"}
+        option = str(args.get("option", "warm")).lower()
+        if ResetOption is None:
+            raise RuntimeError("ResetOption is unavailable outside "
+                               "e!COCKPIT")
+        if option not in option_map:
+            raise RuntimeError("app reset needs args.option of warm, cold "
+                               "or original")
+        user, pw = _require_creds()
+        online.set_default_credentials(user, pw)
+        onlineapp = online.create_online_application(app)
+        try:
+            reset_option = getattr(ResetOption, option_map[option])
+            onlineapp.reset(reset_option,
+                            bool(args.get("force_kill", False)))
+        except AttributeError as exc:
+            raise RuntimeError("ResetOption.{m} unavailable: {e}".format(
+                m=option_map[option], e=exc))
+        log("OK", "PLC reset done ({o})".format(o=option))
+        return {"reset": option, "force_kill":
+                bool(args.get("force_kill", False))}
+    raise RuntimeError('app_control needs args.op of "status", '
+                       '"activate", "boot", "start" or "reset"')
+
+
+def _projects_global():
+    """The projects root (IScriptProjects): this live build injects
+    e_projects; the stubs document `projects`. Resolve whichever
+    exists."""
+    for name in ("e_projects", "projects"):
+        if name in globals() and globals()[name] is not None:
+            return globals()[name]
+    raise RuntimeError("projects root unavailable outside e!COCKPIT")
+
+
+def cmd_project_control(project, args):
+    """Project lifecycle + info (ScriptProjects/ScriptProject stubs).
+
+    ops:
+      info      -> project info object fields (read-only)
+      info_set  {company?/title?/version?/author?/description?/
+                 default_namespace?, confirm} -> sets project info fields
+      save      -> saves the open project (its physical location)
+      create    {path, confirm} -> NEW project at path (becomes primary)
+      open      {path, confirm} -> opens a project (becomes primary;
+                update_flags = silent + update all)
+      open_archive {archive, project_path, overwrite?, confirm} ->
+                restores a project archive
+      close     {confirm} -> DESTRUCTIVE: closes the project, DISCARDS
+                unsaved changes
+    create/open/open_archive/close swap the GUI's primary project -
+    treat them as session-mutating and always confirm-gated.
+    """
+    op = args.get("op", "info")
+
+    if op == "info":
+        out = {"path": str(project.path) if project.path else None,
+               "dirty": bool(project.dirty)}
+        try:
+            info = project.get_project_info()
+            for attr in ("company", "title", "author", "description",
+                         "default_namespace", "released"):
+                try:
+                    out[attr] = str(getattr(info, attr))
+                except Exception:
+                    out[attr] = None
+            try:
+                out["version"] = str(info.version)
+            except Exception:
+                out["version"] = None
+        except Exception as exc:
+            out["project_info"] = "unavailable: {e}".format(
+                e=str(exc)[:120])
+        log("OK", "project info read")
+        return out
+
+    if op == "info_set":
+        if not args.get("confirm"):
+            raise RuntimeError("project info_set REFUSED - requires "
+                               "args.confirm=true (it modifies project "
+                               "metadata)")
+        info = project.get_project_info()
+        changed = []
+        for attr in ("company", "title", "author", "description",
+                     "default_namespace"):
+            if attr in args:
+                setattr(info, attr, str(args[attr]))
+                changed.append(attr)
+        if "version" in args:
+            info.version = str(args["version"])
+            changed.append("version")
+        log("OK", "project info updated: {c}".format(c=changed))
+        return {"updated": changed}
+
+    if op == "save":
+        project.save()
+        log("OK", "project saved")
+        return {"saved": True, "path": str(project.path)}
+
+    if op == "create":
+        if not args.get("confirm"):
+            raise RuntimeError("project create REFUSED - requires "
+                               "args.confirm=true (it creates a project "
+                               "and makes it the primary one)")
+        path = str(args.get("path", "")).strip()
+        if not path:
+            raise RuntimeError("project create needs args.path")
+        _projects_global().create(path, True)
+        log("OK", "project created at {p} (primary)".format(p=path))
+        return {"created": path, "primary": True}
+
+    if op == "open":
+        if not args.get("confirm"):
+            raise RuntimeError("project open REFUSED - requires "
+                               "args.confirm=true (it opens a project "
+                               "and makes it the primary one; unsaved "
+                               "changes in other projects are the "
+                               "GUI's responsibility)")
+        path = str(args.get("path", "")).strip()
+        if not path:
+            raise RuntimeError("project open needs args.path")
+        opened = _projects_global().open(path, True)
+        log("OK", "project opened: {p}".format(p=opened.path))
+        return {"opened": str(opened.path), "primary": True}
+
+    if op == "open_archive":
+        if not args.get("confirm"):
+            raise RuntimeError("project open_archive REFUSED - requires "
+                               "args.confirm=true (it restores a project "
+                               "archive and opens it)")
+        archive = str(args.get("archive", "")).strip()
+        project_path = str(args.get("project_path", "")).strip()
+        if not archive or not project_path:
+            raise RuntimeError("project open_archive needs args.archive "
+                               "and args.project_path")
+        opened = _projects_global().open_archive(
+            archive, project_path, bool(args.get("overwrite", False)))
+        log("OK", "archive restored to {p}".format(p=opened.path))
+        return {"opened": str(opened.path), "from_archive": archive}
+
+    if op == "close":
+        if not args.get("confirm"):
+            raise RuntimeError("project close REFUSED - requires "
+                               "args.confirm=true. DESTRUCTIVE: closes "
+                               "the project and DISCARDS unsaved "
+                               "changes.")
+        project.close()
+        log("OK", "project closed")
+        return {"closed": True}
+    raise RuntimeError('project_control needs args.op of "info", '
+                       '"info_set", "save", "create", "open", '
+                       '"open_archive" or "close"')
+
+
+# --------------------------------------------------------------------------
 # Command dispatch
 # --------------------------------------------------------------------------
 KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
@@ -3162,7 +4330,10 @@ KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
                   "libs", "lib_find", "lib_install", "lib_uninstall",
                   "repos", "repo_add", "repo_remove", "repo_update",
                   "repo_move",
-                  "login", "source_download", "prepared_values")
+                  "login", "source_download", "prepared_values",
+                  "tree", "object_create", "textual", "task_config",
+                  "symbol_config", "device_scan", "device_comm",
+                  "device_params", "app_control", "project_control")
 
 
 def run_command(request):
@@ -3178,6 +4349,7 @@ def run_command(request):
     summary = {"ok": False, "errors": 0, "warnings": 0, "imported": 0, "skipped": 0}
     result = {"id": rid, "cmd": cmd, "ok": False, "value": None, "error": "",
               "log": LOG_FILE}
+    _headless_hardening()
     log("INFO", "command '{c}' (id {i}) starting".format(c=cmd, i=rid or "<direct>"))
 
     try:
@@ -3315,6 +4487,46 @@ def run_command(request):
         elif cmd == "prepared_values":
             project = get_project()
             result["value"] = cmd_prepared_values(project, args)
+            summary["ok"] = True
+        elif cmd == "tree":
+            project = get_project()
+            result["value"] = cmd_tree(project, args)
+            summary["ok"] = True
+        elif cmd == "symbol_config":
+            project = get_project()
+            result["value"] = cmd_symbol_config(project, args)
+            summary["ok"] = True
+        elif cmd == "device_scan":
+            project = get_project()
+            result["value"] = cmd_device_scan(project, args)
+            summary["ok"] = True
+        elif cmd == "device_comm":
+            project = get_project()
+            result["value"] = cmd_device_comm(project, args)
+            summary["ok"] = True
+        elif cmd == "device_params":
+            project = get_project()
+            result["value"] = cmd_device_params(project, args)
+            summary["ok"] = True
+        elif cmd == "app_control":
+            project = get_project()
+            result["value"] = cmd_app_control(project, args)
+            summary["ok"] = True
+        elif cmd == "project_control":
+            project = get_project()
+            result["value"] = cmd_project_control(project, args)
+            summary["ok"] = True
+        elif cmd == "task_config":
+            project = get_project()
+            result["value"] = cmd_task_config(project, args)
+            summary["ok"] = True
+        elif cmd == "object_create":
+            project = get_project()
+            result["value"] = cmd_object_create(project, args)
+            summary["ok"] = True
+        elif cmd == "textual":
+            project = get_project()
+            result["value"] = cmd_textual(project, args)
             summary["ok"] = True
         else:
             raise RuntimeError("unknown command '{c}' (known: {k})".format(
