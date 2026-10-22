@@ -1132,6 +1132,94 @@ class FakeSpecialContainer(object):
         return FakeSpecialPou()
 
 
+class FakeOnlineApp(object):
+    def __init__(self):
+        self.logins = []
+
+    def login(self, option, delete_foreign_apps):
+        self.logins.append(str(option))
+        raise RuntimeError("login failed")
+
+
+class FakeConnectDevice(object):
+    def __init__(self):
+        self.connected = False
+
+    def connect(self):
+        self.connected = True
+
+
+def test_online_login_keep_only_never_escalates(monkeypatch):
+    # G-26 live incident 2026-10-22: a Keep failure escalated down the
+    # ladder to a FULL DOWNLOAD of the open project. Read-only logins
+    # must fail instead of deploying.
+    class FakeOCO(object):
+        Keep = "Keep"
+        Try = "Try"
+        Force = "Force"
+        Never = "Never"
+
+    monkeypatch.setattr(ex, "OnlineChangeOption", FakeOCO)
+    app = FakeOnlineApp()
+    dev = FakeConnectDevice()
+    with pytest.raises(RuntimeError, match="G-26"):
+        ex._online_login(app, dev, prefer_keep=True)
+    assert app.logins == ["Keep"]   # Keep ONLY - no Try/Force/Never
+    assert dev.connected is False   # and never the implicit-download connect
+
+
+def test_online_login_deploy_ladder_still_escalates(monkeypatch):
+    class FakeOCO(object):
+        Keep = "Keep"
+        Try = "Try"
+        Force = "Force"
+        Never = "Never"
+
+    monkeypatch.setattr(ex, "OnlineChangeOption", FakeOCO)
+    app = FakeOnlineApp()
+
+    class RaisingConnectDevice(FakeConnectDevice):
+        def connect(self):
+            self.connected = True
+            raise RuntimeError("connect failed")
+
+    dev = RaisingConnectDevice()
+    with pytest.raises(RuntimeError, match="all login forms failed"):
+        ex._online_login(app, dev, prefer_keep=False)
+    assert app.logins == ["Try", "Force", "Never"]
+    assert dev.connected is True    # deploy ladder intentionally reaches connect
+
+
+def test_create_online_device_uptodate_guard(monkeypatch):
+    # G-26: connecting the ScriptOnlineDevice is a login-WITH-DOWNLOAD -
+    # refuse when the application is not uptodate unless confirmed.
+    created = []
+
+    class FakeODev(object):
+        pass
+
+    class FakeOnline(object):
+        def create_online_device(self, *argv):
+            created.append(argv)
+            return FakeODev()
+
+    class FakeApp(object):
+        is_uptodate = False
+
+    class Proj(object):
+        def find(self, name, recursive):
+            return []
+
+    monkeypatch.setattr(ex, "get_application", lambda p: FakeApp())
+    monkeypatch.setattr(ex, "online", FakeOnline())
+    with pytest.raises(RuntimeError, match="G-26"):
+        ex._create_online_device(Proj(), {})
+    assert created == []
+    odev = ex._create_online_device(Proj(), {"confirm": True})
+    assert isinstance(odev, FakeODev)
+    assert created == [()]
+
+
 def test_display_name_direct_access_not_getattr():
     # G-01: getattr() silently fails on the interop wrappers - the old
     # probe never ran live, so class-name reprs leaked into snapshot

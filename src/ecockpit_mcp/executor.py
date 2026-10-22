@@ -2073,8 +2073,7 @@ def _online_login(onlineapp, device, prefer_keep=False):
     """
     options = []
     if OnlineChangeOption is not None:
-        names = (["Keep"] if prefer_keep else []) + \
-                ["Try", "Force", "Never"]
+        names = ["Keep"] if prefer_keep else ["Try", "Force", "Never"]
         for name in names:
             try:
                 if name == "Try":
@@ -2092,7 +2091,8 @@ def _online_login(onlineapp, device, prefer_keep=False):
             except Exception as exc:
                 log("INFO", "OnlineChangeOption.{n} unavailable: "
                     "{e}".format(n=name, e=exc))
-    options.append(("device.connect()", None))
+    if not prefer_keep:
+        options.append(("device.connect()", None))
     attempts = []
     for label, option in options:
         try:
@@ -2107,6 +2107,12 @@ def _online_login(onlineapp, device, prefer_keep=False):
                 l=label, c=type(exc).__name__, m=str(exc)[:160]))
             log("INFO", "login via {l} failed: {c}: {m}".format(
                 l=label, c=type(exc).__name__, m=str(exc)[:160]))
+    if prefer_keep:
+        raise RuntimeError(
+            "read-only login failed (Keep) - REFUSING to escalate: "
+            "Try/Force/Never/device.connect() would deploy the open "
+            "project to the PLC (G-26). Attempts:\n  " +
+            "\n  ".join(attempts))
     raise RuntimeError("all login forms failed:\n  " +
                        "\n  ".join(attempts))
 
@@ -2698,7 +2704,24 @@ def _create_online_device(project, args):
     project.find (the raw interop device from project.devices is
     REJECTED - "expected IExtendedObject[IScriptObject]"). Callers
     must Dispose() the result.
+
+    LIVE 2026-10-22 (G-26): CONNECTING this device performs a
+    login-WITH-DOWNLOAD of the open application - it only looks safe
+    when the application is uptodate (no delta to deploy). Non-uptodate
+    therefore REFUSES without args.confirm.
     """
+    try:
+        uptodate = bool(get_application(project).is_uptodate)
+    except Exception:
+        uptodate = None
+    if uptodate is False and not args.get("confirm"):
+        raise RuntimeError(
+            "create_online_device REFUSED - connecting the online "
+            "device performs a login-WITH-DOWNLOAD of the open "
+            "application and the application is NOT uptodate "
+            "(is_uptodate=false), so the connect would deploy it. "
+            "Bring the project and PLC in sync or pass args.confirm"
+            "=true explicitly (G-26).")
     try:
         odev = online.create_online_device()
         log("INFO", "created online device (active application's device)")
