@@ -1204,9 +1204,16 @@ def _enum_by_names(label, names, values, injected):
             if name in table:
                 # LIVE 2026-10-22 (G-20): the live enum can LACK a member
                 # the stub documents (SymbolCommentFilterType has no
-                # 'none') - fall back to the stub int, which the .NET
-                # property accepts.
-                member = table[name]
+                # 'none'). Build a real enum instance via CLR
+                # Enum.ToObject - the typed property REJECTS raw ints
+                # ("expected SymbolCommentFilterType, got int"); raw int
+                # is the last-resort fallback only.
+                member = None
+                try:
+                    from System import Enum as _DotNetEnum
+                    member = _DotNetEnum.ToObject(injected, table[name])
+                except Exception:
+                    member = table[name]
             else:
                 raise RuntimeError("unknown {t} '{n}' (known: {k})".format(
                     t=label, n=name, k=known))
