@@ -31,7 +31,7 @@ flowchart LR
 - **`server.py`** (host, CPython ≥ 3.10) — the MCP server editors
   connect to. Validates arguments, enforces the confirm-gate refusals,
   routes commands over the file protocol, adds `log_tail` to failures.
-  Exposes ~43 tools across build/import/export, online I/O, libraries,
+  Exposes 49 tools across build/import/export, online I/O, libraries,
   tree/ST authoring, task/symbol config, device scan/comm/params, and
   project lifecycle.
 - **`relay.py`** (inside e!COCKPIT, IronPython 2.7) — armed once per

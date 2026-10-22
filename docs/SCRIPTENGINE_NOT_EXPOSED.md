@@ -12,7 +12,7 @@ Status: `possible` (stub-documented, unimplemented) · `partial` ·
 
 State: the CHM documents ~217 interfaces / ~580 methods / ~830
 properties; the ScriptLib stubs refine them; ecockpit-mcp exposes its
-task-oriented subset via 43 MCP tools (2026-10-22).
+task-oriented subset via 49 MCP tools (2026-10-22; plc_fs_ops counts once for its seven ops).
 
 | Capability | Stub chain (file → call) | Status | Notes |
 |---|---|---|---|
