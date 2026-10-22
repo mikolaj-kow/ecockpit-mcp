@@ -3114,13 +3114,50 @@ def _version_from_filename(path):
 
 
 def _snapshot_prefix(project):
-    """Filename-safe project name for snapshot files (fallback: 'project')."""
+    """Filename-safe SHORT project name for snapshot files.
+
+    Preference: the on-disk project FILE base (what the user actually
+    calls the project), then the display name, then 'project'.
+    LIVE 2026-10-22: EScriptProject exposes neither get_name() nor
+    .name/.Name (unlike device objects), and the GUI autosave path is a
+    GUID blob - so a non-autosave project.path wins, everything else
+    falls through."""
+    try:
+        p = project.path
+        p = str(p) if p else ""
+        if p and os.path.isfile(p) and "Autosave" not in p                 and not p.endswith(".autosave"):
+            base = os.path.splitext(os.path.basename(p))[0]
+            safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", base).strip("_")
+            if safe:
+                return safe
+    except Exception:
+        pass
     try:
         name = _display_name(project)
     except Exception:
         name = ""
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name or "").strip("_")
     return safe or "project"
+
+
+def _on_disk_project_path(project):
+    """The on-disk .ecp to read/copy: the open project's path
+    (IScriptProject.path - even the GUI autosave, which IS the current
+    state), then the explicit/discovered project, then the projects-dir
+    search. Returns '' when nothing exists."""
+    try:
+        p = project.path
+        if p and os.path.isfile(str(p)):
+            return str(p)
+    except Exception:
+        pass
+    src = PROJECT_FILE or discover_project_file()
+    if src and os.path.isfile(src):
+        return src
+    src = _find_open_source_ecp()
+    if src and os.path.isfile(src):
+        return src
+    return ""
 
 
 def cmd_snapshot(project, args):
@@ -3145,20 +3182,9 @@ def cmd_snapshot(project, args):
         save_ok = False
         log("WARN", "project.save() failed ({e}) - snapshotting the last "
                     "on-disk state instead".format(e=exc))
-    src = ""
-    try:
-        # IScriptProject.path - the open project's on-disk location
-        # (ScriptEngine.chm, referenced by the save_as remarks).
-        p = project.path
-        if p and os.path.isfile(str(p)):
-            src = str(p)
-            log("INFO", "project.path: {p}".format(p=src))
-    except Exception:
-        pass
-    if not src:
-        src = PROJECT_FILE or discover_project_file()
-    if not src or not os.path.isfile(src):
-        src = _find_open_source_ecp()
+    src = _on_disk_project_path(project)
+    if src:
+        log("INFO", "on-disk project: {p}".format(p=src))
     if not src or not os.path.isfile(src):
         raise RuntimeError("cannot locate the on-disk .ecp to snapshot "
                            "(repo discovery and {d} search both empty)".format(
