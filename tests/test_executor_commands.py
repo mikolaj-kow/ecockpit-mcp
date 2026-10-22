@@ -1132,6 +1132,27 @@ class FakeSpecialContainer(object):
         return FakeSpecialPou()
 
 
+def test_display_name_direct_access_not_getattr():
+    # G-01: getattr() silently fails on the interop wrappers - the old
+    # probe never ran live, so class-name reprs leaked into snapshot
+    # filenames. Direct access works on wrappers and fakes alike.
+    class P(object):
+        def get_name(self):
+            return "s4 v7"
+
+        def __str__(self):
+            return "Wago.Eng.Module.Script.ScriptObjects.EScriptProject"
+
+    assert ex._display_name(P()) == "s4 v7"
+    assert ex._snapshot_prefix(P()) == "s4_v7"
+
+    class OnlyRepr(object):
+        def __str__(self):
+            return "ScriptThing{Name=FromRepr}"
+
+    assert ex._snapshot_prefix(OnlyRepr()) == "Name_FromRepr"
+
+
 def test_object_create_container_falls_back_to_application(monkeypatch):
     # G-22: EScriptProject has no create_pou live - the no-parent
     # default container is the APPLICATION

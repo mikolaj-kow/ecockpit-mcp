@@ -2147,22 +2147,27 @@ def _online_disconnect(device):
 
 
 def _display_name(obj):
-    """Friendlier name for dynamic ScriptObjects: probe get_name()/.name/.Name.
+    """Friendlier name for dynamic ScriptObjects: DIRECT get_name()/.name/
+    .Name access, then the repr short-name.
 
-    dir() on these wrappers is empty (probe 2026-10-20), so attributes must
-    be probed directly; fall back to the repr short-name.
+    LIVE 2026-10-22: the old getattr() probe silently never ran on the
+    interop wrappers (getattr fails on them, G-01) - the class-name repr
+    leaked into snapshot filenames
+    (Wago.Eng.Module.Script.ScriptObjects.EScriptProject_3.10.0-pre7.ecp).
+    Direct calls work on wrappers and plain objects alike.
     """
     try:
-        gn = getattr(obj, "get_name", None)
-        if gn is not None:
-            v = gn()
-            if v:
-                return str(v)
+        v = obj.get_name()
+        if v:
+            return str(v)
     except Exception:
         pass
     for attr in ("name", "Name"):
         try:
-            v = getattr(obj, attr)
+            if attr == "name":
+                v = obj.name
+            else:
+                v = obj.Name
             if v:
                 return str(v)
         except Exception:
