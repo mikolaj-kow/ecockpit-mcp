@@ -4536,9 +4536,18 @@ def cmd_device_scan(project, args):
             except Exception:
                 raise RuntimeError("gateway '{g}' not found".format(
                     g=gw_name))
-        if len(gateways) == 0:
+        # LIVE 2026-10-22: len() on the .NET gateway collection fails
+        # ("len() of unsized object") - iterate for the first entry.
+        first = None
+        try:
+            for gw in gateways:
+                first = gw
+                break
+        except Exception:
+            first = None
+        if first is None:
             raise RuntimeError("no gateways configured in e!COCKPIT")
-        return gateways[0]
+        return first
 
     if op == "gateways":
         out = []
