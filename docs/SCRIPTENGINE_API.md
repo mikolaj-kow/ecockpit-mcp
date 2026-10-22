@@ -223,6 +223,69 @@ object.
 `upload_source(archive_path)` (IScriptOnlineDevice3) reads the source
 project archive back from the PLC (→ `ecockpit_upload_source`).
 
+## Project tree, ST authoring, task/symbol config, device params
+
+From the **ScriptLib stubs** (`...\CODESYS\ScriptLib\Stubs\scriptengine\
+*.pyi` — the authoritative API surface, correcting the CHM in several
+places; `OnlineChangeOption.Keep = 3` is stub-only). Implemented in
+feat/scriptlib-tools:
+
+- **Tree** (ScriptTreeObject/ScriptObject): `find(name, recursive)`,
+  `get_children(recursive)`, `get_name()`, `rename(new_name)`,
+  `remove()`, `move(new_parent, index)`, `create_folder(name)`;
+  markers `is_device/is_application/is_folder/is_task_configuration/
+  is_symbol_config/is_libman/is_textlist/is_imagepool/
+  has_textual_declaration/has_textual_implementation` (direct access
+  per the gotcha; `getattr`/`dir` unusable). → `ecockpit_tree`.
+- **ST authoring** (ScriptIecLanguageObjectContainer, 3.5.9.0):
+  `create_pou(name, type=PouType.Program|FunctionBlock|Function,
+  language=ImplementationLanguages.st, return_type)`,
+  `create_gvl(name)`, `create_dut(name, DutType..., baseType)`,
+  `create_interface(name, baseInterfaces)`, and on POUs
+  `create_method/create_property/create_action/create_transition`.
+  **Text** (ScriptTextualObject, 3.5.6.0): `textual_declaration` /
+  `textual_implementation` → ScriptTextDocument with `.text`,
+  `.replace(new_text=...)` (whole-part replace). → `ecockpit_object_create`,
+  `ecockpit_textual_read/write`.
+- **Task config** (ScriptTaskConfigObject, 3.5.10.0):
+  `application.create_task_configuration()` → `create_task(name)` →
+  `kind_of_task` (KindOfTask.Cyclic/Freewheeling/Event/ExternalEvent/
+  Status/ParentSynchron), `interval`/`interval_unit`/`priority`
+  (strings), `watchdog.{enabled,time,time_unit,sensitivity}`,
+  `pous.add(name)`. → `ecockpit_task_config` / `ecockpit_task_create`.
+- **Symbol config** (ScriptSymbolConfigObject, 3.5.10.0):
+  `application.create_symbol_config(export_comments, support_opc_ua,
+  client_side_layout_calculator)`; `get_all_signatures(compile=True)`
+  → signatures → variables (`name`, `type`, `effective_access`) —
+  the full variable inventory for OPC UA / online tooling. →
+  `ecockpit_symbol_config_variables` / `ecockpit_symbol_config_create`.
+- **Device scan** (ScriptOnline gateway stack, 3.5.8.0):
+  `online.gateways` (+`gateway_drivers`),
+  `gateway.perform_network_scan()` → targets (`device_name`, `address`,
+  `vendor_name`, `device_id`...), `gateway.find_address_by_ip(ip,
+  port=11740)`. → `ecockpit_device_scan`.
+- **Device comm** (ScriptDeviceObject): `set_gateway_and_ip_address(gw,
+  "ip:port")`, `set_gateway_and_address`, `set_gateway_and_device_name`,
+  `get_device_communication_settings()` (with `scanned_*` fields). →
+  `ecockpit_device_comm`.
+- **Device parameters** (ScriptDeviceParameters, 3.5.4.0):
+  `device.device_parameters` / `device.connectors.by_id(id).
+  host_parameters` → parameter set; elements expose `identifier`,
+  `value`, `can_access_online`, `read_online_value(timeout)`,
+  `write_online_value(value)`, enums (`allowed_values`), ranges,
+  struct sub-elements. → `ecockpit_device_params` (write is
+  confirm-gated, PLC-touching).
+- **Application** (ScriptApplication, 3.5.10.0 fields): `is_uptodate`,
+  `is_online_change_possible`, `create_boot_application(path,
+  update_compile_info=False, write_visu_files=False)` (offline boot
+  file; `update_compile_info=True` BREAKS online-change compatibility),
+  `create_task_configuration()`, `create_symbol_config(...)`. →
+  `ecockpit_app_control`.
+- **Headless** (ScriptSystem): `system.prompt_handling =
+  PromptHandling.LogSimplePrompts` keeps simple prompts out of the GUI
+  (the relay cannot answer dialogs); `system.delay(ms)` pumps the UI
+  loop. Applied once per executor process.
+
 ## Libraries (global `librarymanager` — ILibManager)
 
 *"An instance implementing this interface is injected into the scriptengine

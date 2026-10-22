@@ -4331,7 +4331,9 @@ KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
                   "repos", "repo_add", "repo_remove", "repo_update",
                   "repo_move",
                   "login", "source_download", "prepared_values",
-                  "tree", "object_create", "textual", "task_config", "symbol_config", "device_scan", "device_comm", "device_params", "app_control", "project_control")
+                  "tree", "object_create", "textual", "task_config",
+                  "symbol_config", "device_scan", "device_comm",
+                  "device_params", "app_control", "project_control")
 
 
 def run_command(request):
