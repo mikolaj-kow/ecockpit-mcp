@@ -38,6 +38,7 @@ SCRIPTENGINE_API.md cross-reference.
 | 2026-10-22 | ecockpit_device_io | op=set_mapping / import_csv | PENDING | DESTRUCTIVE — modifies the IO configuration; owner request only |
 | 2026-10-22 | ecockpit_symbol_config_options | op=config / xsd | PENDING | read-only (feat/system-device-io) |
 | 2026-10-22 | ecockpit_symbol_config_options | op=config_set | PENDING | DESTRUCTIVE — project symbol config; owner request only |
+| 2026-10-22 | ecockpit_object_create | kind=special_pou (any check function) | PENDING | DESTRUCTIVE — forces a full recompile, disables online change; owner request only |
 | — | ecockpit_app_control op=activate/boot/start/reset | confirm=true | PENDING | DESTRUCTIVE — owner request only |
 | — | ecockpit_download | confirm=true | PENDING | DESTRUCTIVE — replaces the RUNNING app; owner request only |
 | — | ecockpit_device_params op=write | confirm=true | PENDING | DESTRUCTIVE — PLC parameter write; owner request only |

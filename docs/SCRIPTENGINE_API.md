@@ -266,6 +266,13 @@ feat/scriptlib-tools:
   `create_gvl(name)`, `create_dut(name, DutType..., baseType)`,
   `create_interface(name, baseInterfaces)`, and on POUs
   `create_method/create_property/create_action/create_transition`.
+  Special POUs (3.5.12.10): `create_pou(SpecialPouType)` — implicit-
+  check functions (check_bounds, check_pointer, check_range_unsigned/
+  signed, check_div_real_64/32, check_div_int_64/32,
+  check_l_range_unsigned/signed); the engine names the object itself.
+  Stub warning, passed through to the tool result: *adding a check
+  function will provoke a full recompile and prohibit an online
+  change*. → `ecockpit_object_create` kind=special_pou.
   **Text** (ScriptTextualObject, 3.5.6.0): `textual_declaration` /
   `textual_implementation` → ScriptTextDocument with `.text`,
   `.replace(new_text=...)` (whole-part replace). → `ecockpit_object_create`,

@@ -67,7 +67,7 @@ more). Live results: [TESTING.md](TESTING.md).
 | ST authoring | ecockpit_object_create | ✅ | `container.create_interface(name, baseInterfaces)` | kind=interface |
 | ST authoring | ecockpit_object_create | ✅ | `pou.create_method/property/action/transition(...)` | kind=method/property/action/transition (needs parent) |
 | ST authoring | ecockpit_textual_read/write | ✅ | `obj.textual_declaration` / `textual_implementation` → `.text` / `.replace(new_text=...)` | read / confirm-gated whole-part replace |
-| ST authoring | — | 🟡 | `create_pou(SpecialPouType.*)` (check functions) | forces full recompile, kills online change |
+| ST authoring | ecockpit_object_create | ✅ | `create_pou(SpecialPouType.*)` (check functions) | kind=special_pou + special_type (engine names the object); forces full recompile, kills online change; confirm |
 | Task config | ecockpit_task_config | ✅ | `app.create_task_configuration()` → `tc.create_task(name)` | inspect (read-only) + create |
 | Task config | ecockpit_task_create | ✅ | `task.kind_of_task` (KindOfTask.Cyclic/...) / `priority` / `interval` / `interval_unit` | task_create sets, task_config inspects |
 | Task config | ecockpit_task_create | ✅ | `task.watchdog.{enabled,time,time_unit,sensitivity}` | — |

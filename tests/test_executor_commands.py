@@ -1015,3 +1015,52 @@ def test_symbol_config_xsd_write(symapp, tmp_path):
                             "Symbolconfiguration.xsd")
     assert os.path.isfile(expected)
     assert out["file"] == os.path.abspath(expected)
+
+
+class FakeSpecialPou(object):
+    def __str__(self):
+        return "ScriptObject{Name=CheckRangeSigned}"
+
+
+class FakeSpecialContainer(object):
+    def __init__(self):
+        self.calls = []
+
+    def create_pou(self, *argv, **kwargs):
+        self.calls.append((argv, kwargs))
+        return FakeSpecialPou()
+
+
+def test_object_create_special_pou(monkeypatch):
+    class FakeSPT(object):
+        check_bounds = 2
+        check_range_signed = 5
+
+    monkeypatch.setattr(ex, "SpecialPouType", FakeSPT)
+    container = FakeSpecialContainer()
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_object_create(container, {"kind": "special_pou",
+                                         "special_type": "check_bounds"})
+
+    out = ex.cmd_object_create(container, {"kind": "special_pou",
+                                           "special_type": "check_bounds",
+                                           "confirm": True})
+    assert container.calls == [((2,), {})]   # positional SpecialPouType
+    assert out["created"] == "check_bounds"
+    assert "full recompile" in out["warning"]
+
+    with pytest.raises(RuntimeError, match="special_type"):
+        ex.cmd_object_create(container, {"kind": "special_pou",
+                                         "confirm": True})
+    with pytest.raises(RuntimeError, match="unknown SpecialPouType"):
+        ex.cmd_object_create(container, {"kind": "special_pou",
+                                         "special_type": "wat",
+                                         "confirm": True})
+
+    # no stand-in (None) -> same unknown-member error, not a crash
+    monkeypatch.setattr(ex, "SpecialPouType", None)
+    with pytest.raises(RuntimeError, match="unknown SpecialPouType"):
+        ex.cmd_object_create(container, {"kind": "special_pou",
+                                         "special_type": "check_bounds",
+                                         "confirm": True})

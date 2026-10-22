@@ -155,6 +155,13 @@ if "PouType" not in globals():
 if "DutType" not in globals():
     # DutType: Structure/Enumeration/Alias/Union/EnumerationWithTextList.
     DutType = None
+if "SpecialPouType" not in globals():
+    # SpecialPouType (ScriptIecLanguageObjectContainer stub, 3.5.12.10):
+    # implicit-check POUs - none=1, check_bounds=2, check_pointer=3,
+    # check_range_unsigned=4, check_range_signed=5, check_div_real_64=6,
+    # check_div_real_32=7, check_div_int_64=8, check_div_int_32=9,
+    # check_l_range_unsigned=10, check_l_range_signed=11.
+    SpecialPouType = None
 if "KindOfTask" not in globals():
     # KindOfTask: Cyclic=1, Freewheeling=2, Event=3, ExternalEvent=4,
     # Status=5, ParentSynchron=6.
@@ -3932,12 +3939,23 @@ def cmd_tree(project, args):
                        '"move" or "folder"')
 
 
+_SPECIAL_POU_TYPES = ("check_bounds", "check_pointer",
+                      "check_range_unsigned", "check_range_signed",
+                      "check_div_real_64", "check_div_real_32",
+                      "check_div_int_64", "check_div_int_32",
+                      "check_l_range_unsigned", "check_l_range_signed")
+
+
 def cmd_object_create(project, args):
     """Create project objects (ScriptIecLanguageObjectContainer stub).
 
-    args: {"kind": "pou"|"gvl"|"dut"|"interface"|"folder"|"method"|
-           "property"|"action"|"transition",
-           "name": required,
+    args: {"kind": "pou"|"gvl"|"dut"|"interface"|"special_pou"|"folder"|
+           "method"|"property"|"action"|"transition",
+           "name": required (EXCEPT special_pou - the engine names
+                   implicit-check POUs itself),
+           "special_type": SpecialPouType member (special_pou only;
+                   adding a check function FORCES A FULL RECOMPILE and
+                   prohibits online change from then on - stub warning),
            "pou_type": "program"|"functionblock"|"function" (pou only),
            "base_type"?: (dut/interface/method return),
            "parent"?: object name (container; default the project),
@@ -3953,6 +3971,32 @@ def cmd_object_create(project, args):
                            "args.confirm=true (it modifies the project)")
     kind = str(args.get("kind", "")).lower()
     name = str(args.get("name", "")).strip()
+
+    if kind == "special_pou":
+        # create_pou(SpecialPouType) - implicit-check POUs (3.5.12.10).
+        special = str(args.get("special_type", "")).strip()
+        if not special:
+            raise RuntimeError("object_create special_pou needs "
+                               "args.special_type (one of: {k})"
+                               .format(k=", ".join(_SPECIAL_POU_TYPES)))
+        parent_name = str(args.get("parent", "")).strip()
+        container = _find_one(project, parent_name) \
+            if parent_name else project
+        try:
+            member = getattr(SpecialPouType, special)
+        except Exception:
+            raise RuntimeError("object_create: unknown SpecialPouType "
+                               "'{s}' (known: {k})".format(
+                                   s=special,
+                                   k=", ".join(_SPECIAL_POU_TYPES)))
+        created = container.create_pou(member)
+        log("OK", "created special_pou {s} (FORCES A FULL RECOMPILE; "
+            "online change is prohibited from then on)".format(s=special))
+        return {"created": special, "kind": "special_pou",
+                "warning": "check functions force a full recompile and "
+                           "prohibit online change",
+                "summary": _obj_summary(created)}
+
     if not name:
         raise RuntimeError("object_create needs args.name")
     parent_name = str(args.get("parent", "")).strip()
@@ -4003,8 +4047,9 @@ def cmd_object_create(project, args):
             created = container.create_transition(name)
     else:
         raise RuntimeError('object_create needs args.kind of "pou", "gvl", '
-                           '"dut", "interface", "folder", "method", '
-                           '"property", "action" or "transition"')
+                           '"dut", "interface", "special_pou", "folder", '
+                           '"method", "property", "action" or '
+                           '"transition"')
     log("OK", "created {k} '{n}'".format(k=kind, n=name))
 
     declaration = args.get("declaration")

@@ -171,7 +171,7 @@ Project tree + ST authoring:
 | Tool | Notes |
 |---|---|
 | `ecockpit_tree(op?, ...)` | `list` (find/get_children + kind markers, read-only), `rename`/`remove`/`move`/`folder` (**destructive**, confirm-gated) |
-| `ecockpit_object_create(kind, name, ..., confirm)` | **destructive** — create pou/gvl/dut/interface/folder/method/property/action/transition; optional `declaration`/`implementation` ST text written on create |
+| `ecockpit_object_create(kind, name, ..., confirm)` | **destructive** — create pou/gvl/dut/interface/folder/method/property/action/transition, plus `kind=special_pou` (implicit-check POUs; **forces a full recompile and disables online change**); optional `declaration`/`implementation` ST text written on create |
 | `ecockpit_textual_read(name, part?)` | read the ST declaration/implementation text |
 | `ecockpit_textual_write(name, text, part?, confirm)` | **destructive** — replace the whole declaration or implementation |
 

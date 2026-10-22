@@ -952,22 +952,29 @@ def ecockpit_tree(op: str = "list", name: str = "", new_name: str = "",
     description="DESTRUCTIVE - requires explicit owner request. Create a "
                 "project object: kind pou (pou_type program|"
                 "functionblock|function, ST), gvl, dut, interface, "
-                "folder, or a POU member (method/property/action/"
-                "transition; needs parent). Optional declaration/"
-                "implementation ST text is written into the new object. "
-                "Modifies the project; the new code is compiled on the "
-                "next build. Pass confirm=true, never without an "
-                "explicit owner instruction.")
-def ecockpit_object_create(kind: str, name: str, parent: str = "",
+                "folder, special_pou (implicit-check POU via "
+                "create_pou(SpecialPouType): special_type check_bounds|"
+                "check_pointer|check_range_unsigned|check_range_signed|"
+                "check_div_real_64|check_div_real_32|check_div_int_64|"
+                "check_div_int_32|check_l_range_unsigned|"
+                "check_l_range_signed - the engine names the object "
+                "itself; WARNING: adding a check function FORCES A FULL "
+                "RECOMPILE and prohibits online change from then on), "
+                "or a POU member (method/property/action/transition; "
+                "needs parent). Optional declaration/implementation ST "
+                "text is written into the new object. Modifies the "
+                "project; the new code is compiled on the next build. "
+                "Pass confirm=true, never without an explicit owner "
+                "instruction.")
+def ecockpit_object_create(kind: str, name: str = "", parent: str = "",
                            pou_type: str = "functionblock",
+                           special_type: str = "",
                            return_type: str = "",
                            base_type: str = "",
                            declaration: str = "",
                            implementation: str = "",
                            confirm: bool = False,
                            timeout_s: int = 300) -> str:
-    if not kind or not name:
-        raise ValueError("kind and name required")
     if not confirm:
         return json.dumps({
             "ok": False,
@@ -976,6 +983,16 @@ def ecockpit_object_create(kind: str, name: str, parent: str = "",
                      "(new code objects); call again with confirm=true "
                      "only on an explicit owner request",
         }, indent=2)
+    if kind == "special_pou":
+        if not special_type:
+            raise ValueError("special_type required for kind=special_pou")
+        args = {"kind": kind, "special_type": special_type,
+                "confirm": True}
+        if parent:
+            args["parent"] = parent
+        return json.dumps(_run("object_create", args, timeout_s), indent=2)
+    if not kind or not name:
+        raise ValueError("kind and name required")
     args = {"kind": kind, "name": name, "confirm": True}
     if parent:
         args["parent"] = parent
