@@ -20,15 +20,17 @@ owner answering, and `system exit` as the session's final command (see
 TESTING.md). The owner's manual snapshot compiles GREEN — the 5
 C140/C418 errors were the old GUI session's in-memory state (resolved);
 the in-session "Symbols" symbol config went with that rollback.
-REMAINING: D2 rest (variable write + unforce on the RUNNING app, PLC
-file-op batch, prompt_answers end-to-end via plc_put without force,
-stop/reset — deliberately last), D3-follow-up (keep a special_pou),
-F (machine-wide). DONE in the D2 ramp: state/prepared_values (in-sync
-and out-of-sync guard paths), download + start, **ONLINE CHANGE**
-(body edit → login Try → app stayed running), device_params online
-read (times out on parameters even running — target limitation).
-The McpOnlineProbe FB is intentionally left in the project (the
-online-change test object; remove via GUI or a later round).
+REMAINING: D2 rest — stop/reset (deliberately last, owner go only),
+prompt_answers e2e (BLOCKED by G-31: needs a working file transfer),
+variable write/force/unforce DONE, download+start DONE, activate DONE.
+**ONLINE CHANGE VERDICT (2026-10-22)**: not possible on this build —
+login(Try) from the API fails AND the GUI's own login says "online
+change is not possible, full download required"; full download deploys
+reliably and carries edits (tick-rate change observed). D2 leftovers:
+PLC file ops BLOCKED by G-31 (host-copy transfer). F (machine-wide:
+lib/repo ops, upload_source, source_download retry) still open.
+Test objects now in the project: GvlGuiTest, GvlMcpProbe, Symbols,
+McpTestProgram+McpProbeTask (owner's live test material).
 Snapshot naming fixed: `s4-v3.10.0-pre_<version>.ecp`.
 
 **INCIDENT (2026-10-22, G-26, FIXED):** the first D2 ramp (state /
