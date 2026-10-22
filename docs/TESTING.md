@@ -32,6 +32,8 @@ SCRIPTENGINE_API.md cross-reference.
 | 2026-10-22 | ecockpit_symbol_config_variables | compile=true | PENDING | builds first (slow but safe) |
 | 2026-10-22 | ecockpit_system | op=info / write_message / set_prompt_answer / prompt_answers / set_flags | PENDING | read-only + message-store ops (feat/system-device-io) |
 | 2026-10-22 | ecockpit_system_ui | op=ui (any dialog) / op=exit | PENDING | DESTRUCTIVE — modal wedge / kills e!COCKPIT; owner request only |
+| 2026-10-22 | ecockpit_device_info | op=identification / simulation / driver_info | PENDING | read-only (feat/system-device-io) |
+| 2026-10-22 | ecockpit_device_info | op=simulation_set / driver_info_set | PENDING | DESTRUCTIVE — project device configuration; owner request only |
 | — | ecockpit_app_control op=activate/boot/start/reset | confirm=true | PENDING | DESTRUCTIVE — owner request only |
 | — | ecockpit_download | confirm=true | PENDING | DESTRUCTIVE — replaces the RUNNING app; owner request only |
 | — | ecockpit_device_params op=write | confirm=true | PENDING | DESTRUCTIVE — PLC parameter write; owner request only |

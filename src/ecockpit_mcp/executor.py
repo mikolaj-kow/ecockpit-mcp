@@ -41,6 +41,9 @@ Commands (request = {"id": ..., "cmd": ..., "args": {...}}):
                answers (headless dialog simulation), abort/trace flags,
                progress bar. ui.* dialogs + exit are confirm-gated ops
                (wedge / kills-e!COCKPIT hazards)
+    device_info  device identification / simulation mode / driver info
+               (bus cycle task, IO application, stop behaviour,
+               diagnosis); the setters are confirm-gated
     probe      dump dir() of the scripting API objects to
                tmp/logs/ecockpit_api_probe.txt (API-surface discovery).
 
@@ -153,6 +156,14 @@ if "KindOfTask" not in globals():
     # KindOfTask: Cyclic=1, Freewheeling=2, Event=3, ExternalEvent=4,
     # Status=5, ParentSynchron=6.
     KindOfTask = None
+if "StopResetBehaviour" not in globals():
+    # ScriptDeviceObject stub: outputs behaviour on PLC stop -
+    # KeepCurrentValues=0, SetToDefault=1, ExecuteProgram=2.
+    StopResetBehaviour = None
+if "AlwaysUpdateVariablesMode" not in globals():
+    # ScriptDriverInfo stub: always-update-variables mode -
+    # Disabled=1, OnlyIfUnused=2, AlwaysInBusCycle=3.
+    AlwaysUpdateVariablesMode = None
 if "ImplementationLanguages" not in globals():
     # ST/CFC/FBD/... implementation language GUIDs (injected global).
     ImplementationLanguages = None
@@ -4396,6 +4407,211 @@ def cmd_device_comm(project, args):
     raise RuntimeError('device_comm needs args.op of "get" or "set_ip"')
 
 
+# ScriptDriverInfo / ScriptDeviceObject stub value tables.
+_STOP_RESET_VALUES = (
+    ("KeepCurrentValues", 0), ("SetToDefault", 1), ("ExecuteProgram", 2),
+)
+_ALWAYS_UPDATE_VALUES = (
+    ("Disabled", 1), ("OnlyIfUnused", 2), ("AlwaysInBusCycle", 3),
+)
+
+
+def _driver_info_dict(di):
+    """Guarded read of every ScriptDriverInfo member (3.5.9.0)."""
+    out = {}
+    readers = (
+        ("can_set_io_application",
+         lambda: bool(di.can_set_io_application)),
+        ("io_application", lambda: str(di.io_application)),
+        ("update_ios_while_in_stop",
+         lambda: bool(di.update_ios_while_in_stop)),
+        ("behaviour_for_outputs_on_stop",
+         lambda: _enum_to_name(di.behaviour_for_outputs_on_stop,
+                               _STOP_RESET_VALUES)),
+        ("user_program_for_stop_reset_behaviour",
+         lambda: str(di.user_program_for_stop_reset_behaviour)),
+        ("always_update_variables",
+         lambda: _enum_to_name(di.always_update_variables,
+                               _ALWAYS_UPDATE_VALUES)),
+        ("bus_cycle_task_by_name",
+         lambda: str(di.bus_cycle_task_by_name)),
+        ("bus_cycle_task_by_guid",
+         lambda: str(di.bus_cycle_task_by_guid)),
+        ("generate_force_variables",
+         lambda: bool(di.generate_force_variables)),
+        ("enable_diagnosis", lambda: bool(di.enable_diagnosis)),
+        ("show_io_warnings_as_errors",
+         lambda: bool(di.show_io_warnings_as_errors)),
+    )
+    for name, reader in readers:
+        try:
+            out[name] = reader()
+        except Exception:
+            out[name] = None
+    return out
+
+
+def cmd_device_info(project, args):
+    """Device identification, simulation mode and driver info
+    (ScriptDeviceObject stub, 3.5.4.0 / 3.5.9.0).
+
+    ops:
+      identification {device?} -> get_device_identification()
+              ({type, id, version}) + get_module_identification()
+              (read-only)
+      simulation     {device?} -> get_simulation_mode() (read-only)
+      simulation_set {device?, enabled, confirm} -> set_simulation_mode
+              (modifies the project device configuration - CONFIRM-GATED)
+      driver_info    {device?} -> ScriptDriverInfo dump (read-only):
+              bus cycle task, IO application, stop behaviour, always-
+              update mode, force-variable generation, diagnosis
+      driver_info_set {device?, confirm, bus_cycle_task?, io_application?,
+              update_ios_while_in_stop?, behaviour_for_outputs_on_stop?,
+              user_program_for_stop_reset_behaviour?,
+              always_update_variables?, generate_force_variables?,
+              enable_diagnosis?, show_io_warnings_as_errors?}
+              -> the ScriptDriverInfo setters (CONFIRM-GATED, modifies
+              the project device configuration); read-back after
+    """
+    op = args.get("op", "identification")
+    dev = _device_obj(project, args)
+
+    if op == "identification":
+        out = {"device": _short_name(dev)}
+        try:
+            did = dev.get_device_identification()
+            out["device_id"] = {"type": str(did.type), "id": str(did.id),
+                                "version": str(did.version)}
+        except Exception as exc:
+            out["device_id"] = {"error": str(exc)[:150]}
+        try:
+            out["module_id"] = str(dev.get_module_identification())
+        except Exception as exc:
+            out["module_id"] = "error: {e}".format(e=str(exc)[:140])
+        log("OK", "identification read")
+        return out
+
+    if op == "simulation":
+        try:
+            mode = bool(dev.get_simulation_mode())
+        except Exception as exc:
+            raise RuntimeError("get_simulation_mode failed: {e}".format(
+                e=exc))
+        log("OK", "simulation mode: {m}".format(m=mode))
+        return {"device": _short_name(dev), "simulation": mode}
+
+    if op == "simulation_set":
+        if not args.get("confirm"):
+            raise RuntimeError("device_info simulation_set REFUSED - "
+                               "requires args.confirm=true (it modifies "
+                               "the project device configuration)")
+        enabled = bool(args.get("enabled", False))
+        dev.set_simulation_mode(enabled)
+        try:
+            readback = bool(dev.get_simulation_mode())
+        except Exception:
+            readback = None
+        log("OK", "device {d}: simulation mode set to {m}".format(
+            d=_short_name(dev), m=enabled))
+        return {"device": _short_name(dev), "set": enabled,
+                "simulation": readback}
+
+    if op == "driver_info":
+        try:
+            di = dev.driver_info
+        except Exception as exc:
+            raise RuntimeError("driver_info not available: {e}".format(
+                e=exc))
+        out = _driver_info_dict(di)
+        log("OK", "driver info read (bus cycle task: {t})".format(
+            t=out.get("bus_cycle_task_by_name")))
+        return {"device": _short_name(dev), "driver_info": out}
+
+    if op == "driver_info_set":
+        if not args.get("confirm"):
+            raise RuntimeError("device_info driver_info_set REFUSED - "
+                               "requires args.confirm=true (it modifies "
+                               "the project device configuration)")
+        try:
+            di = dev.driver_info
+        except Exception as exc:
+            raise RuntimeError("driver_info not available: {e}".format(
+                e=exc))
+        applied = {}
+        if args.get("bus_cycle_task"):
+            task = str(args["bus_cycle_task"])
+            di.set_bus_cycle_task(task)
+            applied["bus_cycle_task"] = task
+        if args.get("io_application"):
+            name = str(args["io_application"])
+            found = project.find(name, True)
+            app_obj = None
+            for o in (found or []):
+                try:
+                    if o.is_application:
+                        app_obj = o
+                        break
+                except Exception:
+                    continue
+            if app_obj is None:
+                raise RuntimeError("no application named '{n}' in the "
+                                   "project".format(n=name))
+            di.set_io_application(app_obj)
+            applied["io_application"] = name
+        if args.get("update_ios_while_in_stop") is not None:
+            value = bool(args["update_ios_while_in_stop"])
+            di.update_ios_while_in_stop = value
+            applied["update_ios_while_in_stop"] = value
+        if args.get("behaviour_for_outputs_on_stop"):
+            value = _enum_by_names(
+                "StopResetBehaviour",
+                [str(args["behaviour_for_outputs_on_stop"])],
+                _STOP_RESET_VALUES, StopResetBehaviour)
+            di.behaviour_for_outputs_on_stop = value
+            applied["behaviour_for_outputs_on_stop"] = \
+                str(args["behaviour_for_outputs_on_stop"])
+        if args.get("user_program_for_stop_reset_behaviour") is not None:
+            value = str(args["user_program_for_stop_reset_behaviour"])
+            di.user_program_for_stop_reset_behaviour = value
+            applied["user_program_for_stop_reset_behaviour"] = value
+        if args.get("always_update_variables"):
+            value = _enum_by_names(
+                "AlwaysUpdateVariablesMode",
+                [str(args["always_update_variables"])],
+                _ALWAYS_UPDATE_VALUES, AlwaysUpdateVariablesMode)
+            di.always_update_variables = value
+            applied["always_update_variables"] = \
+                str(args["always_update_variables"])
+        if args.get("generate_force_variables") is not None:
+            value = bool(args["generate_force_variables"])
+            di.generate_force_variables = value
+            applied["generate_force_variables"] = value
+        if args.get("enable_diagnosis") is not None:
+            value = bool(args["enable_diagnosis"])
+            di.enable_diagnosis = value
+            applied["enable_diagnosis"] = value
+        if args.get("show_io_warnings_as_errors") is not None:
+            value = bool(args["show_io_warnings_as_errors"])
+            di.show_io_warnings_as_errors = value
+            applied["show_io_warnings_as_errors"] = value
+        if not applied:
+            raise RuntimeError("device_info driver_info_set needs at "
+                               "least one of bus_cycle_task, "
+                               "io_application, update_ios_while_in_stop, "
+                               "behaviour_for_outputs_on_stop, "
+                               "user_program_for_stop_reset_behaviour, "
+                               "always_update_variables, "
+                               "generate_force_variables, "
+                               "enable_diagnosis, "
+                               "show_io_warnings_as_errors")
+        log("OK", "driver info set: {a}".format(a=sorted(applied)))
+        return {"device": _short_name(dev), "applied": applied,
+                "driver_info": _driver_info_dict(di)}
+    raise RuntimeError('device_info needs args.op of "identification", '
+                       '"simulation", "simulation_set", "driver_info" or '
+                       '"driver_info_set"')
+
+
 def cmd_device_params(project, args):
     """Device parameter introspection and online read/write
     (ScriptDeviceParameters stub).
@@ -4807,7 +5023,8 @@ KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
                   "login", "source_download", "prepared_values",
                   "tree", "object_create", "textual", "task_config",
                   "symbol_config", "device_scan", "device_comm",
-                  "device_params", "app_control", "project_control")
+                  "device_info", "device_params", "app_control",
+                  "project_control")
 
 
 def run_command(request):
@@ -4981,6 +5198,10 @@ def run_command(request):
         elif cmd == "device_comm":
             project = get_project()
             result["value"] = cmd_device_comm(project, args)
+            summary["ok"] = True
+        elif cmd == "device_info":
+            project = get_project()
+            result["value"] = cmd_device_info(project, args)
             summary["ok"] = True
         elif cmd == "device_params":
             project = get_project()

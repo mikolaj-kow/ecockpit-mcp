@@ -461,6 +461,7 @@ def test_system_flags_decode_and_enum_helpers():
     # stand-in enum globals (None) fall back to the stub int table
     assert ex._enum_by_names("PromptResult", ["Yes"],
                              ex._PROMPT_RESULT_VALUES, None) == 2
+
     # injected enum globals are preferred (getattr on them is established)
     class FakePH(object):
         LogSimplePrompts = 2
@@ -597,3 +598,119 @@ def test_system_command_reaches_dispatch(sysobj):
                           "args": {"op": "info"}})
     assert out["ok"] is True
     assert out["value"]["ui_present"] is True
+
+
+class FakeDeviceId(object):
+    def __init__(self):
+        self.type = 20
+        self.id = "0x1130dd01"
+        self.version = "3.10.4.0"
+
+
+class FakeDriverInfo(object):
+    """ScriptDriverInfo per the stub: value attrs + setter recordings."""
+
+    def __init__(self):
+        self.can_set_io_application = True
+        self.io_application = "guid-app"
+        self.update_ios_while_in_stop = True
+        self.behaviour_for_outputs_on_stop = 0
+        self.user_program_for_stop_reset_behaviour = ""
+        self.always_update_variables = 2
+        self.bus_cycle_task_by_name = "Monitor"
+        self.bus_cycle_task_by_guid = "guid-task"
+        self.generate_force_variables = False
+        self.enable_diagnosis = True
+        self.show_io_warnings_as_errors = False
+        self.calls = []
+
+    def set_bus_cycle_task(self, name):
+        self.calls.append(("set_bus_cycle_task", name))
+        self.bus_cycle_task_by_name = name
+
+    def set_io_application(self, app):
+        self.calls.append(("set_io_application", app))
+
+
+class FakeDevice(object):
+    def __init__(self):
+        self.device_id = FakeDeviceId()
+        self.driver_info = FakeDriverInfo()
+        self.simulation = False
+        self.module_id = "mod-1"
+
+    def get_device_identification(self):
+        return self.device_id
+
+    def get_module_identification(self):
+        return self.module_id
+
+    def get_simulation_mode(self):
+        return self.simulation
+
+    def set_simulation_mode(self, value):
+        self.simulation = bool(value)
+
+
+class FakeAppMarker(object):
+    is_application = True
+
+
+class FakeFindProject(object):
+    def find(self, name, recursive):
+        return [FakeAppMarker()]
+
+
+@pytest.fixture()
+def devobj(monkeypatch):
+    fake = FakeDevice()
+    monkeypatch.setattr(ex, "get_device", lambda project, name="": fake)
+    return fake
+
+
+def test_device_info_identification_and_simulation(devobj):
+    out = ex.cmd_device_info(None, {"op": "identification"})
+    assert out["device_id"] == {"type": "20", "id": "0x1130dd01",
+                                "version": "3.10.4.0"}
+    assert out["module_id"] == "mod-1"
+
+    out = ex.cmd_device_info(None, {"op": "simulation"})
+    assert out["simulation"] is False
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_device_info(None, {"op": "simulation_set", "enabled": True})
+    out = ex.cmd_device_info(None, {"op": "simulation_set",
+                                    "enabled": True, "confirm": True})
+    assert devobj.simulation is True
+    assert out["simulation"] is True
+
+
+def test_device_info_driver_info_read_and_set(devobj):
+    out = ex.cmd_device_info(None, {"op": "driver_info"})
+    di = out["driver_info"]
+    assert di["bus_cycle_task_by_name"] == "Monitor"
+    assert di["behaviour_for_outputs_on_stop"] == "KeepCurrentValues"
+    assert di["always_update_variables"] == "OnlyIfUnused"
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_device_info(None, {"op": "driver_info_set",
+                                  "bus_cycle_task": "PlcTask"})
+    with pytest.raises(RuntimeError, match="at least one"):
+        ex.cmd_device_info(None, {"op": "driver_info_set",
+                                  "confirm": True})
+
+    out = ex.cmd_device_info(FakeFindProject(), {
+        "op": "driver_info_set", "confirm": True,
+        "bus_cycle_task": "PlcTask", "io_application": "Application",
+        "behaviour_for_outputs_on_stop": "SetToDefault",
+        "always_update_variables": "AlwaysInBusCycle",
+        "enable_diagnosis": False})
+    assert devobj.driver_info.bus_cycle_task_by_name == "PlcTask"
+    assert devobj.driver_info.behaviour_for_outputs_on_stop == 1
+    assert devobj.driver_info.always_update_variables == 3
+    assert devobj.driver_info.enable_diagnosis is False
+    assert out["applied"]["io_application"] == "Application"
+    io_calls = [c for c in devobj.driver_info.calls
+                if c[0] == "set_io_application"]
+    assert len(io_calls) == 1 and isinstance(io_calls[0][1], FakeAppMarker)
+    assert out["driver_info"]["bus_cycle_task_by_name"] == "PlcTask"

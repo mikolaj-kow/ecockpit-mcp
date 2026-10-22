@@ -152,6 +152,7 @@ _TIMEOUTS = {
     "symbol_config": 900,
     "device_scan": 300,
     "device_comm": 120,
+    "device_info": 120,
     "device_params": 180,
     "app_control": 300,
     "project_control": 300,
@@ -1224,6 +1225,89 @@ def ecockpit_device_comm(op: str = "get", device: str = "",
         if device_name:
             args["device_name"] = device_name
     return json.dumps(_run("device_comm", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="Device identification / simulation / driver info (the "
+                "visible parts of the PLC Settings tab). op="
+                "identification (read-only): DeviceId {type, id, "
+                "version} + module identification. op=simulation "
+                "(read-only) / op=simulation_set {enabled, confirm - "
+                "DESTRUCTIVE: changes the device's simulation flag in "
+                "the project}. op=driver_info (read-only): bus cycle "
+                "task, IO application, update-while-stop, outputs-on-"
+                "stop behaviour, always-update mode, force-variable "
+                "generation, diagnosis. op=driver_info_set (DESTRUCTIVE "
+                "- requires explicit owner request + confirm): "
+                "bus_cycle_task, io_application (application name), "
+                "update_ios_while_in_stop, behaviour_for_outputs_on_stop "
+                "(KeepCurrentValues|SetToDefault|ExecuteProgram), "
+                "user_program_for_stop_reset_behaviour, "
+                "always_update_variables (Disabled|OnlyIfUnused|"
+                "AlwaysInBusCycle), generate_force_variables, "
+                "enable_diagnosis, show_io_warnings_as_errors; "
+                "read-back included.")
+def ecockpit_device_info(op: str = "identification", device: str = "",
+                         enabled: bool = False,
+                         bus_cycle_task: str = "",
+                         io_application: str = "",
+                         update_ios_while_in_stop: bool = None,
+                         behaviour_for_outputs_on_stop: str = "",
+                         user_program_for_stop_reset_behaviour: str = "",
+                         always_update_variables: str = "",
+                         generate_force_variables: bool = None,
+                         enable_diagnosis: bool = None,
+                         show_io_warnings_as_errors: bool = None,
+                         confirm: bool = False,
+                         timeout_s: int = 120) -> str:
+    if op not in ("identification", "simulation", "simulation_set",
+                  "driver_info", "driver_info_set"):
+        raise ValueError("op must be identification|simulation|"
+                         "simulation_set|driver_info|driver_info_set")
+    if op in ("simulation_set", "driver_info_set") and not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "device_info {o} refused - it modifies the project "
+                     "device configuration; call again with confirm=true "
+                     "only on an explicit owner request".format(o=op),
+        }, indent=2)
+    args = {"op": op}
+    if device:
+        args["device"] = device
+    if op == "simulation_set":
+        args["enabled"] = bool(enabled)
+        args["confirm"] = True
+    if op == "driver_info_set":
+        args["confirm"] = True
+        if bus_cycle_task:
+            args["bus_cycle_task"] = bus_cycle_task
+        if io_application:
+            args["io_application"] = io_application
+        if update_ios_while_in_stop is not None:
+            args["update_ios_while_in_stop"] = bool(
+                update_ios_while_in_stop)
+        if behaviour_for_outputs_on_stop:
+            args["behaviour_for_outputs_on_stop"] = \
+                behaviour_for_outputs_on_stop
+        if user_program_for_stop_reset_behaviour:
+            args["user_program_for_stop_reset_behaviour"] = \
+                user_program_for_stop_reset_behaviour
+        if always_update_variables:
+            args["always_update_variables"] = always_update_variables
+        if generate_force_variables is not None:
+            args["generate_force_variables"] = bool(
+                generate_force_variables)
+        if enable_diagnosis is not None:
+            args["enable_diagnosis"] = bool(enable_diagnosis)
+        if show_io_warnings_as_errors is not None:
+            args["show_io_warnings_as_errors"] = bool(
+                show_io_warnings_as_errors)
+    return json.dumps(_run("device_info", args, timeout_s), indent=2)
 
 
 @mcp.tool(

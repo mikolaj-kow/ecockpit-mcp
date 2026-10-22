@@ -81,8 +81,8 @@ more). Live results: [TESTING.md](TESTING.md).
 | Device scan/comm | — | 🟡 | `gateways.add_new_gateway(...)` / `remove_gateway(...)` | mutates CODESYS config |
 | Device scan/comm | ecockpit_device_comm | ✅ | `dev.get_device_communication_settings()` (scanned_* fields) | op=get |
 | Device scan/comm | ecockpit_device_comm | ✅ | `dev.set_gateway_and_ip_address(gw, ip)` / `set_gateway_and_address` / `set_gateway_and_device_name` | op=set_ip (confirm) |
-| Device scan/comm | — | 🟡 | `dev.get_device_identification()` / `get_module_identification()` | — |
-| Device scan/comm | — | 🟡 | `dev.get_simulation_mode()` / `set_simulation_mode(bool)` | — |
+| Device scan/comm | ecockpit_device_info | ✅ | `dev.get_device_identification()` / `get_module_identification()` | op=identification (read-only); DeviceId = {type, id, version} |
+| Device scan/comm | ecockpit_device_info | ✅ | `dev.get_simulation_mode()` / `set_simulation_mode(bool)` | op=simulation (read) / simulation_set (confirm) |
 | Device tree | — | 🟡 | `project.add(name, DeviceID)` (top-level device) | DeviceID via injected `DeviceID(type, id, version)` |
 | Device tree | — | 🟡 | `dev.plug` / `add` / `insert(name, DeviceID, module)` / `dev.update(DeviceID)` / `dev.unplug()` | unplug destructive |
 | Device tree | — | 🟡 | explicit connectors: `connector.add/insert(...)` + `allowed_interfaces_at(index)` | — |
@@ -91,7 +91,7 @@ more). Live results: [TESTING.md](TESTING.md).
 | Device params | ecockpit_device_params | ✅ | `el.read_online_value(timeout)` | op=read online=true |
 | Device params | ecockpit_device_params | ✅ | `el.write_online_value(value)` (enums validated) | op=write (confirm; PLC-touching) |
 | Device params | — | 🟡 | `dev.export_io_mappings_as_csv(file)` / `import_io_mappings_from_csv(file)` | import modifies IO config |
-| Device params | — | 🟡 | `dev.driver_info.*` (bus cycle task, IO application, stop behaviour, diagnosis) | — |
+| Device params | ecockpit_device_info | ✅ | `dev.driver_info.*` (bus cycle task, IO application, stop behaviour, diagnosis) | op=driver_info (read-only) / driver_info_set (confirm; set_bus_cycle_task / set_io_application + bool/enum setters) |
 | Device params | — | 🟡 | `mapping.variable` / `manual_iec_address` (IO mapping inspection) | — |
 | Online app | ecockpit_login | ✅ | `onlineapp.login(OnlineChangeOption, delete_foreign_apps)` | LIVE: Try, 15 s; Keep = non-deploying login (G-09) |
 | Online app | (internal, G-09) | ✅ | `OnlineChangeOption.Never/Try/Force/Keep` | Keep is stub-only; every online command uses the ladder |

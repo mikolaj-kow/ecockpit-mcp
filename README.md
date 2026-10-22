@@ -190,6 +190,7 @@ Device scan / communication / parameters:
 |---|---|
 | `ecockpit_device_scan(op?, gateway?, ip?, port?)` | gateway list, network scan (discovered targets), IP→CODESYS-address resolution — read-only |
 | `ecockpit_device_comm(op?, ...)` | communication settings read / set IP via gateway (`set_ip` **destructive**, confirm-gated) |
+| `ecockpit_device_info(op?, ...)` | device identification (`DeviceId` + module id), simulation mode, driver info (bus cycle task, IO application, stop behaviour, diagnosis); `simulation_set`/`driver_info_set` **destructive**, confirm-gated |
 | `ecockpit_device_params(op, ...)` | parameter `list` / `read` (offline or `online=true`) / `write` (**destructive**, confirm-gated, enums validated) |
 
 Application + project lifecycle:

@@ -291,6 +291,21 @@ feat/scriptlib-tools:
   "ip:port")`, `set_gateway_and_address`, `set_gateway_and_device_name`,
   `get_device_communication_settings()` (with `scanned_*` fields). →
   `ecockpit_device_comm`.
+- **Device info** (ScriptDeviceObject + ScriptDriverInfo, 3.5.9.0):
+  `get_device_identification()` → DeviceId `{type, id, version}`
+  (ctor `DeviceID(iType, stId, stVersion)`, injected global),
+  `get_module_identification()` → str,
+  `get/set_simulation_mode(bool)`, `driver_info` → ScriptDriverInfo
+  (`bus_cycle_task_by_name/by_guid` + `set_bus_cycle_task(name|guid|
+  task)`, `io_application` + `set_io_application(ScriptApplication)`,
+  `update_ios_while_in_stop`, `behaviour_for_outputs_on_stop`
+  (StopResetBehaviour: KeepCurrentValues=0/SetToDefault=1/
+  ExecuteProgram=2), `user_program_for_stop_reset_behaviour`,
+  `always_update_variables` (AlwaysUpdateVariablesMode: Disabled=1/
+  OnlyIfUnused=2/AlwaysInBusCycle=3), `generate_force_variables`,
+  `enable_diagnosis`, `show_io_warnings_as_errors`,
+  `can_set_io_application`). → `ecockpit_device_info` (setters
+  confirm-gated).
 - **Device parameters** (ScriptDeviceParameters, 3.5.4.0):
   `device.device_parameters` / `device.connectors.by_id(id).
   host_parameters` → parameter set; elements expose `identifier`,
