@@ -1030,6 +1030,29 @@ def test_symbol_config_options_read_and_set(symapp):
                                     "content_feature_flags": "Nope"})
 
 
+def test_symbol_config_create_ladder(monkeypatch):
+    calls = []
+    created = FakeSym()
+
+    class AppNoSym(object):
+        def get_children(self, recursive):
+            return []
+
+        def create_symbol_config(self, export_comments, support_opc_ua,
+                                 calc=None):
+            calls.append(calc)
+            if calc is False or calc is None:
+                # live: the calculator parameter is a Guid
+                raise TypeError("expected Guid, got bool")
+            return created
+
+    monkeypatch.setattr(ex, "get_application", lambda project: AppNoSym())
+    out = ex.cmd_symbol_config(None, {"op": "create", "confirm": True})
+    assert out["created"] is True
+    assert calls == [False, None,
+                     "00000000-0000-0000-0000-000000000000"]
+
+
 def test_symbol_config_xsd_write(symapp, tmp_path):
     out = ex.cmd_symbol_config(None, {"op": "xsd",
                                       "file": str(tmp_path / "s.xsd")})

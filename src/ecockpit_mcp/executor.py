@@ -4349,10 +4349,33 @@ def cmd_symbol_config(project, args):
             return {"created": False,
                     "note": "symbol configuration already present",
                     "name": _short_name(sym)}
-        sym = app.create_symbol_config(
-            bool(args.get("export_comments", False)),
-            bool(args.get("support_opc_ua", True)),
-            False)  # client_side_layout_calculator: none
+        # LIVE 2026-10-22: the calculator parameter is a Guid here -
+        # the stub-stand-in `False` raises "expected Guid, got bool".
+        # Ladder: False -> None -> Guid.Empty string -> 2-arg form.
+        attempts = []
+        sym = None
+        for calc in (False, None,
+                     "00000000-0000-0000-0000-000000000000"):
+            try:
+                sym = app.create_symbol_config(
+                    bool(args.get("export_comments", False)),
+                    bool(args.get("support_opc_ua", True)),
+                    calc)
+                break
+            except Exception as exc:
+                attempts.append("{v}: {e}".format(v=calc,
+                                                  e=str(exc)[:90]))
+        if sym is None:
+            try:
+                sym = app.create_symbol_config(
+                    bool(args.get("export_comments", False)),
+                    bool(args.get("support_opc_ua", True)))
+                log("INFO", "create_symbol_config: 2-arg form used")
+            except Exception as exc:
+                raise RuntimeError("create_symbol_config failed in all "
+                                   "forms: " + "; ".join(attempts) +
+                                   "; 2-arg: {e}".format(
+                                       e=str(exc)[:120]))
         log("OK", "symbol configuration created")
         return {"created": True, "name": _short_name(sym)}
 
