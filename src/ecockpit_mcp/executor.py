@@ -2160,6 +2160,20 @@ def _online_connect(project, args, prefer_keep=False):
 
 
 def _online_disconnect(device):
+    """Logout. LIVE 2026-10-22 (G-29): a plain disconnect() pops a modal
+    when FORCED variables exist ("delete all currently forced variables
+    before logging out?") and wedges the relay. forced_disconnect()
+    (IScriptOnlineDevice2) cannot hang and keeps the runtime running -
+    it is tried FIRST now; plain disconnect stays as the fallback."""
+    try:
+        device.forced_disconnect()
+        log("INFO", "forced_disconnect done (modal-free logout)")
+        return
+    except AttributeError:
+        log("WARN", "forced_disconnect not available - plain disconnect")
+    except Exception as exc:
+        log("WARN", "forced_disconnect raised ({e}) - plain disconnect"
+            .format(e=exc))
     try:
         device.disconnect()
         log("INFO", "disconnected from PLC")
@@ -3883,6 +3897,11 @@ def _obj_attr(obj, attr):
 def _obj_summary(obj):
     """Name + kind markers for one tree object (all guarded)."""
     out = {"name": _short_name(obj)}
+    try:
+        bp = obj.build_properties
+        out["exclude_from_build"] = bool(bp.exclude_from_build)
+    except Exception:
+        out["exclude_from_build"] = None
     try:
         out["name"] = str(obj.get_name())
     except Exception:
