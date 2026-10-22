@@ -23,12 +23,15 @@ the in-session "Symbols" symbol config went with that rollback.
 REMAINING: D2 rest — stop/reset (deliberately last, owner go only),
 prompt_answers e2e (BLOCKED by G-31: needs a working file transfer),
 variable write/force/unforce DONE, download+start DONE, activate DONE.
-**ONLINE CHANGE VERDICT (2026-10-22, FINAL)**: not available on this
-build — two independent deltas rejected by login(Try) from the API, the
-GUI's own login says "online change is not possible, full download
-required", and `is_online_change_possible: true` is unreliable
-bookkeeping. Full download deploys reliably and carries edits
-(tick-rate change observed). D2 leftovers:
+**ONLINE CHANGE VERDICT (2026-10-22, CORRECTED)**: the runtime APPLIES
+online changes despite surfacing "no task gap within 10000 ms" as an
+exception (VL: every timeout followed by "App OnlineChange successful");
+`login(Try)` raised that exception on two independent deltas and the
+GUI shows the same false error. The login ladder now accepts the change
+when `is_uptodate` flips true, else retries the same form once.
+`is_online_change_possible: true` remains unreliable bookkeeping. Full
+download still deploys reliably and carries edits (tick-rate change
+observed). D2 leftovers:
 PLC file ops BLOCKED by G-31 (host-copy transfer). F (machine-wide:
 lib/repo ops, upload_source, source_download retry) still open.
 Test objects now in the project: GvlGuiTest, GvlMcpProbe, Symbols,

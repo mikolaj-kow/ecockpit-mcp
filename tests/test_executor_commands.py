@@ -1190,6 +1190,94 @@ def test_online_login_deploy_ladder_still_escalates(monkeypatch):
     assert dev.connected is True    # deploy ladder intentionally reaches connect
 
 
+class FakeGapOnlineApp(object):
+    """login raises the CmpApp task-gap timeout (VL-verified shape:
+    the EXCEPTION is logged mid-operation, the change completes
+    anyway milliseconds later)."""
+
+    def __init__(self, fail_times=1):
+        self.logins = []
+        self.fail_times = fail_times
+
+    def login(self, option, delete_foreign_apps):
+        self.logins.append(str(option))
+        if len(self.logins) <= self.fail_times:
+            raise RuntimeError(
+                "OnlineChange failed, no task gap within 10000 ms: "
+                "[Application]")
+
+
+def test_login_gap_timeout_change_applied_no_escalation(monkeypatch):
+    # VL 2026-10-22: CmpApp logs the gap timeout mid-operation and
+    # completes the change anyway (is_uptodate flips True). Accept and
+    # do NOT escalate to Force/Never (Never is a full download - G-07).
+    class FakeOCO(object):
+        Keep = "Keep"
+        Try = "Try"
+        Force = "Force"
+        Never = "Never"
+
+    monkeypatch.setattr(ex, "OnlineChangeOption", FakeOCO)
+    online = FakeGapOnlineApp(fail_times=1)
+
+    class EngApp(object):
+        is_uptodate = True
+
+    dev = FakeConnectDevice()
+    got = ex._online_login(online, dev, engapp=EngApp())
+    assert got.startswith("login(OnlineChangeOption.Try)")
+    assert "applied" in got
+    assert online.logins == ["Try"]          # no Force/Never escalation
+    assert dev.connected is False            # and no implicit download
+
+
+def test_login_gap_timeout_retry_second_attempt_clean(monkeypatch):
+    class FakeOCO(object):
+        Keep = "Keep"
+        Try = "Try"
+        Force = "Force"
+        Never = "Never"
+
+    monkeypatch.setattr(ex, "OnlineChangeOption", FakeOCO)
+    online = FakeGapOnlineApp(fail_times=1)
+
+    class EngApp(object):
+        is_uptodate = False
+
+    dev = FakeConnectDevice()
+    got = ex._online_login(online, dev, engapp=EngApp())
+    assert got.startswith("login(OnlineChangeOption.Try)")
+    assert "retry" in got
+    assert online.logins == ["Try", "Try"]   # same form retried ONCE
+    assert dev.connected is False
+
+
+def test_login_gap_timeout_still_escalates_when_retry_fails(monkeypatch):
+    class FakeOCO(object):
+        Keep = "Keep"
+        Try = "Try"
+        Force = "Force"
+        Never = "Never"
+
+    monkeypatch.setattr(ex, "OnlineChangeOption", FakeOCO)
+    online = FakeGapOnlineApp(fail_times=99)
+
+    class EngApp(object):
+        is_uptodate = False
+
+    class RaisingConnectDevice(FakeConnectDevice):
+        def connect(self):
+            self.connected = True
+            raise RuntimeError("connect failed")
+
+    dev = RaisingConnectDevice()
+    with pytest.raises(RuntimeError, match="all login forms failed"):
+        ex._online_login(online, dev, engapp=EngApp())
+    assert online.logins == ["Try", "Try", "Force", "Force",
+                             "Never", "Never"]
+    assert dev.connected is True
+
+
 def test_online_connect_refuses_out_of_sync_readonly(monkeypatch):
     # G-27: with a pending change, login(Keep) attempts a download in
     # this build - read-only connects must refuse BEFORE any login.

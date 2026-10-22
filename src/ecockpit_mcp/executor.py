@@ -2056,7 +2056,53 @@ def compile_project(app, project, summary, args=None, rebuild=False):
 # --------------------------------------------------------------------------
 # Online commands (read / download / disconnect / status / probe)
 # --------------------------------------------------------------------------
-def _online_login(onlineapp, device, prefer_keep=False):
+def _login_gap_timeout_recovery(onlineapp, device, engapp, option, label,
+                                exc, delete_foreign_apps=False,
+                                attempts=None):
+    """Second chance after a login raised the CmpApp task-gap timeout.
+
+    LIVE 2026-10-22 (VictoriaLogs codesys3 stream): CmpApp logs
+    "OnlineChange failed, no task gap within 10000 ms" as an EXCEPTION
+    mid-operation, then completes the change anyway - milliseconds later
+    the same operation logs "App OnlineChange successful" plus a
+    CodeGUID/DataGUID swap (9 timeouts vs 14 completions since 10-21,
+    every timeout followed by a completion). The engine exception is
+    therefore NOT the final verdict. Recovery: when the application
+    turned uptodate, treat the login as applied; otherwise retry the
+    SAME form once (the runtime is typically quiescent after the first
+    attempt). Returns "applied" | "retry-ok" | None (caller keeps its
+    failure path - escalate/raise as before).
+    """
+    if "task gap" not in str(exc).lower():
+        return None
+    if engapp is not None:
+        try:
+            if bool(engapp.is_uptodate):
+                log("OK", "{l} raised the task-gap timeout but the runtime "
+                    "APPLIED the change (is_uptodate=True; CmpApp logs the "
+                    "timeout mid-operation and completes anyway) - "
+                    "accepting without escalation".format(l=label))
+                return "applied"
+        except Exception:
+            pass
+    try:
+        if option is None:
+            device.connect()
+        else:
+            onlineapp.login(option, delete_foreign_apps)
+    except Exception as exc2:
+        if attempts is not None:
+            attempts.append("{l} retry: {c}: {m}".format(
+                l=label, c=type(exc2).__name__, m=str(exc2)[:160]))
+        log("INFO", "{l} retry after task-gap timeout failed: {c}: {m}"
+            .format(l=label, c=type(exc2).__name__, m=str(exc2)[:160]))
+        return None
+    log("OK", "{l} retry succeeded (clean second attempt after the "
+        "task-gap timeout)".format(l=label))
+    return "retry-ok"
+
+
+def _online_login(onlineapp, device, prefer_keep=False, engapp=None):
     """Explicit login ladder - online change control.
 
     device.connect() performed an IMPLICIT login-with-download (live
@@ -2107,6 +2153,13 @@ def _online_login(onlineapp, device, prefer_keep=False):
                 l=label, c=type(exc).__name__, m=str(exc)[:160]))
             log("INFO", "login via {l} failed: {c}: {m}".format(
                 l=label, c=type(exc).__name__, m=str(exc)[:160]))
+            recovered = _login_gap_timeout_recovery(
+                onlineapp, device, engapp, option, label, exc,
+                attempts=attempts)
+            if recovered == "applied":
+                return label + " [task-gap timeout, change applied]"
+            if recovered == "retry-ok":
+                return label + " [retry after task-gap timeout]"
     if prefer_keep:
         raise RuntimeError(
             "read-only login failed (Keep) - REFUSING to escalate: "
@@ -2155,7 +2208,7 @@ def _online_connect(project, args, prefer_keep=False):
         u=user[0] + "***" if len(user) > 1 else "***"))
     online.set_default_credentials(user, pw)
     onlineapp = online.create_online_application(app)
-    _online_login(onlineapp, device, prefer_keep=prefer_keep)
+    _online_login(onlineapp, device, prefer_keep=prefer_keep, engapp=app)
     return device, onlineapp
 
 
@@ -2314,7 +2367,7 @@ def cmd_login(project, args):
     onlineapp = online.create_online_application(app)
 
     if option == "auto":
-        _online_login(onlineapp, device)
+        _online_login(onlineapp, device, engapp=app)
         log("OK", "login complete (auto ladder) - session stays open; "
             "logout with ecockpit_disconnect")
         return {"logged_in": True, "via": "auto", "stays_connected": True}
@@ -2339,6 +2392,23 @@ def cmd_login(project, args):
     try:
         onlineapp.login(change_option, delete_foreign_apps)
     except Exception as exc:
+        recovered = _login_gap_timeout_recovery(
+            onlineapp, device, app, change_option,
+            "login(OnlineChangeOption.{m})".format(m=members[option]),
+            exc, delete_foreign_apps=delete_foreign_apps)
+        if recovered == "applied":
+            log("OK", "login complete ({o}) - the change was applied "
+                "despite the task-gap timeout; session stays open"
+                .format(o=option))
+            return {"logged_in": True, "via": option,
+                    "stays_connected": True,
+                    "note": "task-gap timeout; runtime applied the change"}
+        if recovered == "retry-ok":
+            log("OK", "login complete ({o}) on the retry after the "
+                "task-gap timeout; session stays open".format(o=option))
+            return {"logged_in": True, "via": option,
+                    "stays_connected": True,
+                    "note": "succeeded on retry after task-gap timeout"}
         raise RuntimeError(
             "login({o}) failed: {c}: {m}".format(
                 o=members[option], c=type(exc).__name__,
