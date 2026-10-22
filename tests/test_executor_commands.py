@@ -396,3 +396,204 @@ def test_online_commands_reach_dispatch_without_unbound_project():
                               "args": {"confirm": True}})
         assert "referenced before assignment" not in (out.get("error") or "")
         assert out["error"], "expected a real offline error (no project)"
+
+
+class FakeUI(object):
+    """Plain-Python system.ui fake: records every method call, returns
+    canned results in order."""
+
+    def __init__(self, results=None):
+        self.results = list(results or [])
+        self.calls = []
+
+    def __getattr__(self, name):
+        def _call(*argv):
+            self.calls.append((name,) + argv)
+            if self.results:
+                return self.results.pop(0)
+            return None
+        return _call
+
+
+class FakeSystem(object):
+    """The injected `system` object per the ScriptSystem stub: value
+    attributes set in __init__, method calls recorded."""
+
+    def __init__(self, **kwargs):
+        self.ui = FakeUI()
+        self.prompt_answers = {}
+        self.calls = []
+        self.ui_present = True
+        self.executable_filename = r"C:\e!COCKPIT\e!COCKPIT.exe"
+        self.trace = False
+        self.abortable = True
+        self.aborting = False
+        self.abort_autocheck = True
+        self.background_loading_of_libraries_finished = False
+        self.prompt_handling = 2
+        self.commands = []
+        self.factories = []
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+    def __getattr__(self, name):
+        def _call(*argv):
+            self.calls.append((name,) + argv)
+            return None
+        return _call
+
+
+@pytest.fixture()
+def sysobj(monkeypatch):
+    fake = FakeSystem()
+    monkeypatch.setattr(ex, "system", fake)
+    return fake
+
+
+def test_system_flags_decode_and_enum_helpers():
+    assert ex._flags_to_names(3, ex._PROMPT_HANDLING_FLAGS) == \
+        ["ForwardSimplePrompts", "LogSimplePrompts"]
+    assert ex._flags_to_names(0, ex._PROMPT_HANDLING_FLAGS) == ["NONE"]
+    assert ex._flags_to_names(32, ex._PROMPT_HANDLING_FLAGS) == ["0x20"]
+    assert ex._enum_to_name(2, ex._PROMPT_RESULT_VALUES) == "Yes"
+    assert ex._enum_to_name(99, ex._PROMPT_RESULT_VALUES) == "99"
+
+    # stand-in enum globals (None) fall back to the stub int table
+    assert ex._enum_by_names("PromptResult", ["Yes"],
+                             ex._PROMPT_RESULT_VALUES, None) == 2
+    # injected enum globals are preferred (getattr on them is established)
+    class FakePH(object):
+        LogSimplePrompts = 2
+        LogMessageKeys = 16
+
+    assert ex._enum_by_names("PromptHandling flag",
+                             ["LogSimplePrompts", "LogMessageKeys"],
+                             ex._PROMPT_HANDLING_FLAGS, FakePH) == 18
+    with pytest.raises(RuntimeError, match="unknown PromptHandling"):
+        ex._enum_by_names("PromptHandling flag", ["Nope"],
+                          ex._PROMPT_HANDLING_FLAGS, None)
+
+
+def test_system_info_and_write_message(sysobj):
+    out = ex.cmd_system({"op": "info"})
+    assert out["ui_present"] is True
+    assert out["prompt_handling"] == ["LogSimplePrompts"]
+    assert out["prompt_answer_keys"] == []
+    assert out["commands"] == []
+
+    out = ex.cmd_system({"op": "write_message", "text": "hello",
+                         "severity": "Warning"})
+    assert out["written"] is True
+    # stand-in Severity (None) -> stub int 4 (Warning)
+    assert sysobj.calls == [("write_message", 4, "hello")]
+
+    with pytest.raises(RuntimeError, match="needs args.text"):
+        ex.cmd_system({"op": "write_message"})
+
+
+def test_system_set_prompt_handling_gate_and_combo(sysobj):
+    # a dialog-free combination needs no confirm
+    out = ex.cmd_system({"op": "set_prompt_handling",
+                         "value": "LogSimplePrompts+LogMessageKeys"})
+    assert sysobj.prompt_handling == 18
+    assert out["effective"] == ["LogSimplePrompts", "LogMessageKeys"]
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_system({"op": "set_prompt_handling",
+                       "value": "ForwardSimplePrompts"})
+    ex.cmd_system({"op": "set_prompt_handling",
+                   "value": "ForwardSimplePrompts", "confirm": True})
+    assert sysobj.prompt_handling == 1
+
+    ex.cmd_system({"op": "set_prompt_handling", "value": "NONE"})
+    assert sysobj.prompt_handling == 0
+
+    with pytest.raises(RuntimeError, match="NONE cannot be combined"):
+        ex.cmd_system({"op": "set_prompt_handling",
+                       "value": "NONE+LogSimplePrompts"})
+    with pytest.raises(RuntimeError, match="unknown PromptHandling"):
+        ex.cmd_system({"op": "set_prompt_handling", "value": "Wat"})
+
+
+def test_system_prompt_answers_persist(sysobj):
+    out = ex.cmd_system({"op": "set_prompt_answer",
+                         "key": "OverWriteFiles", "result": "Yes"})
+    assert sysobj.prompt_answers["OverWriteFiles"] == 2  # stub int fallback
+    assert out["result"] == "Yes"
+
+    out = ex.cmd_system({"op": "prompt_answers"})
+    assert out["answers"] == {"OverWriteFiles": "2"}
+
+    out = ex.cmd_system({"op": "clear_prompt_answers"})
+    assert out["cleared"] == 1
+    assert sysobj.prompt_answers == {}
+
+    for missing in ({"op": "set_prompt_answer", "key": "k"},
+                    {"op": "set_prompt_answer", "result": "Yes"}):
+        with pytest.raises(RuntimeError, match="args.key"):
+            ex.cmd_system(missing)
+
+
+def test_system_set_flags_and_progress(sysobj):
+    out = ex.cmd_system({"op": "set_flags", "abortable": False})
+    assert out["set"] == {"abortable": False}
+    assert sysobj.abortable is False
+    assert out["flags"]["aborting"] is False
+
+    with pytest.raises(RuntimeError, match="at least one"):
+        ex.cmd_system({"op": "set_flags"})
+
+    ex.cmd_system({"op": "progress", "action": "start", "description": "x",
+                   "items": 3, "unit": "objects"})
+    ex.cmd_system({"op": "progress", "action": "step", "item": "a",
+                   "completed": 2})
+    ex.cmd_system({"op": "progress", "action": "absolute", "item": "a",
+                   "absolute_progress": 2})
+    assert [c[0] for c in sysobj.calls] == \
+        ["progress_start", "progress_step", "progress_absolute"]
+    assert sysobj.calls[0] == ("progress_start", "x", 3, "objects")
+
+    with pytest.raises(RuntimeError, match="start\\|step\\|absolute"):
+        ex.cmd_system({"op": "progress", "action": "warp"})
+
+
+def test_system_ui_gate_methods_and_secret_masking(sysobj):
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_system({"op": "ui", "method": "prompt", "message": "m"})
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_system({"op": "exit"})
+
+    out = ex.cmd_system({"op": "ui", "method": "prompt", "message": "Overwrite?",
+                         "choice": "YesNo", "default_result": "No",
+                         "confirm": True})
+    assert out["result"] is None  # FakeUI returns None -> reported as None
+    assert sysobj.ui.calls[0][0] == "prompt"
+    # stand-in enums -> stub ints: YesNo=2, No=3
+    assert sysobj.ui.calls[0][1:4] == ("Overwrite?", 2, 3)
+
+    # sensitive results are returned but never logged
+    sysobj.ui.results = ["s3cret"]
+    out = ex.cmd_system({"op": "ui", "method": "query_password",
+                         "message": "pw", "confirm": True})
+    assert out["result"] == "s3cret"
+    assert all("s3cret" not in ln for ln in ex._lines)
+
+    with pytest.raises(RuntimeError, match="unknown ui method"):
+        ex.cmd_system({"op": "ui", "method": "explode", "confirm": True})
+    with pytest.raises(RuntimeError, match="args.message"):
+        ex.cmd_system({"op": "ui", "method": "error", "confirm": True})
+
+
+def test_system_exit_gate_and_call(sysobj):
+    out = ex.cmd_system({"op": "exit", "code": 7, "confirm": True})
+    assert out["exiting"] is True and out["code"] == 7
+    assert sysobj.calls == [("exit", 7)]
+
+
+def test_system_command_reaches_dispatch(sysobj):
+    # dispatch branch (system-level, no get_project) + headless hardening
+    # run against the fake without breaking
+    out = ex.run_command({"id": "t-sys", "cmd": "system",
+                          "args": {"op": "info"}})
+    assert out["ok"] is True
+    assert out["value"]["ui_present"] is True

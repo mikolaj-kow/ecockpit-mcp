@@ -104,9 +104,11 @@ X = None`): `system`, `e_projects` (+ `projects` alias, resolved by
 `_projects_global()`), `online`, `librarymanager`,
 `ArchiveCategories`, `OnlineChangeOption` (Never/Try/Force/Keep),
 `Severity`, `ImportReporter`/`ExportReporter` (exposure names! G-05),
-`ConflictResolve`, `PromptHandling`, `PouType`, `DutType`,
-`KindOfTask`, `ImplementationLanguages`, `ResetOption`, `DeviceID`,
-`device_repository`. Engine enums: use direct member access
+`ConflictResolve`, `PromptHandling`, `PromptResult`, `PromptChoice`,
+`PouType`, `DutType`, `KindOfTask`, `ImplementationLanguages`,
+`ResetOption`. (`DeviceID`/`device_repository` are engine-injected
+names too, but only needed by the not-yet-implemented device-tree
+authoring — no stand-ins yet.) Engine enums: use direct member access
 (`OnlineChangeOption.Try`), guarded.
 
 Caution: `import ecockpit... executor` under CPython must set

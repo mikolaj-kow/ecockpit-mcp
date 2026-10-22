@@ -37,6 +37,10 @@ Commands (request = {"id": ..., "cmd": ..., "args": {...}}):
                args: {"path": host archive}
     save_archive   save the project as .projectarchive. args: {"path": ...}
     clear_messages  wipe the scripting message store (fresh-harvest aid)
+    system     `system` object: info, write_message, prompt handling +
+               answers (headless dialog simulation), abort/trace flags,
+               progress bar. ui.* dialogs + exit are confirm-gated ops
+               (wedge / kills-e!COCKPIT hazards)
     probe      dump dir() of the scripting API objects to
                tmp/logs/ecockpit_api_probe.txt (API-surface discovery).
 
@@ -130,6 +134,14 @@ if "PromptHandling" not in globals():
     # ScriptUI prompt simulation enum (ScriptSystem stub); LogSimplePrompts
     # keeps simple prompts out of the GUI and into the message store.
     PromptHandling = None
+if "PromptResult" not in globals():
+    # PromptResult: OK=0, Cancel=1, Yes=2, No=3, Retry=4, Abort=5, Ignore=6
+    # (ScriptSystem stub) - values for system.prompt_answers simulation.
+    PromptResult = None
+if "PromptChoice" not in globals():
+    # PromptChoice: OK=0, OKCancel=1, YesNo=2, YesNoCancel=3, RetryCancel=4,
+    # AbortRetryIgnore=5 (ScriptSystem stub) - system.ui.prompt layouts.
+    PromptChoice = None
 if "PouType" not in globals():
     # ST object creation (ScriptIecLanguageObjectContainer stub):
     # Program=1, FunctionBlock=2, Function=3.
@@ -1072,6 +1084,468 @@ def cmd_messages():
                         "(IGNORE_CODES in .env); pass all_messages=true "
                         "to bypass for one run"),
     }
+
+
+# --------------------------------------------------------------------------
+# System domain (ScriptSystem stub: the injected `system` object)
+# --------------------------------------------------------------------------
+# Stub-derived value tables (ScriptSystem.pyi). They decode enum/flag
+# values into names and build values when the injected enum global is
+# unavailable; injected globals are preferred at runtime.
+_PROMPT_HANDLING_FLAGS = (
+    ("ForwardSimplePrompts", 1),
+    ("LogSimplePrompts", 2),
+    ("EnableTextPrompts", 4),
+    ("ProcessScriptPrompts", 8),
+    ("LogMessageKeys", 16),
+)
+_PROMPT_RESULT_VALUES = (
+    ("OK", 0), ("Cancel", 1), ("Yes", 2), ("No", 3),
+    ("Retry", 4), ("Abort", 5), ("Ignore", 6),
+)
+_PROMPT_CHOICE_VALUES = (
+    ("OK", 0), ("OKCancel", 1), ("YesNo", 2), ("YesNoCancel", 3),
+    ("RetryCancel", 4), ("AbortRetryIgnore", 5),
+)
+_SEVERITY_VALUES = (
+    ("FatalError", 1), ("Error", 2), ("Warning", 4),
+    ("Information", 8), ("Text", 16),
+)
+
+
+def _flags_to_names(value, flags):
+    """Decode an int flag combination into its stub names (+ hex rest)."""
+    try:
+        iv = int(value)
+    except (TypeError, ValueError):
+        return [str(value)]
+    if iv == 0:
+        return ["NONE"]
+    out = []
+    rest = iv
+    for name, bit in flags:
+        if bit and (rest & bit) == bit:
+            out.append(name)
+            rest -= bit
+    if rest:
+        out.append("0x{0:x}".format(rest))
+    return out
+
+
+def _enum_to_name(value, values):
+    """Map one enum int onto its stub name (str(value) when unknown)."""
+    try:
+        iv = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    for name, num in values:
+        if num == iv:
+            return name
+    return str(iv)
+
+
+def _enum_by_names(label, names, values, injected):
+    """Resolve enum member names to one (combined) value.
+
+    Prefers the injected enum global (real members; getattr on injected
+    enums is established - cmd_object_create resolves PouType that way),
+    falls back to the stub int table when the global is a stand-in.
+    """
+    known = ", ".join(name for name, _ in values)
+    if injected is None:
+        combined = 0
+        for name in names:
+            table = dict(values)
+            if name not in table:
+                raise RuntimeError("unknown {t} '{n}' (known: {k})".format(
+                    t=label, n=name, k=known))
+            combined |= table[name]
+        return combined
+    combined = None
+    for name in names:
+        try:
+            member = getattr(injected, name)
+        except Exception:
+            raise RuntimeError("unknown {t} '{n}' (known: {k})".format(
+                t=label, n=name, k=known))
+        combined = member if combined is None else (combined | member)
+    return combined
+
+
+def _system_ui_call(sysobj, args):
+    """One system.ui method call - ALL of them block on a real modal
+    dialog that the owner answers in the GUI (the caller enforces
+    confirm). Password/credential results go back to the client in the
+    result JSON but are NEVER logged (no-credentials-in-logs rule); they
+    also pass through the result file unencrypted on this host.
+    """
+    try:
+        ui = sysobj.ui
+    except Exception as exc:
+        raise RuntimeError("system.ui not available: {e}".format(e=exc))
+
+    def _opt_str(name):
+        v = args.get(name, "")
+        if v is None or str(v) == "":
+            return None
+        return str(v)
+
+    def _opt_int(name):
+        v = args.get(name, None)
+        if v is None or v == "":
+            return None
+        return int(v)
+
+    method = str(args.get("method", "")).strip().lower()
+    message = str(args.get("message", "") or "")
+    message_key = str(args.get("message_key", "") or "ScriptMessage")
+    sensitive = False
+    res = None
+    if method in ("error", "warning", "info"):
+        if not message:
+            raise RuntimeError("ui {m} needs args.message".format(m=method))
+        if method == "error":
+            res = ui.error(message, message_key)
+        elif method == "warning":
+            res = ui.warning(message, message_key)
+        else:
+            res = ui.info(message, message_key)
+    elif method == "prompt":
+        if not message:
+            raise RuntimeError("ui prompt needs args.message")
+        choice = _enum_by_names("PromptChoice",
+                                [str(args.get("choice", "YesNo"))],
+                                _PROMPT_CHOICE_VALUES, PromptChoice)
+        default = _enum_by_names("PromptResult",
+                                 [str(args.get("default_result", "No"))],
+                                 _PROMPT_RESULT_VALUES, PromptResult)
+        res = ui.prompt(message, choice, default,
+                        _opt_str("store_description"), _opt_str("store_key"),
+                        message_key)
+    elif method == "select_many":
+        items = args.get("items") or []
+        if not message or not items:
+            raise RuntimeError("ui select_many needs args.message and "
+                               "args.items (list)")
+        choice = _enum_by_names("PromptChoice",
+                                [str(args.get("choice", "YesNo"))],
+                                _PROMPT_CHOICE_VALUES, PromptChoice)
+        default = _enum_by_names("PromptResult",
+                                 [str(args.get("default_result", "OK"))],
+                                 _PROMPT_RESULT_VALUES, PromptResult)
+        res = ui.select_many(message, choice, default, list(items),
+                             message_key)
+    elif method == "choose":
+        options = args.get("options") or []
+        if not message or not options:
+            raise RuntimeError("ui choose needs args.message and "
+                               "args.options (list)")
+        res = ui.choose(message, list(options),
+                        int(args.get("initial_selection", 0) or 0),
+                        bool(args.get("cancellable", True)), message_key)
+    elif method == "reset_stored_result":
+        if not args.get("store_key"):
+            raise RuntimeError("ui reset_stored_result needs "
+                               "args.store_key")
+        res = ui.reset_stored_result(str(args["store_key"]))
+    elif method == "open_file_dialog":
+        res = ui.open_file_dialog(
+            _opt_str("title"), _opt_str("filename"), _opt_str("directory"),
+            _opt_str("filter"), _opt_int("filter_index"),
+            _opt_str("default_extension"), None,
+            bool(args.get("multiselect", False)))
+    elif method == "save_file_dialog":
+        res = ui.save_file_dialog(
+            _opt_str("title"), _opt_str("filename"), _opt_str("directory"),
+            _opt_str("filter"), _opt_int("filter_index"),
+            _opt_str("default_extension"))
+    elif method == "browse_directory_dialog":
+        res = ui.browse_directory_dialog(
+            message or "Select a directory", _opt_str("path") or "",
+            _opt_str("root_folder") or "Environment.SpecialFolder."
+            "MyComputer", bool(args.get("new_folder_button", True)))
+    elif method == "query_string":
+        res = ui.query_string(message, str(args.get("text", "") or ""),
+                              bool(args.get("multi_line", False)),
+                              bool(args.get("cancellable", False)))
+    elif method == "query_password":
+        sensitive = True
+        res = ui.query_password(message, str(args.get("password", "") or ""),
+                                bool(args.get("cancellable", False)))
+    elif method == "query_credentials":
+        sensitive = True
+        res = ui.query_credentials(message,
+                                   str(args.get("username", "") or ""),
+                                   str(args.get("password", "") or ""),
+                                   bool(args.get("cancellable", False)))
+    else:
+        raise RuntimeError(
+            "unknown ui method '{m}' (known: error, warning, info, "
+            "prompt, select_many, choose, reset_stored_result, "
+            "open_file_dialog, save_file_dialog, "
+            "browse_directory_dialog, query_string, query_password, "
+            "query_credentials)".format(m=method))
+    if isinstance(res, (list, tuple)):
+        res = [str(x) for x in res]
+    elif res is not None:
+        res = str(res)
+    log("OK", "ui {m}: {d}".format(
+        m=method, d="completed (value not logged)" if sensitive else "done"))
+    return {"method": method, "result": res}
+
+
+def cmd_system(args):
+    """Access the injected `system` object (ScriptSystem stub).
+
+    ops:
+      info                 -> ui_present, prompt_handling (decoded),
+                              abort/trace flags, prompt_answers keys,
+                              commands + factories inventory (read-only)
+      write_message        {severity?: FatalError|Error|Warning|
+                            Information|Text, text}
+      set_prompt_handling  {value: flag names '+'-combined} - sets the
+                            process-wide prompt policy; confirm needed
+                            only when the result enables
+                            ForwardSimplePrompts (dialogs back on)
+      prompt_answers       -> the headless dialog-simulation answers
+                              (read-only)
+      set_prompt_answer    {key, result: OK|Cancel|Yes|No|Retry|Abort|
+                            Ignore} -> pre-answer one prompt message key
+      clear_prompt_answers -> empty the simulation dict
+      set_flags            {trace?, abortable?, abort_autocheck?}
+      progress             {action: start|step|absolute, ...} - e!COCKPIT
+                            progress bar (GUI chrome only)
+      ui                   {method, ..., confirm} - REAL modal dialogs,
+                            wedge hazard, CONFIRM-GATED
+      exit                 {code?, confirm} - kills e!COCKPIT,
+                            CONFIRM-GATED
+
+    PROMPT-HANDLING LIFETIME: _headless_hardening re-applies
+    LogSimplePrompts at the start of EVERY command (the relay re-execs
+    this file per command), so a set_prompt_handling value lasts only
+    for the remainder of the CURRENT command - pre-arming dialogs for a
+    later command is impossible by design; prompt_answers DO persist
+    across commands (they live on the engine's system object).
+    """
+    op = args.get("op", "info")
+    sysobj = globals().get("system")
+    if sysobj is None:
+        raise RuntimeError("system object not available (not running "
+                           "inside e!COCKPIT?)")
+
+    if op == "info":
+        info = {}
+        readers = (
+            ("ui_present", lambda: bool(sysobj.ui_present)),
+            ("executable_filename", lambda: str(sysobj.executable_filename)),
+            ("trace", lambda: bool(sysobj.trace)),
+            ("abortable", lambda: bool(sysobj.abortable)),
+            ("aborting", lambda: bool(sysobj.aborting)),
+            ("abort_autocheck", lambda: bool(sysobj.abort_autocheck)),
+            ("background_loading_of_libraries_finished",
+             lambda: bool(sysobj.background_loading_of_libraries_finished)),
+        )
+        for name, reader in readers:
+            try:
+                info[name] = reader()
+            except Exception:
+                info[name] = None
+        try:
+            info["prompt_handling"] = _flags_to_names(
+                sysobj.prompt_handling, _PROMPT_HANDLING_FLAGS)
+        except Exception:
+            info["prompt_handling"] = None
+        try:
+            pa = sysobj.prompt_answers
+            info["prompt_answer_keys"] = sorted(str(k) for k in pa.keys())
+        except Exception:
+            info["prompt_answer_keys"] = None
+        cmds = []
+        try:
+            for c in sysobj.commands:
+                try:
+                    cmds.append(str(c.name))
+                except Exception:
+                    cmds.append(str(c))
+                if len(cmds) >= 50:
+                    break
+        except Exception:
+            cmds = None
+        info["commands"] = cmds
+        try:
+            info["factory_count"] = len(sysobj.factories)
+        except Exception:
+            info["factory_count"] = None
+        log("OK", "system info read")
+        return info
+
+    if op == "write_message":
+        text = str(args.get("text", "") or "")
+        if not text:
+            raise RuntimeError("system write_message needs args.text")
+        sev = _enum_by_names("Severity",
+                             [str(args.get("severity", "Information"))],
+                             _SEVERITY_VALUES, Severity)
+        sysobj.write_message(sev, text)
+        log("OK", "message written to the store")
+        return {"written": True, "severity": str(args.get("severity",
+                                                          "Information"))}
+
+    if op == "set_prompt_handling":
+        raw = str(args.get("value", "")).strip()
+        if not raw:
+            raise RuntimeError("system set_prompt_handling needs "
+                               "args.value (e.g. 'LogSimplePrompts' or "
+                               "'LogSimplePrompts+LogMessageKeys')")
+        names = [t for t in re.split(r"[+,\s]+", raw) if t.strip()]
+        if "NONE" in names:
+            if len(names) != 1:
+                raise RuntimeError("NONE cannot be combined with other "
+                                   "PromptHandling flags")
+            value = 0
+            if PromptHandling is not None:
+                try:
+                    value = PromptHandling.NONE
+                except Exception:
+                    value = 0
+        else:
+            value = _enum_by_names("PromptHandling flag", names,
+                                   _PROMPT_HANDLING_FLAGS, PromptHandling)
+        try:
+            enables_dialogs = bool(int(value) & 1)
+        except (TypeError, ValueError):
+            enables_dialogs = "ForwardSimplePrompts" in names
+        if enables_dialogs and not args.get("confirm"):
+            raise RuntimeError("set_prompt_handling REFUSED - "
+                               "ForwardSimplePrompts re-enables GUI "
+                               "dialogs (wedge hazard); pass "
+                               "args.confirm=true only on an explicit "
+                               "owner request")
+        sysobj.prompt_handling = value
+        try:
+            effective = _flags_to_names(sysobj.prompt_handling,
+                                        _PROMPT_HANDLING_FLAGS)
+        except Exception:
+            effective = None
+        log("OK", "prompt_handling set to {n}".format(n=effective))
+        return {"set": names, "effective": effective,
+                "note": "re-hardened to LogSimplePrompts by the next "
+                        "command"}
+
+    if op == "prompt_answers":
+        try:
+            pa = sysobj.prompt_answers
+            out = {}
+            for k in pa.keys():
+                try:
+                    out[str(k)] = str(pa[k])
+                except Exception:
+                    out[str(k)] = None
+        except Exception as exc:
+            raise RuntimeError("prompt_answers unreadable: {e}".format(
+                e=exc))
+        log("OK", "prompt answers: {n} key(s)".format(n=len(out)))
+        return {"count": len(out), "answers": out}
+
+    if op == "set_prompt_answer":
+        key = str(args.get("key", "")).strip()
+        rname = str(args.get("result", "")).strip()
+        if not key or not rname:
+            raise RuntimeError("system set_prompt_answer needs args.key "
+                               "(prompt message key) and args.result "
+                               "(OK|Cancel|Yes|No|Retry|Abort|Ignore)")
+        value = _enum_by_names("PromptResult", [rname],
+                               _PROMPT_RESULT_VALUES, PromptResult)
+        sysobj.prompt_answers[key] = value
+        log("OK", "prompt answer set: {k} -> {r}".format(k=key, r=rname))
+        return {"key": key, "result": rname,
+                "note": "persists for this e!COCKPIT session; system.ui "
+                        "dialog methods ignore it (per stub)"}
+
+    if op == "clear_prompt_answers":
+        try:
+            pa = sysobj.prompt_answers
+            n = len(pa)
+            pa.clear()
+        except Exception as exc:
+            raise RuntimeError("prompt_answers.clear() failed: {e}".format(
+                e=exc))
+        log("OK", "prompt answers cleared ({n})".format(n=n))
+        return {"cleared": n}
+
+    if op == "set_flags":
+        changed = {}
+        if args.get("trace") is not None:
+            sysobj.trace = bool(args["trace"])
+            changed["trace"] = bool(args["trace"])
+        if args.get("abortable") is not None:
+            sysobj.abortable = bool(args["abortable"])
+            changed["abortable"] = bool(args["abortable"])
+        if args.get("abort_autocheck") is not None:
+            sysobj.abort_autocheck = bool(args["abort_autocheck"])
+            changed["abort_autocheck"] = bool(args["abort_autocheck"])
+        if not changed:
+            raise RuntimeError("system set_flags needs at least one of "
+                               "trace, abortable, abort_autocheck")
+        readback = {}
+        for name, reader in (
+                ("trace", lambda: sysobj.trace),
+                ("abortable", lambda: sysobj.abortable),
+                ("aborting", lambda: sysobj.aborting),
+                ("abort_autocheck", lambda: sysobj.abort_autocheck)):
+            try:
+                readback[name] = bool(reader())
+            except Exception:
+                readback[name] = None
+        log("OK", "system flags set: {c}".format(c=sorted(changed)))
+        return {"set": changed, "flags": readback}
+
+    if op == "progress":
+        action = str(args.get("action", "")).strip().lower()
+        if action == "start":
+            sysobj.progress_start(
+                str(args.get("description", "") or "working"),
+                int(args.get("items", -1) or -1),
+                str(args.get("unit", "") or ""))
+        elif action == "step":
+            sysobj.progress_step(str(args.get("item", "") or ""),
+                                 int(args.get("completed", 1) or 1))
+        elif action == "absolute":
+            sysobj.progress_absolute(
+                str(args.get("item", "") or ""),
+                int(args.get("absolute_progress", 0) or 0))
+        else:
+            raise RuntimeError("system progress needs args.action of "
+                               "start|step|absolute")
+        log("OK", "progress {a}".format(a=action))
+        return {"action": action}
+
+    if op == "ui":
+        if not args.get("confirm"):
+            raise RuntimeError("system ui REFUSED - these methods block "
+                               "on a real GUI dialog (wedge hazard); "
+                               "pass args.confirm=true only on an "
+                               "explicit owner request")
+        return _system_ui_call(sysobj, args)
+
+    if op == "exit":
+        if not args.get("confirm"):
+            raise RuntimeError("system exit REFUSED - it shuts down the "
+                               "whole e!COCKPIT process (and the armed "
+                               "relay); pass args.confirm=true only on "
+                               "an explicit owner request")
+        code = int(args.get("code", 0) or 0)
+        log("OK", "system.exit({c}) - shutting e!COCKPIT down; no result "
+            "file will be written for this command".format(c=code))
+        sysobj.exit(code)
+        return {"exiting": True, "code": code,
+                "note": "process (and relay) gone - re-arm after "
+                        "restarting e!COCKPIT"}
+
+    raise RuntimeError('system needs args.op of "info", "write_message", '
+                       '"set_prompt_handling", "prompt_answers", '
+                       '"set_prompt_answer", "clear_prompt_answers", '
+                       '"set_flags", "progress", "ui" or "exit"')
 
 
 # --------------------------------------------------------------------------
@@ -4326,7 +4800,7 @@ KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
                   "write", "unforce", "download", "disconnect", "stop",
                   "state", "probe", "messages", "snapshot", "export",
                   "plcfs", "upload_source", "save_archive",
-                  "clear_messages",
+                  "clear_messages", "system",
                   "libs", "lib_find", "lib_install", "lib_uninstall",
                   "repos", "repo_add", "repo_remove", "repo_update",
                   "repo_move",
@@ -4407,6 +4881,10 @@ def run_command(request):
         elif cmd == "messages":
             # System-level: no project lookup needed.
             result["value"] = cmd_messages()
+            summary["ok"] = True
+        elif cmd == "system":
+            # System-level: the injected `system` object; no project.
+            result["value"] = cmd_system(args)
             summary["ok"] = True
         elif cmd == "snapshot":
             project = get_project()

@@ -90,6 +90,30 @@ applications in the primary project.
 Build log rendering used by the executor:
 `C40: Error: Function 'mBuildState' requires exactly '3' inputs [Name=MqttPubLight Line 4, Column 1 (Impl)]`
 
+## System object (ScriptSystem stub — the injected `system` global)
+
+Implemented on feat/system-device-io (→ `ecockpit_system`,
+`ecockpit_system_ui`); live status per TESTING.md. Signatures from
+`ScriptLib\Stubs\scriptengine\ScriptSystem.pyi`.
+
+| Member | Notes |
+|---|---|
+| `ui_present`, `executable_filename` | environment facts (read) |
+| `trace` (get/set) | script-trace messages into the store |
+| `prompt_handling` (get/set) | PromptHandling flags: ForwardSimplePrompts=1, LogSimplePrompts=2, EnableTextPrompts=4, ProcessScriptPrompts=8, LogMessageKeys=16 (+NONE=0). The executor re-hardens LogSimplePrompts at EVERY command start (the relay re-execs executor.py), so a set lasts only for the current command |
+| `prompt_answers` (dict) | headless dialog simulation: key = prompt message key, value = PromptResult member (OK=0 Cancel=1 Yes=2 No=3 Retry=4 Abort=5 Ignore=6). Persists for the engine session. `system.ui.*` dialog methods IGNORE it (per stub) |
+| `abortable` / `abort_autocheck` (get/set), `aborting` (read) | script abort switches |
+| `progress_start(description, items, unit)` / `progress_step(item, completed)` / `progress_absolute(item, absolute_progress)` | GUI progress-bar chrome; no close member |
+| `ui.*` | ALL modal (error/warning/info/prompt/select_many/choose/query_string/query_password/query_credentials/open/save_file_dialog/browse_directory_dialog/reset_stored_result) — wedge hazard G-08; confirm-gated `ecockpit_system_ui` |
+| `exit(exitcode=0)` | shuts down e!COCKPIT **and the armed relay** — confirm-gated |
+| `commands`, `factories` | command/factory inventories (surfaced by the info op) |
+
+The executor keeps stub-derived value tables (`_PROMPT_HANDLING_FLAGS`,
+`_PROMPT_RESULT_VALUES`, `_PROMPT_CHOICE_VALUES`, `_SEVERITY_VALUES`) and
+prefers the injected enum globals (`PromptHandling`, `PromptResult`,
+`PromptChoice`, `Severity`) at runtime — same stand-in pattern as
+`PouType`/`DutType`.
+
 ## IScriptProject (e_projects.primary / open_project(...))
 
 - `save()` — saves at its **physical location** (`path` property).

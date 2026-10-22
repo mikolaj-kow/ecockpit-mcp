@@ -156,6 +156,7 @@ _TIMEOUTS = {
     "app_control": 300,
     "project_control": 300,
     "clear_messages": 60,
+    "system": 300,
     "libs": 120,
     "lib_find": 120,
     "lib_install": 120,
@@ -462,6 +463,191 @@ def ecockpit_messages() -> str:
                 "builds or GUI actions).")
 def ecockpit_clear_messages() -> str:
     return json.dumps(_run("clear_messages", {}), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=False,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="Access the e!COCKPIT `system` scripting object. op=info "
+                "(read-only: ui_present, prompt_handling decoded, "
+                "abort/trace flags, prompt_answers keys, commands). "
+                "op=write_message {severity: FatalError|Error|Warning|"
+                "Information|Text, text}. op=set_prompt_handling {value: "
+                "flag names '+'-combined, e.g. LogSimplePrompts+"
+                "LogMessageKeys; confirm=true only needed when it "
+                "enables ForwardSimplePrompts (GUI dialogs back on)} - "
+                "NOTE the relay re-hardens LogSimplePrompts at the "
+                "START of every command, so a set lasts only for the "
+                "current command. op=prompt_answers (list) / "
+                "op=set_prompt_answer {key, result: OK|Cancel|Yes|No|"
+                "Retry|Abort|Ignore} / op=clear_prompt_answers - "
+                "headless dialog simulation for engine prompts; these "
+                "PERSIST for the e!COCKPIT session. op=set_flags "
+                "{trace?, abortable?, abort_autocheck?}. op=progress "
+                "{action: start|step|absolute, description, items, "
+                "unit, item, completed, absolute_progress} - progress "
+                "bar chrome. Modal system.ui dialogs and exit live in "
+                "ecockpit_system_ui (separately confirm-gated).")
+def ecockpit_system(op: str = "info", value: str = "", key: str = "",
+                    result: str = "", text: str = "",
+                    severity: str = "Information",
+                    trace: bool = None, abortable: bool = None,
+                    abort_autocheck: bool = None,
+                    action: str = "", description: str = "",
+                    items: int = -1, unit: str = "", item: str = "",
+                    completed: int = 1, absolute_progress: int = 0,
+                    confirm: bool = False, timeout_s: int = 120) -> str:
+    valid = ("info", "write_message", "set_prompt_handling",
+             "prompt_answers", "set_prompt_answer",
+             "clear_prompt_answers", "set_flags", "progress")
+    if op not in valid:
+        raise ValueError("op must be one of " + "|".join(valid))
+    args = {"op": op}
+    if op == "write_message":
+        if not text:
+            raise ValueError("text required for op=write_message")
+        args["text"] = text
+        args["severity"] = severity
+    if op == "set_prompt_handling":
+        if not value:
+            raise ValueError("value required for op=set_prompt_handling")
+        names = [t for t in value.replace(",", "+").replace(" ", "+")
+                 .split("+") if t]
+        if "ForwardSimplePrompts" in names and not confirm:
+            return json.dumps({
+                "ok": False,
+                "refused": True,
+                "error": "set_prompt_handling refused - "
+                         "ForwardSimplePrompts re-enables GUI dialogs "
+                         "(wedge hazard); call again with confirm=true "
+                         "only on an explicit owner request",
+            }, indent=2)
+        args["value"] = value
+        args["confirm"] = True
+    if op == "set_prompt_answer":
+        if not key or not result:
+            raise ValueError("key and result required for "
+                             "op=set_prompt_answer")
+        args["key"] = key
+        args["result"] = result
+    if op == "set_flags":
+        if trace is None and abortable is None and abort_autocheck is None:
+            raise ValueError("at least one of trace, abortable, "
+                             "abort_autocheck required")
+        if trace is not None:
+            args["trace"] = bool(trace)
+        if abortable is not None:
+            args["abortable"] = bool(abortable)
+        if abort_autocheck is not None:
+            args["abort_autocheck"] = bool(abort_autocheck)
+    if op == "progress":
+        if not action:
+            raise ValueError("action required for op=progress")
+        args["action"] = action
+        if description:
+            args["description"] = description
+        if items != -1:
+            args["items"] = int(items)
+        if unit:
+            args["unit"] = unit
+        if item:
+            args["item"] = item
+        if action == "step":
+            args["completed"] = int(completed)
+        if action == "absolute":
+            args["absolute_progress"] = int(absolute_progress)
+    return json.dumps(_run("system", args, timeout_s), indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="DESTRUCTIVE - requires explicit owner request + "
+                "confirm=true. op=ui calls a REAL modal system.ui "
+                "dialog that blocks until the owner answers it in the "
+                "e!COCKPIT GUI (the relay stalls meanwhile and the "
+                "heartbeat goes stale - that is normal, keep "
+                "timeout_s generous). method: error|warning|info "
+                "(message) | prompt (message, choice, default_result) "
+                "| select_many (message, choice, items) | choose "
+                "(message, options, initial_selection, cancellable) | "
+                "reset_stored_result (store_key) | open_file_dialog / "
+                "save_file_dialog (title, filename, directory, filter, "
+                "filter_index, default_extension, multiselect) | "
+                "browse_directory_dialog (message, path, "
+                "new_folder_button) | query_string (message, text, "
+                "multi_line) | query_password | query_credentials "
+                "(secret values pass through the result file "
+                "unencrypted on this host and are never logged). "
+                "Prefer prompt_answers simulation (ecockpit_system) "
+                "for headless runs - ui.* dialogs ignore it. op=exit "
+                "{code} SHUTS DOWN e!COCKPIT and the armed relay: "
+                "every tool goes dark until you re-arm a fresh GUI "
+                "session; expect the call to time out (no result file "
+                "is written).")
+def ecockpit_system_ui(op: str, method: str = "", message: str = "",
+                       message_key: str = "", choice: str = "YesNo",
+                       default_result: str = "", items: list = None,
+                       options: list = None, initial_selection: int = 0,
+                       cancellable: bool = True, store_key: str = "",
+                       title: str = "", filename: str = "",
+                       directory: str = "", filter: str = "",
+                       filter_index: int = None,
+                       default_extension: str = "",
+                       multiselect: bool = False, path: str = "",
+                       new_folder_button: bool = True, text: str = "",
+                       multi_line: bool = False, username: str = "",
+                       password: str = "", code: int = 0,
+                       confirm: bool = False, timeout_s: int = 600) -> str:
+    if op not in ("ui", "exit"):
+        raise ValueError("op must be ui|exit")
+    if not confirm:
+        return json.dumps({
+            "ok": False,
+            "refused": True,
+            "error": "system {o} refused - {r}; call again with "
+                     "confirm=true only on an explicit owner "
+                     "request".format(
+                         o=op,
+                         r=("ui dialogs block the relay on a real GUI "
+                            "dialog (wedge hazard)" if op == "ui" else
+                            "exit shuts down the whole e!COCKPIT "
+                            "process")),
+        }, indent=2)
+    args = {"op": op, "confirm": True}
+    if op == "exit":
+        args["code"] = int(code)
+        return json.dumps(_run("system", args, min(int(timeout_s), 30)),
+                          indent=2)
+    if not method:
+        raise ValueError("method required for op=ui")
+    args["method"] = method
+    for k, v in (("message", message), ("message_key", message_key),
+                 ("choice", choice), ("default_result", default_result),
+                 ("store_key", store_key), ("title", title),
+                 ("filename", filename), ("directory", directory),
+                 ("filter", filter),
+                 ("default_extension", default_extension),
+                 ("path", path), ("text", text),
+                 ("username", username), ("password", password)):
+        if v:
+            args[k] = v
+    for k, v in (("items", items), ("options", options)):
+        if v:
+            args[k] = [str(x) for x in v]
+    for k, v in (("initial_selection", initial_selection),
+                 ("cancellable", cancellable),
+                 ("multiselect", multiselect),
+                 ("new_folder_button", new_folder_button),
+                 ("multi_line", multi_line)):
+        args[k] = v
+    if filter_index is not None:
+        args["filter_index"] = int(filter_index)
+    return json.dumps(_run("system", args, timeout_s), indent=2)
 
 
 @mcp.tool(

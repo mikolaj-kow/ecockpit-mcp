@@ -29,11 +29,12 @@ more). Live results: [TESTING.md](TESTING.md).
 | System / messages | ecockpit_messages | ✅ | `system.get_message_objects(category, severities)` | build harvest reads these |
 | System / messages | ecockpit_clear_messages | ✅ | `system.clear_messages(category)` | iterates all categories |
 | System / messages | — | ✅ | `system.delay(ms)` / `process_messageloop()` | internal |
-| System / messages | — | 🟡 | `system.prompt_handling` / `prompt_answers` (headless dialog simulation) | LogSimplePrompts applied; answers not wired |
+| System / messages | ecockpit_system / ecockpit_system_ui | ✅ | `system.prompt_handling` get/set / `prompt_answers` dict (headless dialog simulation) | answers persist per session; prompt_handling re-hardened per command (relay re-exec); ForwardSimplePrompts confirm-gated |
 | System / messages | — | ❌ | `system.get_message_category_description(category)` | not callable in this build |
 | System / messages | — | ❌ | `system.get_message_log` / `get_messages_count` | absent |
-| System / messages | — | 🟡 | `system.progress_*` / `abortable` / `ui.*` | `ui.*` = dialog wedge hazard (G-08) |
-| System / messages | — | 🟡 | `system.exit(code)` | DESTRUCTIVE: kills e!COCKPIT |
+| System / messages | ecockpit_system | ✅ | `system.progress_start/step/absolute`, `abortable`, `aborting`, `abort_autocheck`, `trace`, `commands`, `factories` | progress = GUI chrome; flags read/set; info op |
+| System / messages | ecockpit_system_ui | ✅ | `system.ui.error/warning/info/prompt/select_many/choose/query_string/query_password/query_credentials/file dialogs` | CONFIRM-GATED: real modal dialogs, wedge hazard (G-08); prompt_answers does NOT cover them (stub) |
+| System / messages | ecockpit_system_ui (op=exit) | ✅ | `system.exit(code)` | DESTRUCTIVE: kills e!COCKPIT + relay; confirm-gated |
 | Project lifecycle | ecockpit_status | ✅ | `projects.primary` / `get_by_path(path)` / `all` | internal (`get_project`) |
 | Project lifecycle | ecockpit_project_control | ✅ | `projects.create(path, primary)` | new project becomes primary |
 | Project lifecycle | ecockpit_project_control | ✅ | `projects.open(path, password, primary, update_flags)` | becomes primary |

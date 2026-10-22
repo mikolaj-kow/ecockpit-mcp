@@ -30,6 +30,8 @@ SCRIPTENGINE_API.md cross-reference.
 | 2026-10-22 | ecockpit_plc_fs_ops | op=ls, remote="/" | VERIFIED | tool now accepts ls (read-only); connected + listed `.` — 7 entries via `create_online_device.get_file_list_of_directory` |
 | 2026-10-22 | ecockpit_device_params | op=list / read online=true | PENDING | read-only; run in the next armed session |
 | 2026-10-22 | ecockpit_symbol_config_variables | compile=true | PENDING | builds first (slow but safe) |
+| 2026-10-22 | ecockpit_system | op=info / write_message / set_prompt_answer / prompt_answers / set_flags | PENDING | read-only + message-store ops (feat/system-device-io) |
+| 2026-10-22 | ecockpit_system_ui | op=ui (any dialog) / op=exit | PENDING | DESTRUCTIVE — modal wedge / kills e!COCKPIT; owner request only |
 | — | ecockpit_app_control op=activate/boot/start/reset | confirm=true | PENDING | DESTRUCTIVE — owner request only |
 | — | ecockpit_download | confirm=true | PENDING | DESTRUCTIVE — replaces the RUNNING app; owner request only |
 | — | ecockpit_device_params op=write | confirm=true | PENDING | DESTRUCTIVE — PLC parameter write; owner request only |

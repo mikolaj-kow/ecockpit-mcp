@@ -40,7 +40,8 @@ def test_expected_tools_registered():
                  "ecockpit_device_scan", "ecockpit_device_comm",
                  "ecockpit_device_params",
                  "ecockpit_app_status", "ecockpit_app_control",
-                 "ecockpit_project_control"):
+                 "ecockpit_project_control",
+                 "ecockpit_system", "ecockpit_system_ui"):
         assert hasattr(srv, name), "missing tool function: " + name
 
 

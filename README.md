@@ -159,6 +159,13 @@ CAUTION — every online command logs in via the online-change ladder
 applying changes or downloading) but deploying commands may still
 apply code deltas to the RUNNING application.
 
+System object (the injected `system` global):
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_system(op?, ...)` | `info` (ui_present, prompt_handling decoded, abort/trace flags, prompt_answers keys) / `write_message` / `set_prompt_handling` (per-command lifetime; `ForwardSimplePrompts` confirm-gated) / `prompt_answers` + `set_prompt_answer` + `clear_prompt_answers` (headless dialog simulation, persists per session) / `set_flags` / `progress` |
+| `ecockpit_system_ui(op, ..., confirm)` | **destructive** — `op=ui` pops a REAL modal dialog and blocks until answered (wedge hazard; keep `timeout_s` generous); `op=exit` shuts down e!COCKPIT and the relay (call times out; re-arm needed) |
+
 Project tree + ST authoring:
 
 | Tool | Notes |
