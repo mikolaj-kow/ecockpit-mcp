@@ -25,7 +25,8 @@ done + possible), [TESTING.md](TESTING.md) (live results),
    request; record every result in TESTING.md.
 2. **ScriptLib stubs** —
    `ECP_INSTALL_DIR\3S CODESYS\CODESYS\ScriptLib\Stubs\scriptengine\*.pyi`
-   (29 files, ~14k lines). The
+   (25 files, ~14k lines; the install dir is recorded as
+   `ECP_INSTALL_DIR` in the project .env). The
    authoritative member lists: `ScriptOnline.pyi` (online app + device +
    gateways), `ScriptProject(s).pyi`, `ScriptObject.pyi`/`ScriptTreeObject.pyi`
    (tree + build properties + native IO), `ScriptIecLanguageObjectContainer.pyi`

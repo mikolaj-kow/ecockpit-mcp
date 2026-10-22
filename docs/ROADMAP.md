@@ -54,31 +54,50 @@ Non-negotiable discipline:
 - Packaging: src-layout package, `__version__` single-sourcing, console
   entry point, sdist+wheel build in CI, wheel install + entry-point
   smoke, license/notice metadata (Apache-2.0).
-- Quality gates: strict flake8 fail-fast, offline test suite (15 tests;
-  fake `ILibManager` for the library commands), build gate, dead-tool
-  absence pins.
+- Quality gates: strict flake8 fail-fast, offline test suite (31 tests;
+  fake `ILibManager` for the library commands, fakes for the system /
+  device-info / device-IO / symbol-options / special-POU domains),
+  build gate, dead-tool absence pins.
 - Docs contract: machine-readable `SCRIPTENGINE_*` suite
   (API reference, GOTCHAS with stable IDs, NOT_EXPOSED inventory,
   EXPLORATION how-to, SUMMARY done+possible master table), TESTING.md
   live-result tracking, mkdocs-material site with the architecture
   diagram.
-- Tool surface: 43 tools across build/import/export, online
+- Tool surface: 54 tools across build/import/export, online
   read/write/prepared values, login with online-change control
   (`OnlineChangeOption` incl. stub-only `Keep`), PLC file system via
   `online.create_online_device()`, source archive push/pull, library
-  repository curation, project tree + ST authoring, task configuration,
-  symbol configuration, device scan/communication/parameters,
-  application and project lifecycle. Read-only login (`Keep`), headless
-  prompt hardening, and the confirm-gate policy with
+  repository curation, project tree + ST authoring (incl. special POUs
+  via `create_pou(SpecialPouType.*)`), task configuration, symbol
+  configuration (+ options read/set, XSD dump), device
+  scan/communication/identification/simulation/driver info/parameters/
+  IO mappings (+ CSV round-trip), the `system` object (info, message
+  store, headless prompt simulation, abort/trace flags, progress
+  chrome, confirm-gated `ui.*` dialogs and `exit`), application and
+  project lifecycle. Read-only login (`Keep`), headless prompt
+  hardening, and the confirm-gate policy with
   `destructiveHint`/`readOnlyHint` annotations.
+- feat/system-device-io round (2026-10-22): every 🟡 `system.*` row
+  except the live-broken probes, `dev.get_device/module_identification`,
+  `get/set_simulation_mode`, `dev.driver_info.*` (read + confirm-gated
+  setters), `mapping.variable`/`manual_iec_address` inspection +
+  setting, `dev.export/import_io_mappings_as_csv`,
+  `sym.get_symbol_configuration_xsd()`/`content_feature_flags`/
+  attribute+comment filters, `create_pou(SpecialPouType.*)`; offline
+  test suite grown 15 → 31 tests with fakes for the new domains.
 - Live-verified: export (file + string forms), login ladder (Try, 15 s),
   plc_ls (directory fallback), prepared_values, libs/repos/find,
   tree/task_config/device_scan/project info.
 
 ## Next
 
-- **mkdocs CI job**: build the site on every PR (content is in-repo;
-  the site itself is generated, not committed).
+- **Live-test pass for the feat/system-device-io round**: ecockpit_system
+  info/prompt-simulation ops, ecockpit_device_info
+  identification/simulation/driver_info, ecockpit_device_io
+  mappings/export_csv, ecockpit_symbol_config_options config/xsd —
+  read-only first (arm the relay from the worktree checkout), then
+  owner-authorized destructive checks; record every result in
+  TESTING.md.
 - **`ecockpit-mcp install-scripts <dir>`**: write `relay.py` +
   `executor.py` (plus a starter `.env`) to an arming directory, so the
   wheel alone is enough to arm e!COCKPIT.
@@ -95,7 +114,7 @@ Non-negotiable discipline:
 
 - **Quality gates**: ruff (lint+format), mypy/pyright on the CPython
   half, coverage gate on the host half, pre-commit hooks; extend the
-  ScriptEngine fake to the new domains (tree, task, symbol, device
+  ScriptEngine fake to the remaining domains (tree, task, device
   params) so destructive paths get offline coverage too.
 - **PyPI publication** via trusted publishing (OIDC); `pipx install
   ecockpit-mcp`; tag-triggered release workflow with provenance.
@@ -108,9 +127,8 @@ Non-negotiable discipline:
 - **Deferred ScriptEngine capabilities**: everything in SUMMARY.md with
   status `possible` — in-project library references, device-tree
   authoring (add/plug/update), user management (project + device),
-  text lists, image pools, external files, IO-mapping CSV, license
-  activation, gateway add/remove, project compare, compiled libraries,
-  project settings.
+  text lists, image pools, external files, license activation, gateway
+  add/remove, project compare, compiled libraries, project settings.
 
 ## What stays out of scope
 

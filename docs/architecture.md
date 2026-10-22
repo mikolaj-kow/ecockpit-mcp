@@ -31,9 +31,9 @@ flowchart LR
 - **`server.py`** (host, CPython ≥ 3.10) — the MCP server editors
   connect to. Validates arguments, enforces the confirm-gate refusals,
   routes commands over the file protocol, adds `log_tail` to failures.
-  Exposes 49 tools across build/import/export, online I/O, libraries,
-  tree/ST authoring, task/symbol config, device scan/comm/params, and
-  project lifecycle.
+  Exposes 54 tools across build/import/export, online I/O, libraries,
+  tree/ST authoring, task/symbol config, device scan/comm/params/IO,
+  the `system` object, and project lifecycle.
 - **`relay.py`** (inside e!COCKPIT, IronPython 2.7) — armed once per
   session via FILE → Scripting → Execute script file. Creates its work
   dir, writes the heartbeat, polls `ecockpit_cmd.json`, exec()s
@@ -53,7 +53,8 @@ flowchart LR
 | PLC files | plcfs (ls/get/put/rm/rename/mkdir/rmdir), upload_source |
 | Libraries | libs, lib_find, lib_install, lib_uninstall, repos, repo_add/remove/update/move |
 | Tree/ST | tree, object_create, textual |
-| App/project | task_config, symbol_config, device_scan, device_comm, device_params, app_control, project_control |
+| App/project | task_config, symbol_config, device_scan, device_comm, device_info, device_params, device_io, app_control, project_control |
+| System | system (info, write_message, prompt handling/answers, flags, progress, ui.*, exit) |
 | Diagnostics | status (server), messages, probe, clear_messages |
 
 ## Invariants

@@ -12,7 +12,7 @@ Status: `possible` (stub-documented, unimplemented) · `partial` ·
 
 State: the CHM documents ~217 interfaces / ~580 methods / ~830
 properties; the ScriptLib stubs refine them; ecockpit-mcp exposes its
-task-oriented subset via 49 MCP tools (2026-10-22; plc_fs_ops counts once for its seven ops).
+task-oriented subset via 54 MCP tools (2026-10-22; plc_fs_ops counts once for its seven ops).
 
 | Capability | Stub chain (file → call) | Status | Notes |
 |---|---|---|---|
@@ -21,7 +21,6 @@ task-oriented subset via 49 MCP tools (2026-10-22; plc_fs_ops counts once for it
 | Device user management (offline) | ScriptOnline.pyi (ScriptOnlineDevice) → `create_user_management(load_from_project)` → users/groups/`set_password` → `download()` (PLC-touching) / `store_to_project()` | possible | pre-3.5.16 runtimes; XML round-trip via `load`/`save` |
 | Device user management (live, SP16+) | ScriptLiveDeviceUserManagement.pyi → `create_live_user_management()` → `add_user` / `add_group` / `set_user_password` / `set_members_of_group` / `backup(dir, pw)` / `restore(path, pw)` | possible | `connect()` first; `restore()` invalidates the session (reconnect pattern in stub) |
 | Device tree authoring | ScriptDeviceObject.pyi → `project.add(name, DeviceID)` / `dev.plug`/`add`/`insert(name, DeviceID)` / `dev.update(DeviceID)` / `dev.unplug()`; ScriptExplicitConnectorObjects.pyi → `connector.add/insert(name, DeviceID)` + `allowed_interfaces_at(index)` | possible | `DeviceID` via injected `DeviceID(type, id, version)`; `unplug` destructive |
-| IO mapping CSV | ScriptDeviceObject.pyi → `dev.export_io_mappings_as_csv(file)` / `import_io_mappings_from_csv(file)` (also on explicit connectors) | possible | import modifies IO config |
 | WAGO module + legacy params | ScriptDeviceObject.pyi (WAGO IEScriptDevice) → `add_module` / `delete_module` / `get_module` / `read_parameter(_list)` / `write_parameter` / `set_io_mapping` / `update` | partial | partly superseded by `ecockpit_device_params` (ScriptDeviceParameters set) |
 | Project convert / template | ScriptProjects.pyi → `convert(path, output_path, converter, primary)` / `create_new_project_from_template` | possible | V2.3 `.pro`/`.lib` converter GUIDs documented in the stub |
 | License activation | ScriptOnline.pyi (ScriptOnlineDevice) → `activate_license(ticket, url, license_names)` | possible | writes a license to the device |
