@@ -29,11 +29,12 @@ more). Live results: [TESTING.md](TESTING.md).
 | System / messages | ecockpit_messages | ✅ | `system.get_message_objects(category, severities)` | build harvest reads these |
 | System / messages | ecockpit_clear_messages | ✅ | `system.clear_messages(category)` | iterates all categories |
 | System / messages | — | ✅ | `system.delay(ms)` / `process_messageloop()` | internal |
-| System / messages | — | 🟡 | `system.prompt_handling` / `prompt_answers` (headless dialog simulation) | LogSimplePrompts applied; answers not wired |
+| System / messages | ecockpit_system / ecockpit_system_ui | ✅ | `system.prompt_handling` get/set / `prompt_answers` dict (headless dialog simulation) | answers persist per session; prompt_handling re-hardened per command (relay re-exec); ForwardSimplePrompts confirm-gated |
 | System / messages | — | ❌ | `system.get_message_category_description(category)` | not callable in this build |
 | System / messages | — | ❌ | `system.get_message_log` / `get_messages_count` | absent |
-| System / messages | — | 🟡 | `system.progress_*` / `abortable` / `ui.*` | `ui.*` = dialog wedge hazard (G-08) |
-| System / messages | — | 🟡 | `system.exit(code)` | DESTRUCTIVE: kills e!COCKPIT |
+| System / messages | ecockpit_system | ✅ | `system.progress_start/step/absolute`, `abortable`, `aborting`, `abort_autocheck`, `trace`, `commands`, `factories` | progress = GUI chrome; flags read/set; info op |
+| System / messages | ecockpit_system_ui | ✅ | `system.ui.error/warning/info/prompt/select_many/choose/query_string/query_password/query_credentials/file dialogs` | CONFIRM-GATED: real modal dialogs, wedge hazard (G-08); prompt_answers does NOT cover them (stub) |
+| System / messages | ecockpit_system_ui (op=exit) | ✅ | `system.exit(code)` | DESTRUCTIVE: kills e!COCKPIT + relay; confirm-gated |
 | Project lifecycle | ecockpit_status | ✅ | `projects.primary` / `get_by_path(path)` / `all` | internal (`get_project`) |
 | Project lifecycle | ecockpit_project_control | ✅ | `projects.create(path, primary)` | new project becomes primary |
 | Project lifecycle | ecockpit_project_control | ✅ | `projects.open(path, password, primary, update_flags)` | becomes primary |
@@ -66,22 +67,22 @@ more). Live results: [TESTING.md](TESTING.md).
 | ST authoring | ecockpit_object_create | ✅ | `container.create_interface(name, baseInterfaces)` | kind=interface |
 | ST authoring | ecockpit_object_create | ✅ | `pou.create_method/property/action/transition(...)` | kind=method/property/action/transition (needs parent) |
 | ST authoring | ecockpit_textual_read/write | ✅ | `obj.textual_declaration` / `textual_implementation` → `.text` / `.replace(new_text=...)` | read / confirm-gated whole-part replace |
-| ST authoring | — | 🟡 | `create_pou(SpecialPouType.*)` (check functions) | forces full recompile, kills online change |
+| ST authoring | ecockpit_object_create | ✅ | `create_pou(SpecialPouType.*)` (check functions) | kind=special_pou + special_type (engine names the object); forces full recompile, kills online change; confirm |
 | Task config | ecockpit_task_config | ✅ | `app.create_task_configuration()` → `tc.create_task(name)` | inspect (read-only) + create |
 | Task config | ecockpit_task_create | ✅ | `task.kind_of_task` (KindOfTask.Cyclic/...) / `priority` / `interval` / `interval_unit` | task_create sets, task_config inspects |
 | Task config | ecockpit_task_create | ✅ | `task.watchdog.{enabled,time,time_unit,sensitivity}` | — |
 | Task config | ecockpit_task_create | ✅ | `task.pous.add/insert/replace/remove` | — |
 | Symbol config | ecockpit_symbol_config_create | ✅ | `app.create_symbol_config(export_comments, support_opc_ua, calculator)` | confirm-gated |
 | Symbol config | ecockpit_symbol_config_variables | ✅ | `sym.get_all_signatures(compile)` → signatures + variables (name/type/effective_access) | compile=true builds first (slow, safe) |
-| Symbol config | — | 🟡 | `sym.get_symbol_configuration_xsd()` / `content_feature_flags` / attribute+comment filters | — |
+| Symbol config | ecockpit_symbol_config_options | ✅ | `sym.get_symbol_configuration_xsd()` / `content_feature_flags` (+effective) / `symbol_attribute_filter_type+data` / `symbol_comment_filter_type` | op=config (read) / config_set (confirm) / xsd (schema file for THIS release) |
 | Device scan/comm | ecockpit_device_scan | ✅ | `online.gateways` / `gateway_drivers` | op=gateways (LIVE: WACDefaultGateway) |
 | Device scan/comm | ecockpit_device_scan | ✅ | `gateway.perform_network_scan()` → discovered targets | op=scan (blocks for scan timeout) |
 | Device scan/comm | ecockpit_device_scan | ✅ | `gateway.find_address_by_ip(ip, port)` | op=address |
 | Device scan/comm | — | 🟡 | `gateways.add_new_gateway(...)` / `remove_gateway(...)` | mutates CODESYS config |
 | Device scan/comm | ecockpit_device_comm | ✅ | `dev.get_device_communication_settings()` (scanned_* fields) | op=get |
 | Device scan/comm | ecockpit_device_comm | ✅ | `dev.set_gateway_and_ip_address(gw, ip)` / `set_gateway_and_address` / `set_gateway_and_device_name` | op=set_ip (confirm) |
-| Device scan/comm | — | 🟡 | `dev.get_device_identification()` / `get_module_identification()` | — |
-| Device scan/comm | — | 🟡 | `dev.get_simulation_mode()` / `set_simulation_mode(bool)` | — |
+| Device scan/comm | ecockpit_device_info | ✅ | `dev.get_device_identification()` / `get_module_identification()` | op=identification (read-only); DeviceId = {type, id, version} |
+| Device scan/comm | ecockpit_device_info | ✅ | `dev.get_simulation_mode()` / `set_simulation_mode(bool)` | op=simulation (read) / simulation_set (confirm) |
 | Device tree | — | 🟡 | `project.add(name, DeviceID)` (top-level device) | DeviceID via injected `DeviceID(type, id, version)` |
 | Device tree | — | 🟡 | `dev.plug` / `add` / `insert(name, DeviceID, module)` / `dev.update(DeviceID)` / `dev.unplug()` | unplug destructive |
 | Device tree | — | 🟡 | explicit connectors: `connector.add/insert(...)` + `allowed_interfaces_at(index)` | — |
@@ -89,9 +90,9 @@ more). Live results: [TESTING.md](TESTING.md).
 | Device params | ecockpit_device_params | ✅ | element `.value` / `allowed_values` / `min-max` / sub-elements | op=read (offline) |
 | Device params | ecockpit_device_params | ✅ | `el.read_online_value(timeout)` | op=read online=true |
 | Device params | ecockpit_device_params | ✅ | `el.write_online_value(value)` (enums validated) | op=write (confirm; PLC-touching) |
-| Device params | — | 🟡 | `dev.export_io_mappings_as_csv(file)` / `import_io_mappings_from_csv(file)` | import modifies IO config |
-| Device params | — | 🟡 | `dev.driver_info.*` (bus cycle task, IO application, stop behaviour, diagnosis) | — |
-| Device params | — | 🟡 | `mapping.variable` / `manual_iec_address` (IO mapping inspection) | — |
+| Device params | ecockpit_device_io | ✅ | `dev.export_io_mappings_as_csv(file)` / `import_io_mappings_from_csv(file)` | op=export_csv (default `<ECP_PROJECT_ROOT>/io-mappings/`) / import_csv (confirm; modifies IO config) |
+| Device params | ecockpit_device_info | ✅ | `dev.driver_info.*` (bus cycle task, IO application, stop behaviour, diagnosis) | op=driver_info (read-only) / driver_info_set (confirm; set_bus_cycle_task / set_io_application + bool/enum setters) |
+| Device params | ecockpit_device_io | ✅ | `ScriptDataElement.is_mappable_io` → `io_mapping` (`mapping.variable` / `manual_iec_address` / `automatic_iec_address` / ...) | op=mappings (inspection, read-only) / set_mapping (confirm) |
 | Online app | ecockpit_login | ✅ | `onlineapp.login(OnlineChangeOption, delete_foreign_apps)` | LIVE: Try, 15 s; Keep = non-deploying login (G-09) |
 | Online app | (internal, G-09) | ✅ | `OnlineChangeOption.Never/Try/Force/Keep` | Keep is stub-only; every online command uses the ladder |
 | Online app | ecockpit_disconnect | ✅ | `onlineapp.logout()` | force=true → forced_disconnect |

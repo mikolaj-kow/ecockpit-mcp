@@ -396,3 +396,919 @@ def test_online_commands_reach_dispatch_without_unbound_project():
                               "args": {"confirm": True}})
         assert "referenced before assignment" not in (out.get("error") or "")
         assert out["error"], "expected a real offline error (no project)"
+
+
+class FakeUI(object):
+    """Plain-Python system.ui fake: records every method call, returns
+    canned results in order."""
+
+    def __init__(self, results=None):
+        self.results = list(results or [])
+        self.calls = []
+
+    def __getattr__(self, name):
+        def _call(*argv):
+            self.calls.append((name,) + argv)
+            if self.results:
+                return self.results.pop(0)
+            return None
+        return _call
+
+
+class FakeSystem(object):
+    """The injected `system` object per the ScriptSystem stub: value
+    attributes set in __init__, method calls recorded."""
+
+    def __init__(self, **kwargs):
+        self.ui = FakeUI()
+        self.prompt_answers = {}
+        self.calls = []
+        self.ui_present = True
+        self.executable_filename = r"C:\e!COCKPIT\e!COCKPIT.exe"
+        self.trace = False
+        self.abortable = True
+        self.aborting = False
+        self.abort_autocheck = True
+        self.background_loading_of_libraries_finished = False
+        self.prompt_handling = 2
+        self.commands = []
+        self.factories = []
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+    def __getattr__(self, name):
+        def _call(*argv):
+            self.calls.append((name,) + argv)
+            return None
+        return _call
+
+
+@pytest.fixture()
+def sysobj(monkeypatch):
+    fake = FakeSystem()
+    monkeypatch.setattr(ex, "system", fake)
+    return fake
+
+
+def test_system_flags_decode_and_enum_helpers():
+    assert ex._flags_to_names(3, ex._PROMPT_HANDLING_FLAGS) == \
+        ["ForwardSimplePrompts", "LogSimplePrompts"]
+    assert ex._flags_to_names(0, ex._PROMPT_HANDLING_FLAGS) == ["NONE"]
+    assert ex._flags_to_names(32, ex._PROMPT_HANDLING_FLAGS) == ["0x20"]
+    assert ex._enum_to_name(2, ex._PROMPT_RESULT_VALUES) == "Yes"
+    assert ex._enum_to_name(99, ex._PROMPT_RESULT_VALUES) == "99"
+
+    # stand-in enum globals (None) fall back to the stub int table
+    assert ex._enum_by_names("PromptResult", ["Yes"],
+                             ex._PROMPT_RESULT_VALUES, None) == 2
+
+    # injected enum globals are preferred (getattr on them is established)
+    class FakePH(object):
+        LogSimplePrompts = 2
+        LogMessageKeys = 16
+
+    assert ex._enum_by_names("PromptHandling flag",
+                             ["LogSimplePrompts", "LogMessageKeys"],
+                             ex._PROMPT_HANDLING_FLAGS, FakePH) == 18
+
+    # G-20: the LIVE enum can lack a member the stub documents
+    # (SymbolCommentFilterType has no 'none') - stub int fallback
+    class FakeNoNone(object):
+        NormalComments = 1
+
+    assert ex._enum_by_names("SymbolCommentFilterType", ["none"],
+                             ex._SYMBOL_COMMENT_FILTER_TYPES,
+                             FakeNoNone()) == 0
+    assert ex._enum_by_names("SymbolCommentFilterType",
+                             ["NormalComments"],
+                             ex._SYMBOL_COMMENT_FILTER_TYPES,
+                             FakeNoNone()) == 1
+    with pytest.raises(RuntimeError, match="unknown PromptHandling"):
+        ex._enum_by_names("PromptHandling flag", ["Nope"],
+                          ex._PROMPT_HANDLING_FLAGS, None)
+
+
+def test_system_info_and_write_message(sysobj):
+    out = ex.cmd_system({"op": "info"})
+    assert out["ui_present"] is True
+    assert out["prompt_handling"] == ["LogSimplePrompts"]
+    assert out["prompt_answer_keys"] == []
+    assert out["commands"] == []
+
+    out = ex.cmd_system({"op": "write_message", "text": "hello",
+                         "severity": "Warning"})
+    assert out["written"] is True
+    # stand-in Severity (None) -> stub int 4 (Warning)
+    assert sysobj.calls == [("write_message", 4, "hello")]
+
+    with pytest.raises(RuntimeError, match="needs args.text"):
+        ex.cmd_system({"op": "write_message"})
+
+
+def test_system_set_prompt_handling_gate_and_combo(sysobj):
+    # a dialog-free combination needs no confirm
+    out = ex.cmd_system({"op": "set_prompt_handling",
+                         "value": "LogSimplePrompts+LogMessageKeys"})
+    assert sysobj.prompt_handling == 18
+    assert out["effective"] == ["LogSimplePrompts", "LogMessageKeys"]
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_system({"op": "set_prompt_handling",
+                       "value": "ForwardSimplePrompts"})
+    ex.cmd_system({"op": "set_prompt_handling",
+                   "value": "ForwardSimplePrompts", "confirm": True})
+    assert sysobj.prompt_handling == 1
+
+    ex.cmd_system({"op": "set_prompt_handling", "value": "NONE"})
+    assert sysobj.prompt_handling == 0
+
+    with pytest.raises(RuntimeError, match="NONE cannot be combined"):
+        ex.cmd_system({"op": "set_prompt_handling",
+                       "value": "NONE+LogSimplePrompts"})
+    with pytest.raises(RuntimeError, match="unknown PromptHandling"):
+        ex.cmd_system({"op": "set_prompt_handling", "value": "Wat"})
+
+
+def test_system_prompt_answers_persist(sysobj):
+    out = ex.cmd_system({"op": "set_prompt_answer",
+                         "key": "OverWriteFiles", "result": "Yes"})
+    assert sysobj.prompt_answers["OverWriteFiles"] == 2  # stub int fallback
+    assert out["result"] == "Yes"
+
+    out = ex.cmd_system({"op": "prompt_answers"})
+    assert out["answers"] == {"OverWriteFiles": "2"}
+
+    out = ex.cmd_system({"op": "clear_prompt_answers"})
+    assert out["cleared"] == 1
+    assert sysobj.prompt_answers == {}
+
+    for missing in ({"op": "set_prompt_answer", "key": "k"},
+                    {"op": "set_prompt_answer", "result": "Yes"}):
+        with pytest.raises(RuntimeError, match="args.key"):
+            ex.cmd_system(missing)
+
+
+def test_system_set_flags_and_progress(sysobj):
+    out = ex.cmd_system({"op": "set_flags", "abortable": False})
+    assert out["set"] == {"abortable": False}
+    assert sysobj.abortable is False
+    assert out["flags"]["aborting"] is False
+
+    with pytest.raises(RuntimeError, match="at least one"):
+        ex.cmd_system({"op": "set_flags"})
+
+    ex.cmd_system({"op": "progress", "action": "start", "description": "x",
+                   "items": 3, "unit": "objects"})
+    ex.cmd_system({"op": "progress", "action": "step", "item": "a",
+                   "completed": 2})
+    ex.cmd_system({"op": "progress", "action": "absolute", "item": "a",
+                   "absolute_progress": 2})
+    assert [c[0] for c in sysobj.calls] == \
+        ["progress_start", "progress_step", "progress_absolute"]
+    assert sysobj.calls[0] == ("progress_start", "x", 3, "objects")
+
+    with pytest.raises(RuntimeError, match="start\\|step\\|absolute"):
+        ex.cmd_system({"op": "progress", "action": "warp"})
+
+
+def test_system_ui_gate_methods_and_secret_masking(sysobj):
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_system({"op": "ui", "method": "prompt", "message": "m"})
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_system({"op": "exit"})
+
+    out = ex.cmd_system({"op": "ui", "method": "prompt", "message": "Overwrite?",
+                         "choice": "YesNo", "default_result": "No",
+                         "confirm": True})
+    assert out["result"] is None  # FakeUI returns None -> reported as None
+    assert sysobj.ui.calls[0][0] == "prompt"
+    # stand-in enums -> stub ints: YesNo=2, No=3
+    assert sysobj.ui.calls[0][1:4] == ("Overwrite?", 2, 3)
+
+    # sensitive results are returned but never logged
+    sysobj.ui.results = ["s3cret"]
+    out = ex.cmd_system({"op": "ui", "method": "query_password",
+                         "message": "pw", "confirm": True})
+    assert out["result"] == "s3cret"
+    assert all("s3cret" not in ln for ln in ex._lines)
+
+    with pytest.raises(RuntimeError, match="unknown ui method"):
+        ex.cmd_system({"op": "ui", "method": "explode", "confirm": True})
+    with pytest.raises(RuntimeError, match="args.message"):
+        ex.cmd_system({"op": "ui", "method": "error", "confirm": True})
+
+
+def test_system_exit_gate_and_call(sysobj):
+    out = ex.cmd_system({"op": "exit", "code": 7, "confirm": True})
+    assert out["exiting"] is True and out["code"] == 7
+    assert sysobj.calls == [("exit", 7)]
+
+
+def test_system_command_reaches_dispatch(sysobj):
+    # dispatch branch (system-level, no get_project) + headless hardening
+    # run against the fake without breaking
+    out = ex.run_command({"id": "t-sys", "cmd": "system",
+                          "args": {"op": "info"}})
+    assert out["ok"] is True
+    assert out["value"]["ui_present"] is True
+
+
+class FakeDeviceId(object):
+    def __init__(self):
+        self.type = 20
+        self.id = "0x1130dd01"
+        self.version = "3.10.4.0"
+
+
+class FakeDriverInfo(object):
+    """ScriptDriverInfo per the stub: value attrs + setter recordings."""
+
+    def __init__(self):
+        self.can_set_io_application = True
+        self.io_application = "guid-app"
+        self.update_ios_while_in_stop = True
+        self.behaviour_for_outputs_on_stop = 0
+        self.user_program_for_stop_reset_behaviour = ""
+        self.always_update_variables = 2
+        self.bus_cycle_task_by_name = "Monitor"
+        self.bus_cycle_task_by_guid = "guid-task"
+        self.generate_force_variables = False
+        self.enable_diagnosis = True
+        self.show_io_warnings_as_errors = False
+        self.calls = []
+
+    def set_bus_cycle_task(self, name):
+        self.calls.append(("set_bus_cycle_task", name))
+        self.bus_cycle_task_by_name = name
+
+    def set_io_application(self, app):
+        self.calls.append(("set_io_application", app))
+
+
+class FakeDevice(object):
+    def __init__(self):
+        self.device_id = FakeDeviceId()
+        self.driver_info = FakeDriverInfo()
+        self.simulation = False
+        self.module_id = "mod-1"
+
+    def get_device_identification(self):
+        return self.device_id
+
+    def get_module_identification(self):
+        return self.module_id
+
+    def get_simulation_mode(self):
+        return self.simulation
+
+    def set_simulation_mode(self, value):
+        self.simulation = bool(value)
+
+
+class FakeAppMarker(object):
+    is_application = True
+
+
+class FakeFindProject(object):
+    def find(self, name, recursive):
+        return [FakeAppMarker()]
+
+
+@pytest.fixture()
+def devobj(monkeypatch):
+    fake = FakeDevice()
+    monkeypatch.setattr(ex, "get_device", lambda project, name="": fake)
+    return fake
+
+
+def test_device_info_identification_and_simulation(devobj):
+    out = ex.cmd_device_info(None, {"op": "identification"})
+    assert out["device_id"] == {"type": "20", "id": "0x1130dd01",
+                                "version": "3.10.4.0"}
+    assert out["module_id"] == "mod-1"
+
+    out = ex.cmd_device_info(None, {"op": "simulation"})
+    assert out["simulation"] is False
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_device_info(None, {"op": "simulation_set", "enabled": True})
+    out = ex.cmd_device_info(None, {"op": "simulation_set",
+                                    "enabled": True, "confirm": True})
+    assert devobj.simulation is True
+    assert out["simulation"] is True
+
+
+def test_device_info_driver_info_read_and_set(devobj):
+    out = ex.cmd_device_info(None, {"op": "driver_info"})
+    di = out["driver_info"]
+    assert di["bus_cycle_task_by_name"] == "Monitor"
+    assert di["behaviour_for_outputs_on_stop"] == "KeepCurrentValues"
+    assert di["always_update_variables"] == "OnlyIfUnused"
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_device_info(None, {"op": "driver_info_set",
+                                  "bus_cycle_task": "PlcTask"})
+    with pytest.raises(RuntimeError, match="at least one"):
+        ex.cmd_device_info(None, {"op": "driver_info_set",
+                                  "confirm": True})
+
+    out = ex.cmd_device_info(FakeFindProject(), {
+        "op": "driver_info_set", "confirm": True,
+        "bus_cycle_task": "PlcTask", "io_application": "Application",
+        "behaviour_for_outputs_on_stop": "SetToDefault",
+        "always_update_variables": "AlwaysInBusCycle",
+        "enable_diagnosis": False})
+    assert devobj.driver_info.bus_cycle_task_by_name == "PlcTask"
+    assert devobj.driver_info.behaviour_for_outputs_on_stop == 1
+    assert devobj.driver_info.always_update_variables == 3
+    assert devobj.driver_info.enable_diagnosis is False
+    assert out["applied"]["io_application"] == "Application"
+    io_calls = [c for c in devobj.driver_info.calls
+                if c[0] == "set_io_application"]
+    assert len(io_calls) == 1 and isinstance(io_calls[0][1], FakeAppMarker)
+    assert out["driver_info"]["bus_cycle_task_by_name"] == "PlcTask"
+
+
+class FakeIoMapping(object):
+    """ScriptIoMapping per the stub: setting manual_iec_address to an
+    address flips automatic off; None flips it back on."""
+
+    def __init__(self, variable="", default_variable="",
+                 auto=True, manual=None):
+        self.Id = 1
+        self.variable = variable
+        self.default_variable = default_variable
+        self.mapping_creates_variable = True
+        self.maps_to_existing_variable = False
+        self._auto = auto
+        self._manual = manual
+
+    @property
+    def automatic_iec_address(self):
+        return self._auto
+
+    @automatic_iec_address.setter
+    def automatic_iec_address(self, value):
+        self._auto = bool(value)
+
+    @property
+    def manual_iec_address(self):
+        return self._manual
+
+    @manual_iec_address.setter
+    def manual_iec_address(self, value):
+        if value is None:
+            self._auto = True
+            self._manual = None
+        else:
+            self._auto = False
+            self._manual = value
+
+
+class FakeIoElement(object):
+    def __init__(self, identifier, mapping=None, mappable=False):
+        self.identifier = identifier
+        self.visible_name = identifier
+        self._mapping = mapping
+        self._mappable = mappable or mapping is not None
+        self.has_sub_elements = False
+
+    @property
+    def is_mappable_io(self):
+        return self._mappable
+
+    @property
+    def io_mapping(self):
+        if self._mapping is None:
+            raise RuntimeError("no mapping (device parameter)")
+        return self._mapping
+
+    def __iter__(self):
+        return iter(())
+
+
+class FakeParamSet(object):
+    """Parameter set: iterable of FakeParam. String indexing FAILS like
+    the live .NET set (positional indexer, 2026-10-22) - lookups must
+    enumerate."""
+
+    def __init__(self, params):
+        self._params = [FakeParam(name, els) for name, els in params]
+
+    def __iter__(self):
+        return iter(self._params)
+
+    def __getitem__(self, name):
+        raise IndexError("Index was out of range. Must be non-negative "
+                         "and less than the size of the collection. "
+                         "Parameter name: index")
+
+
+class FakeParam(object):
+    def __init__(self, name, elements):
+        self.name = name
+        self._elements = elements
+
+    def __iter__(self):
+        return iter(self._elements)
+
+
+class FakeConnector(object):
+    def __init__(self, cid, params):
+        self.id = cid
+        self.host_parameters = params
+
+
+class FakeIoDevice(object):
+    is_device = True
+
+    def __init__(self, device_set, connectors=()):
+        self._device_set = device_set
+        self._connectors = list(connectors)
+        self.exported = None
+        self.imported = None
+
+    def __str__(self):
+        return "ScriptDeviceObject{Name=FakeDev}"
+
+    def get_name(self):
+        return "FakeDev"
+
+    @property
+    def device_parameters(self):
+        return self._device_set
+
+    @property
+    def connectors(self):
+        return self._connectors
+
+    def export_io_mappings_as_csv(self, path):
+        self.exported = path
+        with open(path, "wb") as fh:
+            fh.write(b"a,b\n1,2\n")
+
+    def import_io_mappings_from_csv(self, path):
+        self.imported = path
+
+
+class FakeDevicesProject(object):
+    def __init__(self, devices):
+        self._devices = devices
+
+    def get_children(self, recursive):
+        return list(self._devices)
+
+
+@pytest.fixture()
+def iodev(monkeypatch):
+    input_map = FakeIoMapping(variable="old_var", auto=True)
+    conn_map = FakeIoMapping(variable="c_var", auto=False, manual="%QW0")
+    device = FakeIoDevice(
+        FakeParamSet([("IO-Params", [FakeIoElement("plain_param", None),
+                                     FakeIoElement("unmapped_io",
+                                                   None, mappable=True)]),
+                      ("IO-Map", [FakeIoElement("input_io", input_map)])]),
+        [FakeConnector(1, FakeParamSet([
+            ("ConnIo", [FakeIoElement("conn_io", conn_map)])]))])
+    monkeypatch.setattr(ex, "get_device", lambda project, name="": device)
+    device.input_map = input_map
+    device.conn_map = conn_map
+    return device
+
+
+def test_device_io_mappings_walk(iodev):
+    # a plugged submodule below the root carries its own mapped channel
+    # (LIVE 2026-10-22: the root-only walk missed the module channels
+    # the engine's own CSV export lists)
+    sub_map = FakeIoMapping(variable="s_var", auto=False, manual="%IX2.0")
+    sub = FakeIoDevice(
+        FakeParamSet([("ModIo", [FakeIoElement("sub_io", sub_map)])]))
+    sub.get_name = lambda: "SubDev"
+
+    out = ex.cmd_device_io(FakeDevicesProject([iodev, sub]),
+                           {"op": "mappings"})
+    assert out["count"] == 4
+    by_id = dict((m["identifier"], m) for m in out["mappings"])
+    assert "plain_param" not in by_id          # not mappable -> skipped
+    assert by_id["input_io"]["io_mapping"]["variable"] == "old_var"
+    assert by_id["input_io"]["io_mapping"]["automatic_iec_address"] is True
+    assert by_id["input_io"]["device"] == "FakeDev"
+    assert by_id["conn_io"]["parameter"] == "ConnIo"
+    assert by_id["conn_io"]["source"] == "connector 1"
+    assert by_id["conn_io"]["io_mapping"]["manual_iec_address"] == "%QW0"
+    # mappable but unmapped -> listed with a null mapping
+    assert by_id["unmapped_io"]["io_mapping"] is None
+    # submodule channels are found via the project-tree walk
+    assert by_id["sub_io"]["device"] == "SubDev"
+    assert by_id["sub_io"]["io_mapping"]["variable"] == "s_var"
+
+
+def test_device_io_set_mapping_gates_and_effects(iodev):
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_device_io(None, {"op": "set_mapping", "name": "x",
+                                "variable": "GVL.new"})
+
+    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "IO-Map",
+                                  "variable": "GVL.new", "confirm": True})
+    assert out["elements"][0]["set"] == {"variable": "GVL.new"}
+    assert out["elements"][0]["readback"]["variable"] == "GVL.new"
+
+    # automatic=true resets the address (manual -> None -> auto)
+    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "ConnIo",
+                                  "automatic": True, "confirm": True})
+    assert iodev.conn_map.manual_iec_address is None
+    assert iodev.conn_map.automatic_iec_address is True
+    assert out["elements"][0]["set"] == {"manual_iec_address": None}
+
+    # manual address flips automatic off
+    ex.cmd_device_io(None, {"op": "set_mapping", "name": "ConnIo",
+                            "manual_iec_address": "%QW7", "confirm": True})
+    assert iodev.conn_map.automatic_iec_address is False
+    assert iodev.conn_map.manual_iec_address == "%QW7"
+
+    with pytest.raises(RuntimeError, match="no mappable element"):
+        ex.cmd_device_io(None, {"op": "set_mapping", "name": "IO-Params",
+                                "variable": "GVL.x", "confirm": True})
+    with pytest.raises(RuntimeError, match="needs args.variable"):
+        ex.cmd_device_io(None, {"op": "set_mapping", "name": "ConnIo",
+                                "confirm": True})
+
+
+def test_device_io_set_mapping_multi_element_guard(iodev, monkeypatch):
+    # G-21: a multi-channel parameter refuses an unfiltered set
+    two = FakeIoDevice(FakeParamSet([
+        ("Multi", [
+            FakeIoElement("ch1", FakeIoMapping(variable="a",
+                                               auto=False, manual="%IX0")),
+            FakeIoElement("ch2", FakeIoMapping(variable="b",
+                                               auto=False, manual="%IX1")),
+        ])]))
+    monkeypatch.setattr(ex, "get_device", lambda project, name="": two)
+    with pytest.raises(RuntimeError, match="REFUSED.*mappable elements"):
+        ex.cmd_device_io(None, {"op": "set_mapping", "name": "Multi",
+                                "variable": "c", "confirm": True})
+
+    # element= targets exactly one channel
+    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "Multi",
+                                  "element": "ch2", "variable": "c",
+                                  "confirm": True})
+    assert len(out["elements"]) == 1
+    assert out["elements"][0]["identifier"] == "ch2"
+    assert out["elements"][0]["readback"]["variable"] == "c"
+
+    # all_elements=true is the explicit escape hatch
+    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "Multi",
+                                  "variable": "d", "all_elements": True,
+                                  "confirm": True})
+    assert len(out["elements"]) == 2
+    assert all(r["readback"]["variable"] == "d"
+               for r in out["elements"])
+
+
+def test_device_io_csv_round_trip(iodev, tmp_path, monkeypatch):
+    out = ex.cmd_device_io(None, {"op": "export_csv",
+                                  "file": str(tmp_path / "m.csv")})
+    assert out["bytes"] == 8
+    assert iodev.exported == os.path.abspath(str(tmp_path / "m.csv"))
+
+    # default location derives from PROJECT_ROOT + sanitized device name
+    monkeypatch.setattr(ex, "PROJECT_ROOT", str(tmp_path))
+    out = ex.cmd_device_io(None, {"op": "export_csv"})
+    expected = os.path.join(str(tmp_path), "io-mappings",
+                            "FakeDev_io_mappings.csv")
+    assert os.path.isfile(expected)
+    assert out["file"] == os.path.abspath(expected)
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_device_io(None, {"op": "import_csv",
+                                "file": str(tmp_path / "m.csv")})
+    out = ex.cmd_device_io(None, {"op": "import_csv",
+                                  "file": str(tmp_path / "m.csv"),
+                                  "confirm": True})
+    assert out["imported"] is True
+    assert iodev.imported == os.path.abspath(str(tmp_path / "m.csv"))
+
+    with pytest.raises(RuntimeError, match="existing CSV"):
+        ex.cmd_device_io(None, {"op": "import_csv",
+                                "file": str(tmp_path / "gone.csv"),
+                                "confirm": True})
+
+
+class FakeSym(object):
+    """ScriptSymbolConfigObject option surface per the stub."""
+
+    is_symbol_config = True
+
+    def __init__(self):
+        self.content_feature_flags = 3          # SupportOPCUA|IncludeComments
+        self.effective_content_feature_flags = 3
+        self.symbol_attribute_filter_type = 0
+        self.effective_symbol_attribute_filter_type = 0
+        self.symbol_attribute_filter_data = ""
+        self.symbol_comment_filter_type = 0
+        self.effective_symbol_comment_filter_type = 0
+        self.enable_direct_io_access = False
+        self.xsd_bytes = [60, 63, 120, 109, 108]  # "<?xml"
+
+    def check_effective_direct_io_access(self):
+        return 0
+
+    def get_symbol_configuration_xsd(self):
+        return list(self.xsd_bytes)
+
+
+class FakeSymApp(object):
+    def __init__(self):
+        self.sym = FakeSym()
+
+    def get_children(self, recursive):
+        return [self.sym]
+
+
+@pytest.fixture()
+def symapp(monkeypatch):
+    app = FakeSymApp()
+    monkeypatch.setattr(ex, "get_application", lambda project: app)
+    return app
+
+
+def test_symbol_config_options_read_and_set(symapp):
+    out = ex.cmd_symbol_config(None, {"op": "config"})
+    cfg = out["config"]
+    assert cfg["content_feature_flags"] == ["SupportOPCUA",
+                                            "IncludeComments"]
+    assert cfg["symbol_attribute_filter_type"] == "none"
+    assert cfg["direct_io_obstacles"] == "none"
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_symbol_config(None, {"op": "config_set",
+                                    "content_feature_flags": "SupportOPCUA"})
+
+    out = ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
+                                      "content_feature_flags":
+                                      "SupportOPCUA+IncludeAttributes",
+                                      "attribute_filter_type": "Prefix",
+                                      "attribute_filter_data": "GVL_",
+                                      "comment_filter_type": "Both"})
+    sym = symapp.sym
+    assert sym.content_feature_flags == 1 | 4
+    assert sym.symbol_attribute_filter_type == 3
+    assert sym.symbol_attribute_filter_data == "GVL_"
+    assert sym.symbol_comment_filter_type == 3
+    assert out["applied"]["attribute_filter_type"] == "Prefix"
+    assert out["config"]["symbol_attribute_filter_type"] == "Prefix"
+
+    # standalone filter data update + none reset
+    ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
+                                "attribute_filter_data": "PB_"})
+    assert sym.symbol_attribute_filter_data == "PB_"
+    ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
+                                "content_feature_flags": "none"})
+    assert sym.content_feature_flags == 0
+
+    with pytest.raises(RuntimeError, match="at least one"):
+        ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True})
+    with pytest.raises(RuntimeError, match="unknown "
+                                            "SymbolConfigContentFeature"):
+        ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
+                                    "content_feature_flags": "Nope"})
+
+
+def test_symbol_config_create_ladder(monkeypatch):
+    calls = []
+    created = FakeSym()
+
+    class AppNoSym(object):
+        def get_children(self, recursive):
+            return []
+
+        def create_symbol_config(self, export_comments, support_opc_ua,
+                                 calc=None):
+            calls.append(calc)
+            if calc is False or calc is None:
+                # live: the calculator parameter is a Guid
+                raise TypeError("expected Guid, got bool")
+            return created
+
+    monkeypatch.setattr(ex, "get_application", lambda project: AppNoSym())
+    out = ex.cmd_symbol_config(None, {"op": "create", "confirm": True})
+    assert out["created"] is True
+    assert calls == [False, None,
+                     "00000000-0000-0000-0000-000000000000"]
+
+
+def test_symbol_config_xsd_write(symapp, tmp_path):
+    out = ex.cmd_symbol_config(None, {"op": "xsd",
+                                      "file": str(tmp_path / "s.xsd")})
+    assert out["bytes"] == 5
+    assert out["preview"].startswith("<?xml")
+    with open(str(tmp_path / "s.xsd"), "rb") as fh:
+        assert fh.read() == b"<?xml"
+
+    # default location under PROJECT_ROOT/plcopensrc-export
+    old_root = ex.PROJECT_ROOT
+    ex.PROJECT_ROOT = str(tmp_path)
+    try:
+        out = ex.cmd_symbol_config(None, {"op": "xsd"})
+    finally:
+        ex.PROJECT_ROOT = old_root
+    expected = os.path.join(str(tmp_path), "plcopensrc-export",
+                            "Symbolconfiguration.xsd")
+    assert os.path.isfile(expected)
+    assert out["file"] == os.path.abspath(expected)
+
+
+class FakeSpecialPou(object):
+    def __str__(self):
+        return "ScriptObject{Name=CheckRangeSigned}"
+
+
+class FakeSpecialContainer(object):
+    def __init__(self):
+        self.calls = []
+
+    def create_pou(self, *argv, **kwargs):
+        self.calls.append((argv, kwargs))
+        return FakeSpecialPou()
+
+
+class FakeOnlineApp(object):
+    def __init__(self):
+        self.logins = []
+
+    def login(self, option, delete_foreign_apps):
+        self.logins.append(str(option))
+        raise RuntimeError("login failed")
+
+
+class FakeConnectDevice(object):
+    def __init__(self):
+        self.connected = False
+
+    def connect(self):
+        self.connected = True
+
+
+def test_online_login_keep_only_never_escalates(monkeypatch):
+    # G-26 live incident 2026-10-22: a Keep failure escalated down the
+    # ladder to a FULL DOWNLOAD of the open project. Read-only logins
+    # must fail instead of deploying.
+    class FakeOCO(object):
+        Keep = "Keep"
+        Try = "Try"
+        Force = "Force"
+        Never = "Never"
+
+    monkeypatch.setattr(ex, "OnlineChangeOption", FakeOCO)
+    app = FakeOnlineApp()
+    dev = FakeConnectDevice()
+    with pytest.raises(RuntimeError, match="G-26"):
+        ex._online_login(app, dev, prefer_keep=True)
+    assert app.logins == ["Keep"]   # Keep ONLY - no Try/Force/Never
+    assert dev.connected is False   # and never the implicit-download connect
+
+
+def test_online_login_deploy_ladder_still_escalates(monkeypatch):
+    class FakeOCO(object):
+        Keep = "Keep"
+        Try = "Try"
+        Force = "Force"
+        Never = "Never"
+
+    monkeypatch.setattr(ex, "OnlineChangeOption", FakeOCO)
+    app = FakeOnlineApp()
+
+    class RaisingConnectDevice(FakeConnectDevice):
+        def connect(self):
+            self.connected = True
+            raise RuntimeError("connect failed")
+
+    dev = RaisingConnectDevice()
+    with pytest.raises(RuntimeError, match="all login forms failed"):
+        ex._online_login(app, dev, prefer_keep=False)
+    assert app.logins == ["Try", "Force", "Never"]
+    assert dev.connected is True    # deploy ladder intentionally reaches connect
+
+
+def test_online_connect_refuses_out_of_sync_readonly(monkeypatch):
+    # G-27: with a pending change, login(Keep) attempts a download in
+    # this build - read-only connects must refuse BEFORE any login.
+    class FakeApp(object):
+        is_uptodate = False
+
+    class Proj(object):
+        active_application = None
+
+        def find(self, name, recursive):
+            return []
+
+    monkeypatch.setattr(ex, "get_application", lambda p: FakeApp())
+    monkeypatch.setattr(ex, "online", None)
+    with pytest.raises(RuntimeError, match="G-27"):
+        ex._online_connect(Proj(), {}, prefer_keep=True)
+
+
+def test_create_online_device_uptodate_guard(monkeypatch):
+    # G-26: connecting the ScriptOnlineDevice is a login-WITH-DOWNLOAD -
+    # refuse when the application is not uptodate unless confirmed.
+    created = []
+
+    class FakeODev(object):
+        pass
+
+    class FakeOnline(object):
+        def create_online_device(self, *argv):
+            created.append(argv)
+            return FakeODev()
+
+    class FakeApp(object):
+        is_uptodate = False
+
+    class Proj(object):
+        def find(self, name, recursive):
+            return []
+
+    monkeypatch.setattr(ex, "get_application", lambda p: FakeApp())
+    monkeypatch.setattr(ex, "online", FakeOnline())
+    with pytest.raises(RuntimeError, match="G-26"):
+        ex._create_online_device(Proj(), {})
+    assert created == []
+    odev = ex._create_online_device(Proj(), {"confirm": True})
+    assert isinstance(odev, FakeODev)
+    assert created == [()]
+
+
+def test_display_name_direct_access_not_getattr():
+    # G-01: getattr() silently fails on the interop wrappers - the old
+    # probe never ran live, so class-name reprs leaked into snapshot
+    # filenames. Direct access works on wrappers and fakes alike.
+    class P(object):
+        def get_name(self):
+            return "s4 v7"
+
+        def __str__(self):
+            return "Wago.Eng.Module.Script.ScriptObjects.EScriptProject"
+
+    assert ex._display_name(P()) == "s4 v7"
+    assert ex._snapshot_prefix(P()) == "s4_v7"
+
+    class OnlyRepr(object):
+        def __str__(self):
+            return "ScriptThing{Name=FromRepr}"
+
+    assert ex._snapshot_prefix(OnlyRepr()) == "Name_FromRepr"
+
+
+def test_object_create_container_falls_back_to_application(monkeypatch):
+    # G-22: EScriptProject has no create_pou live - the no-parent
+    # default container is the APPLICATION
+    class FakeSPT2(object):
+        check_bounds = 2
+
+    monkeypatch.setattr(ex, "SpecialPouType", FakeSPT2)
+    app = FakeSpecialContainer()
+
+    class RootProject(object):
+        def find(self, name, recursive):
+            return [app]
+
+    monkeypatch.setattr(ex, "get_application", lambda project: app)
+    out = ex.cmd_object_create(RootProject(), {
+        "kind": "special_pou", "special_type": "check_bounds",
+        "confirm": True})
+    assert app.calls and out["created"] == "check_bounds"
+
+
+def test_object_create_special_pou(monkeypatch):
+    class FakeSPT(object):
+        check_bounds = 2
+        check_range_signed = 5
+
+    monkeypatch.setattr(ex, "SpecialPouType", FakeSPT)
+    container = FakeSpecialContainer()
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_object_create(container, {"kind": "special_pou",
+                                         "special_type": "check_bounds"})
+
+    out = ex.cmd_object_create(container, {"kind": "special_pou",
+                                           "special_type": "check_bounds",
+                                           "confirm": True})
+    assert container.calls == [((2,), {})]   # positional SpecialPouType
+    assert out["created"] == "check_bounds"
+    assert "full recompile" in out["warning"]
+
+    with pytest.raises(RuntimeError, match="special_type"):
+        ex.cmd_object_create(container, {"kind": "special_pou",
+                                         "confirm": True})
+    with pytest.raises(RuntimeError, match="unknown SpecialPouType"):
+        ex.cmd_object_create(container, {"kind": "special_pou",
+                                         "special_type": "wat",
+                                         "confirm": True})
+
+    # no stand-in (None) -> same unknown-member error, not a crash
+    monkeypatch.setattr(ex, "SpecialPouType", None)
+    with pytest.raises(RuntimeError, match="unknown SpecialPouType"):
+        ex.cmd_object_create(container, {"kind": "special_pou",
+                                         "special_type": "check_bounds",
+                                         "confirm": True})

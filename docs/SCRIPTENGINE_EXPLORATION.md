@@ -25,7 +25,8 @@ done + possible), [TESTING.md](TESTING.md) (live results),
    request; record every result in TESTING.md.
 2. **ScriptLib stubs** —
    `ECP_INSTALL_DIR\3S CODESYS\CODESYS\ScriptLib\Stubs\scriptengine\*.pyi`
-   (29 files, ~14k lines). The
+   (25 files, ~14k lines; the install dir is recorded as
+   `ECP_INSTALL_DIR` in the project .env). The
    authoritative member lists: `ScriptOnline.pyi` (online app + device +
    gateways), `ScriptProject(s).pyi`, `ScriptObject.pyi`/`ScriptTreeObject.pyi`
    (tree + build properties + native IO), `ScriptIecLanguageObjectContainer.pyi`
@@ -104,9 +105,13 @@ X = None`): `system`, `e_projects` (+ `projects` alias, resolved by
 `_projects_global()`), `online`, `librarymanager`,
 `ArchiveCategories`, `OnlineChangeOption` (Never/Try/Force/Keep),
 `Severity`, `ImportReporter`/`ExportReporter` (exposure names! G-05),
-`ConflictResolve`, `PromptHandling`, `PouType`, `DutType`,
-`KindOfTask`, `ImplementationLanguages`, `ResetOption`, `DeviceID`,
-`device_repository`. Engine enums: use direct member access
+`ConflictResolve`, `PromptHandling`, `PromptResult`, `PromptChoice`,
+`PouType`, `SpecialPouType`, `DutType`, `KindOfTask`,
+`ImplementationLanguages`, `ResetOption`, `StopResetBehaviour`,
+`AlwaysUpdateVariablesMode`, `SymbolConfigContentFeatureFlags`,
+`SymbolAttributeFilterTypes`, `SymbolCommentFilterType`. (`DeviceID`/`device_repository` are engine-injected
+names too, but only needed by the not-yet-implemented device-tree
+authoring — no stand-ins yet.) Engine enums: use direct member access
 (`OnlineChangeOption.Try`), guarded.
 
 Caution: `import ecockpit... executor` under CPython must set

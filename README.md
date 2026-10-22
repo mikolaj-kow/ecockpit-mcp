@@ -159,12 +159,19 @@ CAUTION — every online command logs in via the online-change ladder
 applying changes or downloading) but deploying commands may still
 apply code deltas to the RUNNING application.
 
+System object (the injected `system` global):
+
+| Tool | Notes |
+|---|---|
+| `ecockpit_system(op?, ...)` | `info` (ui_present, prompt_handling decoded, abort/trace flags, prompt_answers keys) / `write_message` / `set_prompt_handling` (per-command lifetime; `ForwardSimplePrompts` confirm-gated) / `prompt_answers` + `set_prompt_answer` + `clear_prompt_answers` (headless dialog simulation, persists per session) / `set_flags` / `progress` |
+| `ecockpit_system_ui(op, ..., confirm)` | **destructive** — `op=ui` pops a REAL modal dialog and blocks until answered (wedge hazard; keep `timeout_s` generous); `op=exit` shuts down e!COCKPIT and the relay (call times out; re-arm needed) |
+
 Project tree + ST authoring:
 
 | Tool | Notes |
 |---|---|
 | `ecockpit_tree(op?, ...)` | `list` (find/get_children + kind markers, read-only), `rename`/`remove`/`move`/`folder` (**destructive**, confirm-gated) |
-| `ecockpit_object_create(kind, name, ..., confirm)` | **destructive** — create pou/gvl/dut/interface/folder/method/property/action/transition; optional `declaration`/`implementation` ST text written on create |
+| `ecockpit_object_create(kind, name, ..., confirm)` | **destructive** — create pou/gvl/dut/interface/folder/method/property/action/transition, plus `kind=special_pou` (implicit-check POUs; **forces a full recompile and disables online change**); optional `declaration`/`implementation` ST text written on create |
 | `ecockpit_textual_read(name, part?)` | read the ST declaration/implementation text |
 | `ecockpit_textual_write(name, text, part?, confirm)` | **destructive** — replace the whole declaration or implementation |
 
@@ -176,6 +183,7 @@ Task + symbol configuration:
 | `ecockpit_task_create(application, name, ..., confirm)` | **destructive** — create a task (kind/interval/priority/watchdog/POUs); creates the task configuration when missing |
 | `ecockpit_symbol_config_variables(application?, compile?)` | full signature + variable inventory (`compile=true` builds first — slow but safe) |
 | `ecockpit_symbol_config_create(application?, ..., confirm)` | **destructive** — add the symbol configuration object |
+| `ecockpit_symbol_config_options(op?, ...)` | options read (`config`: content flags decoded, attribute/comment filters, direct-IO), `config_set` (**destructive**, confirm-gated), `xsd` (writes the release's symbol-configuration schema) |
 
 Device scan / communication / parameters:
 
@@ -183,7 +191,9 @@ Device scan / communication / parameters:
 |---|---|
 | `ecockpit_device_scan(op?, gateway?, ip?, port?)` | gateway list, network scan (discovered targets), IP→CODESYS-address resolution — read-only |
 | `ecockpit_device_comm(op?, ...)` | communication settings read / set IP via gateway (`set_ip` **destructive**, confirm-gated) |
+| `ecockpit_device_info(op?, ...)` | device identification (`DeviceId` + module id), simulation mode, driver info (bus cycle task, IO application, stop behaviour, diagnosis); `simulation_set`/`driver_info_set` **destructive**, confirm-gated |
 | `ecockpit_device_params(op, ...)` | parameter `list` / `read` (offline or `online=true`) / `write` (**destructive**, confirm-gated, enums validated) |
+| `ecockpit_device_io(op, ...)` | IO mapping inspection (`mappings`, read-only), `set_mapping` / `import_csv` (**destructive**, confirm-gated), `export_csv` (default `<project root>/io-mappings/`) |
 
 Application + project lifecycle:
 

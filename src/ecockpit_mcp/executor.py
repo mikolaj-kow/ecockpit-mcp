@@ -37,6 +37,16 @@ Commands (request = {"id": ..., "cmd": ..., "args": {...}}):
                args: {"path": host archive}
     save_archive   save the project as .projectarchive. args: {"path": ...}
     clear_messages  wipe the scripting message store (fresh-harvest aid)
+    system     `system` object: info, write_message, prompt handling +
+               answers (headless dialog simulation), abort/trace flags,
+               progress bar. ui.* dialogs + exit are confirm-gated ops
+               (wedge / kills-e!COCKPIT hazards)
+    device_info  device identification / simulation mode / driver info
+               (bus cycle task, IO application, stop behaviour,
+               diagnosis); the setters are confirm-gated
+    device_io  IO mapping inspection + CSV export/import
+               (export/import_io_mappings_as_csv); set_mapping and
+               import_csv are confirm-gated (modify the IO config)
     probe      dump dir() of the scripting API objects to
                tmp/logs/ecockpit_api_probe.txt (API-surface discovery).
 
@@ -130,6 +140,14 @@ if "PromptHandling" not in globals():
     # ScriptUI prompt simulation enum (ScriptSystem stub); LogSimplePrompts
     # keeps simple prompts out of the GUI and into the message store.
     PromptHandling = None
+if "PromptResult" not in globals():
+    # PromptResult: OK=0, Cancel=1, Yes=2, No=3, Retry=4, Abort=5, Ignore=6
+    # (ScriptSystem stub) - values for system.prompt_answers simulation.
+    PromptResult = None
+if "PromptChoice" not in globals():
+    # PromptChoice: OK=0, OKCancel=1, YesNo=2, YesNoCancel=3, RetryCancel=4,
+    # AbortRetryIgnore=5 (ScriptSystem stub) - system.ui.prompt layouts.
+    PromptChoice = None
 if "PouType" not in globals():
     # ST object creation (ScriptIecLanguageObjectContainer stub):
     # Program=1, FunctionBlock=2, Function=3.
@@ -137,10 +155,38 @@ if "PouType" not in globals():
 if "DutType" not in globals():
     # DutType: Structure/Enumeration/Alias/Union/EnumerationWithTextList.
     DutType = None
+if "SpecialPouType" not in globals():
+    # SpecialPouType (ScriptIecLanguageObjectContainer stub, 3.5.12.10):
+    # implicit-check POUs - none=1, check_bounds=2, check_pointer=3,
+    # check_range_unsigned=4, check_range_signed=5, check_div_real_64=6,
+    # check_div_real_32=7, check_div_int_64=8, check_div_int_32=9,
+    # check_l_range_unsigned=10, check_l_range_signed=11.
+    SpecialPouType = None
 if "KindOfTask" not in globals():
     # KindOfTask: Cyclic=1, Freewheeling=2, Event=3, ExternalEvent=4,
     # Status=5, ParentSynchron=6.
     KindOfTask = None
+if "StopResetBehaviour" not in globals():
+    # ScriptDeviceObject stub: outputs behaviour on PLC stop -
+    # KeepCurrentValues=0, SetToDefault=1, ExecuteProgram=2.
+    StopResetBehaviour = None
+if "AlwaysUpdateVariablesMode" not in globals():
+    # ScriptDriverInfo stub: always-update-variables mode -
+    # Disabled=1, OnlyIfUnused=2, AlwaysInBusCycle=3.
+    AlwaysUpdateVariablesMode = None
+if "SymbolConfigContentFeatureFlags" not in globals():
+    # ScriptSymbolConfigObject stub: symbol XML content flags
+    # (SupportOPCUA=1, IncludeComments=2, ...; Xml* live above bit 16).
+    SymbolConfigContentFeatureFlags = None
+if "SymbolAttributeFilterTypes" not in globals():
+    # ScriptSymbolConfigObject stub: none=0, All=1, SimpleIdentifiers=2,
+    # Prefix=3, Regex=4.
+    SymbolAttributeFilterTypes = None
+if "SymbolCommentFilterType" not in globals():
+    # ScriptSymbolConfigObject stub: none=0, NormalComments=1,
+    # DocuComments=2, Both=3, PreferNormalComments=4,
+    # PreferDocuComments=5.
+    SymbolCommentFilterType = None
 if "ImplementationLanguages" not in globals():
     # ST/CFC/FBD/... implementation language GUIDs (injected global).
     ImplementationLanguages = None
@@ -1075,6 +1121,483 @@ def cmd_messages():
 
 
 # --------------------------------------------------------------------------
+# System domain (ScriptSystem stub: the injected `system` object)
+# --------------------------------------------------------------------------
+# Stub-derived value tables (ScriptSystem.pyi). They decode enum/flag
+# values into names and build values when the injected enum global is
+# unavailable; injected globals are preferred at runtime.
+_PROMPT_HANDLING_FLAGS = (
+    ("ForwardSimplePrompts", 1),
+    ("LogSimplePrompts", 2),
+    ("EnableTextPrompts", 4),
+    ("ProcessScriptPrompts", 8),
+    ("LogMessageKeys", 16),
+)
+_PROMPT_RESULT_VALUES = (
+    ("OK", 0), ("Cancel", 1), ("Yes", 2), ("No", 3),
+    ("Retry", 4), ("Abort", 5), ("Ignore", 6),
+)
+_PROMPT_CHOICE_VALUES = (
+    ("OK", 0), ("OKCancel", 1), ("YesNo", 2), ("YesNoCancel", 3),
+    ("RetryCancel", 4), ("AbortRetryIgnore", 5),
+)
+_SEVERITY_VALUES = (
+    ("FatalError", 1), ("Error", 2), ("Warning", 4),
+    ("Information", 8), ("Text", 16),
+)
+
+
+def _flags_to_names(value, flags):
+    """Decode an int flag combination into its stub names (+ hex rest)."""
+    try:
+        iv = int(value)
+    except (TypeError, ValueError):
+        return [str(value)]
+    if iv == 0:
+        return ["NONE"]
+    out = []
+    rest = iv
+    for name, bit in flags:
+        if bit and (rest & bit) == bit:
+            out.append(name)
+            rest -= bit
+    if rest:
+        out.append("0x{0:x}".format(rest))
+    return out
+
+
+def _enum_to_name(value, values):
+    """Map one enum int onto its stub name (str(value) when unknown)."""
+    try:
+        iv = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    for name, num in values:
+        if num == iv:
+            return name
+    return str(iv)
+
+
+def _enum_by_names(label, names, values, injected):
+    """Resolve enum member names to one (combined) value.
+
+    Prefers the injected enum global (real members; getattr on injected
+    enums is established - cmd_object_create resolves PouType that way),
+    falls back to the stub int table when the global is a stand-in.
+    """
+    known = ", ".join(name for name, _ in values)
+    if injected is None:
+        combined = 0
+        for name in names:
+            table = dict(values)
+            if name not in table:
+                raise RuntimeError("unknown {t} '{n}' (known: {k})".format(
+                    t=label, n=name, k=known))
+            combined |= table[name]
+        return combined
+    combined = None
+    table = dict(values)
+    for name in names:
+        try:
+            member = getattr(injected, name)
+        except Exception:
+            if name in table:
+                # LIVE 2026-10-22 (G-20): the live enum can LACK a member
+                # the stub documents (SymbolCommentFilterType has no
+                # 'none'). Build a real enum instance via CLR
+                # Enum.ToObject - the typed property REJECTS raw ints
+                # ("expected SymbolCommentFilterType, got int"); raw int
+                # is the last-resort fallback only.
+                member = None
+                try:
+                    from System import Enum as _DotNetEnum
+                    member = _DotNetEnum.ToObject(injected, table[name])
+                except Exception:
+                    member = table[name]
+            else:
+                raise RuntimeError("unknown {t} '{n}' (known: {k})".format(
+                    t=label, n=name, k=known))
+        combined = member if combined is None else (combined | member)
+    return combined
+
+
+def _system_ui_call(sysobj, args):
+    """One system.ui method call - ALL of them block on a real modal
+    dialog that the owner answers in the GUI (the caller enforces
+    confirm). Password/credential results go back to the client in the
+    result JSON but are NEVER logged (no-credentials-in-logs rule); they
+    also pass through the result file unencrypted on this host.
+    """
+    try:
+        ui = sysobj.ui
+    except Exception as exc:
+        raise RuntimeError("system.ui not available: {e}".format(e=exc))
+
+    def _opt_str(name):
+        v = args.get(name, "")
+        if v is None or str(v) == "":
+            return None
+        return str(v)
+
+    def _opt_int(name):
+        v = args.get(name, None)
+        if v is None or v == "":
+            return None
+        return int(v)
+
+    method = str(args.get("method", "")).strip().lower()
+    message = str(args.get("message", "") or "")
+    message_key = str(args.get("message_key", "") or "ScriptMessage")
+    sensitive = False
+    res = None
+    if method in ("error", "warning", "info"):
+        if not message:
+            raise RuntimeError("ui {m} needs args.message".format(m=method))
+        if method == "error":
+            res = ui.error(message, message_key)
+        elif method == "warning":
+            res = ui.warning(message, message_key)
+        else:
+            res = ui.info(message, message_key)
+    elif method == "prompt":
+        if not message:
+            raise RuntimeError("ui prompt needs args.message")
+        choice = _enum_by_names("PromptChoice",
+                                [str(args.get("choice", "YesNo"))],
+                                _PROMPT_CHOICE_VALUES, PromptChoice)
+        default = _enum_by_names("PromptResult",
+                                 [str(args.get("default_result", "No"))],
+                                 _PROMPT_RESULT_VALUES, PromptResult)
+        res = ui.prompt(message, choice, default,
+                        _opt_str("store_description"), _opt_str("store_key"),
+                        message_key)
+    elif method == "select_many":
+        items = args.get("items") or []
+        if not message or not items:
+            raise RuntimeError("ui select_many needs args.message and "
+                               "args.items (list)")
+        choice = _enum_by_names("PromptChoice",
+                                [str(args.get("choice", "YesNo"))],
+                                _PROMPT_CHOICE_VALUES, PromptChoice)
+        default = _enum_by_names("PromptResult",
+                                 [str(args.get("default_result", "OK"))],
+                                 _PROMPT_RESULT_VALUES, PromptResult)
+        res = ui.select_many(message, choice, default, list(items),
+                             message_key)
+    elif method == "choose":
+        options = args.get("options") or []
+        if not message or not options:
+            raise RuntimeError("ui choose needs args.message and "
+                               "args.options (list)")
+        res = ui.choose(message, list(options),
+                        int(args.get("initial_selection", 0) or 0),
+                        bool(args.get("cancellable", True)), message_key)
+    elif method == "reset_stored_result":
+        if not args.get("store_key"):
+            raise RuntimeError("ui reset_stored_result needs "
+                               "args.store_key")
+        res = ui.reset_stored_result(str(args["store_key"]))
+    elif method == "open_file_dialog":
+        res = ui.open_file_dialog(
+            _opt_str("title"), _opt_str("filename"), _opt_str("directory"),
+            _opt_str("filter"), _opt_int("filter_index"),
+            _opt_str("default_extension"), None,
+            bool(args.get("multiselect", False)))
+    elif method == "save_file_dialog":
+        res = ui.save_file_dialog(
+            _opt_str("title"), _opt_str("filename"), _opt_str("directory"),
+            _opt_str("filter"), _opt_int("filter_index"),
+            _opt_str("default_extension"))
+    elif method == "browse_directory_dialog":
+        res = ui.browse_directory_dialog(
+            message or "Select a directory", _opt_str("path") or "",
+            _opt_str("root_folder") or "Environment.SpecialFolder."
+            "MyComputer", bool(args.get("new_folder_button", True)))
+    elif method == "query_string":
+        res = ui.query_string(message, str(args.get("text", "") or ""),
+                              bool(args.get("multi_line", False)),
+                              bool(args.get("cancellable", False)))
+    elif method == "query_password":
+        sensitive = True
+        res = ui.query_password(message, str(args.get("password", "") or ""),
+                                bool(args.get("cancellable", False)))
+    elif method == "query_credentials":
+        sensitive = True
+        res = ui.query_credentials(message,
+                                   str(args.get("username", "") or ""),
+                                   str(args.get("password", "") or ""),
+                                   bool(args.get("cancellable", False)))
+    else:
+        raise RuntimeError(
+            "unknown ui method '{m}' (known: error, warning, info, "
+            "prompt, select_many, choose, reset_stored_result, "
+            "open_file_dialog, save_file_dialog, "
+            "browse_directory_dialog, query_string, query_password, "
+            "query_credentials)".format(m=method))
+    if isinstance(res, (list, tuple)):
+        res = [str(x) for x in res]
+    elif res is not None:
+        res = str(res)
+    log("OK", "ui {m}: {d}".format(
+        m=method, d="completed (value not logged)" if sensitive else "done"))
+    return {"method": method, "result": res}
+
+
+def cmd_system(args):
+    """Access the injected `system` object (ScriptSystem stub).
+
+    ops:
+      info                 -> ui_present, prompt_handling (decoded),
+                              abort/trace flags, prompt_answers keys,
+                              commands + factories inventory (read-only)
+      write_message        {severity?: FatalError|Error|Warning|
+                            Information|Text, text}
+      set_prompt_handling  {value: flag names '+'-combined} - sets the
+                            process-wide prompt policy; confirm needed
+                            only when the result enables
+                            ForwardSimplePrompts (dialogs back on)
+      prompt_answers       -> the headless dialog-simulation answers
+                              (read-only)
+      set_prompt_answer    {key, result: OK|Cancel|Yes|No|Retry|Abort|
+                            Ignore} -> pre-answer one prompt message key
+      clear_prompt_answers -> empty the simulation dict
+      set_flags            {trace?, abortable?, abort_autocheck?}
+      progress             {action: start|step|absolute, ...} - e!COCKPIT
+                            progress bar (GUI chrome only)
+      ui                   {method, ..., confirm} - REAL modal dialogs,
+                            wedge hazard, CONFIRM-GATED
+      exit                 {code?, confirm} - kills e!COCKPIT,
+                            CONFIRM-GATED
+
+    PROMPT-HANDLING LIFETIME: _headless_hardening re-applies
+    LogSimplePrompts at the start of EVERY command (the relay re-execs
+    this file per command), so a set_prompt_handling value lasts only
+    for the remainder of the CURRENT command - pre-arming dialogs for a
+    later command is impossible by design; prompt_answers DO persist
+    across commands (they live on the engine's system object).
+    """
+    op = args.get("op", "info")
+    sysobj = globals().get("system")
+    if sysobj is None:
+        raise RuntimeError("system object not available (not running "
+                           "inside e!COCKPIT?)")
+
+    if op == "info":
+        info = {}
+        readers = (
+            ("ui_present", lambda: bool(sysobj.ui_present)),
+            ("executable_filename", lambda: str(sysobj.executable_filename)),
+            ("trace", lambda: bool(sysobj.trace)),
+            ("abortable", lambda: bool(sysobj.abortable)),
+            ("aborting", lambda: bool(sysobj.aborting)),
+            ("abort_autocheck", lambda: bool(sysobj.abort_autocheck)),
+            ("background_loading_of_libraries_finished",
+             lambda: bool(sysobj.background_loading_of_libraries_finished)),
+        )
+        for name, reader in readers:
+            try:
+                info[name] = reader()
+            except Exception:
+                info[name] = None
+        try:
+            info["prompt_handling"] = _flags_to_names(
+                sysobj.prompt_handling, _PROMPT_HANDLING_FLAGS)
+        except Exception:
+            info["prompt_handling"] = None
+        try:
+            pa = sysobj.prompt_answers
+            info["prompt_answer_keys"] = sorted(str(k) for k in pa.keys())
+        except Exception:
+            info["prompt_answer_keys"] = None
+        cmds = []
+        try:
+            for c in sysobj.commands:
+                try:
+                    cmds.append(str(c.name))
+                except Exception:
+                    cmds.append(str(c))
+                if len(cmds) >= 50:
+                    break
+        except Exception:
+            cmds = None
+        info["commands"] = cmds
+        try:
+            info["factory_count"] = len(sysobj.factories)
+        except Exception:
+            info["factory_count"] = None
+        log("OK", "system info read")
+        return info
+
+    if op == "write_message":
+        text = str(args.get("text", "") or "")
+        if not text:
+            raise RuntimeError("system write_message needs args.text")
+        sev = _enum_by_names("Severity",
+                             [str(args.get("severity", "Information"))],
+                             _SEVERITY_VALUES, Severity)
+        sysobj.write_message(sev, text)
+        log("OK", "message written to the store")
+        return {"written": True, "severity": str(args.get("severity",
+                                                          "Information"))}
+
+    if op == "set_prompt_handling":
+        raw = str(args.get("value", "")).strip()
+        if not raw:
+            raise RuntimeError("system set_prompt_handling needs "
+                               "args.value (e.g. 'LogSimplePrompts' or "
+                               "'LogSimplePrompts+LogMessageKeys')")
+        names = [t for t in re.split(r"[+,\s]+", raw) if t.strip()]
+        if "NONE" in names:
+            if len(names) != 1:
+                raise RuntimeError("NONE cannot be combined with other "
+                                   "PromptHandling flags")
+            value = 0
+            if PromptHandling is not None:
+                try:
+                    value = PromptHandling.NONE
+                except Exception:
+                    value = 0
+        else:
+            value = _enum_by_names("PromptHandling flag", names,
+                                   _PROMPT_HANDLING_FLAGS, PromptHandling)
+        try:
+            enables_dialogs = bool(int(value) & 1)
+        except (TypeError, ValueError):
+            enables_dialogs = "ForwardSimplePrompts" in names
+        if enables_dialogs and not args.get("confirm"):
+            raise RuntimeError("set_prompt_handling REFUSED - "
+                               "ForwardSimplePrompts re-enables GUI "
+                               "dialogs (wedge hazard); pass "
+                               "args.confirm=true only on an explicit "
+                               "owner request")
+        sysobj.prompt_handling = value
+        try:
+            effective = _flags_to_names(sysobj.prompt_handling,
+                                        _PROMPT_HANDLING_FLAGS)
+        except Exception:
+            effective = None
+        log("OK", "prompt_handling set to {n}".format(n=effective))
+        return {"set": names, "effective": effective,
+                "note": "re-hardened to LogSimplePrompts by the next "
+                        "command"}
+
+    if op == "prompt_answers":
+        try:
+            pa = sysobj.prompt_answers
+            out = {}
+            for k in pa.keys():
+                try:
+                    out[str(k)] = str(pa[k])
+                except Exception:
+                    out[str(k)] = None
+        except Exception as exc:
+            raise RuntimeError("prompt_answers unreadable: {e}".format(
+                e=exc))
+        log("OK", "prompt answers: {n} key(s)".format(n=len(out)))
+        return {"count": len(out), "answers": out}
+
+    if op == "set_prompt_answer":
+        key = str(args.get("key", "")).strip()
+        rname = str(args.get("result", "")).strip()
+        if not key or not rname:
+            raise RuntimeError("system set_prompt_answer needs args.key "
+                               "(prompt message key) and args.result "
+                               "(OK|Cancel|Yes|No|Retry|Abort|Ignore)")
+        value = _enum_by_names("PromptResult", [rname],
+                               _PROMPT_RESULT_VALUES, PromptResult)
+        sysobj.prompt_answers[key] = value
+        log("OK", "prompt answer set: {k} -> {r}".format(k=key, r=rname))
+        return {"key": key, "result": rname,
+                "note": "persists for this e!COCKPIT session; system.ui "
+                        "dialog methods ignore it (per stub)"}
+
+    if op == "clear_prompt_answers":
+        try:
+            pa = sysobj.prompt_answers
+            n = len(pa)
+            pa.clear()
+        except Exception as exc:
+            raise RuntimeError("prompt_answers.clear() failed: {e}".format(
+                e=exc))
+        log("OK", "prompt answers cleared ({n})".format(n=n))
+        return {"cleared": n}
+
+    if op == "set_flags":
+        changed = {}
+        if args.get("trace") is not None:
+            sysobj.trace = bool(args["trace"])
+            changed["trace"] = bool(args["trace"])
+        if args.get("abortable") is not None:
+            sysobj.abortable = bool(args["abortable"])
+            changed["abortable"] = bool(args["abortable"])
+        if args.get("abort_autocheck") is not None:
+            sysobj.abort_autocheck = bool(args["abort_autocheck"])
+            changed["abort_autocheck"] = bool(args["abort_autocheck"])
+        if not changed:
+            raise RuntimeError("system set_flags needs at least one of "
+                               "trace, abortable, abort_autocheck")
+        readback = {}
+        for name, reader in (
+                ("trace", lambda: sysobj.trace),
+                ("abortable", lambda: sysobj.abortable),
+                ("aborting", lambda: sysobj.aborting),
+                ("abort_autocheck", lambda: sysobj.abort_autocheck)):
+            try:
+                readback[name] = bool(reader())
+            except Exception:
+                readback[name] = None
+        log("OK", "system flags set: {c}".format(c=sorted(changed)))
+        return {"set": changed, "flags": readback}
+
+    if op == "progress":
+        action = str(args.get("action", "")).strip().lower()
+        if action == "start":
+            sysobj.progress_start(
+                str(args.get("description", "") or "working"),
+                int(args.get("items", -1) or -1),
+                str(args.get("unit", "") or ""))
+        elif action == "step":
+            sysobj.progress_step(str(args.get("item", "") or ""),
+                                 int(args.get("completed", 1) or 1))
+        elif action == "absolute":
+            sysobj.progress_absolute(
+                str(args.get("item", "") or ""),
+                int(args.get("absolute_progress", 0) or 0))
+        else:
+            raise RuntimeError("system progress needs args.action of "
+                               "start|step|absolute")
+        log("OK", "progress {a}".format(a=action))
+        return {"action": action}
+
+    if op == "ui":
+        if not args.get("confirm"):
+            raise RuntimeError("system ui REFUSED - these methods block "
+                               "on a real GUI dialog (wedge hazard); "
+                               "pass args.confirm=true only on an "
+                               "explicit owner request")
+        return _system_ui_call(sysobj, args)
+
+    if op == "exit":
+        if not args.get("confirm"):
+            raise RuntimeError("system exit REFUSED - it shuts down the "
+                               "whole e!COCKPIT process (and the armed "
+                               "relay); pass args.confirm=true only on "
+                               "an explicit owner request")
+        code = int(args.get("code", 0) or 0)
+        log("OK", "system.exit({c}) - shutting e!COCKPIT down; no result "
+            "file will be written for this command".format(c=code))
+        sysobj.exit(code)
+        return {"exiting": True, "code": code,
+                "note": "process (and relay) gone - re-arm after "
+                        "restarting e!COCKPIT"}
+
+    raise RuntimeError('system needs args.op of "info", "write_message", '
+                       '"set_prompt_handling", "prompt_answers", '
+                       '"set_prompt_answer", "clear_prompt_answers", '
+                       '"set_flags", "progress", "ui" or "exit"')
+
+
+# --------------------------------------------------------------------------
 # Project access
 # --------------------------------------------------------------------------
 def get_project():
@@ -1550,8 +2073,7 @@ def _online_login(onlineapp, device, prefer_keep=False):
     """
     options = []
     if OnlineChangeOption is not None:
-        names = (["Keep"] if prefer_keep else []) + \
-                ["Try", "Force", "Never"]
+        names = ["Keep"] if prefer_keep else ["Try", "Force", "Never"]
         for name in names:
             try:
                 if name == "Try":
@@ -1569,7 +2091,8 @@ def _online_login(onlineapp, device, prefer_keep=False):
             except Exception as exc:
                 log("INFO", "OnlineChangeOption.{n} unavailable: "
                     "{e}".format(n=name, e=exc))
-    options.append(("device.connect()", None))
+    if not prefer_keep:
+        options.append(("device.connect()", None))
     attempts = []
     for label, option in options:
         try:
@@ -1584,6 +2107,12 @@ def _online_login(onlineapp, device, prefer_keep=False):
                 l=label, c=type(exc).__name__, m=str(exc)[:160]))
             log("INFO", "login via {l} failed: {c}: {m}".format(
                 l=label, c=type(exc).__name__, m=str(exc)[:160]))
+    if prefer_keep:
+        raise RuntimeError(
+            "read-only login failed (Keep) - REFUSING to escalate: "
+            "Try/Force/Never/device.connect() would deploy the open "
+            "project to the PLC (G-26). Attempts:\n  " +
+            "\n  ".join(attempts))
     raise RuntimeError("all login forms failed:\n  " +
                        "\n  ".join(attempts))
 
@@ -1600,6 +2129,21 @@ def _online_connect(project, args, prefer_keep=False):
     changes (code deltas) when the open project differs from the PLC -
     treat deploying commands as potentially deploying.
     """
+    if prefer_keep:
+        # LIVE 2026-10-22 (G-27): with a pending change, login(Keep) on
+        # this build ATTEMPTS A DOWNLOAD anyway (stub semantics not
+        # honored), pops a modal error dialog and raises "Login failed".
+        # Refuse BEFORE touching the login when out of sync.
+        try:
+            uptodate = bool(get_application(project).is_uptodate)
+        except Exception:
+            uptodate = None
+        if uptodate is False:
+            raise RuntimeError(
+                "read-only command REFUSED - the application is NOT "
+                "uptodate (a pending change exists) and login(Keep) "
+                "would attempt a download in this build (G-27). Sync "
+                "first (deploy the change or discard it), then retry.")
     user, pw = _require_creds()
     device = get_device(project, args.get("device", ""))
     try:
@@ -1616,6 +2160,20 @@ def _online_connect(project, args, prefer_keep=False):
 
 
 def _online_disconnect(device):
+    """Logout. LIVE 2026-10-22 (G-29): a plain disconnect() pops a modal
+    when FORCED variables exist ("delete all currently forced variables
+    before logging out?") and wedges the relay. forced_disconnect()
+    (IScriptOnlineDevice2) cannot hang and keeps the runtime running -
+    it is tried FIRST now; plain disconnect stays as the fallback."""
+    try:
+        device.forced_disconnect()
+        log("INFO", "forced_disconnect done (modal-free logout)")
+        return
+    except AttributeError:
+        log("WARN", "forced_disconnect not available - plain disconnect")
+    except Exception as exc:
+        log("WARN", "forced_disconnect raised ({e}) - plain disconnect"
+            .format(e=exc))
     try:
         device.disconnect()
         log("INFO", "disconnected from PLC")
@@ -1624,22 +2182,27 @@ def _online_disconnect(device):
 
 
 def _display_name(obj):
-    """Friendlier name for dynamic ScriptObjects: probe get_name()/.name/.Name.
+    """Friendlier name for dynamic ScriptObjects: DIRECT get_name()/.name/
+    .Name access, then the repr short-name.
 
-    dir() on these wrappers is empty (probe 2026-10-20), so attributes must
-    be probed directly; fall back to the repr short-name.
+    LIVE 2026-10-22: the old getattr() probe silently never ran on the
+    interop wrappers (getattr fails on them, G-01) - the class-name repr
+    leaked into snapshot filenames
+    (Wago.Eng.Module.Script.ScriptObjects.EScriptProject_3.10.0-pre7.ecp).
+    Direct calls work on wrappers and plain objects alike.
     """
     try:
-        gn = getattr(obj, "get_name", None)
-        if gn is not None:
-            v = gn()
-            if v:
-                return str(v)
+        v = obj.get_name()
+        if v:
+            return str(v)
     except Exception:
         pass
     for attr in ("name", "Name"):
         try:
-            v = getattr(obj, attr)
+            if attr == "name":
+                v = obj.name
+            else:
+                v = obj.Name
             if v:
                 return str(v)
         except Exception:
@@ -2123,6 +2686,19 @@ def cmd_export(project, args, summary):
             "xml_files": len(files), "first_files": files[:10]}
 
 
+def _plcfs_reflect_members(odev, keyword):
+    """CLR reflection: the wrapper's REAL method names containing keyword
+    (G-02: reflection is the only reliable discovery on the interop
+    wrappers - the stubs lie in both directions, G-13)."""
+    try:
+        import clr
+        t = clr.GetClrType(odev)
+        names = sorted(set(m.Name for m in t.GetMethods()))
+    except Exception:
+        return []
+    return [n for n in names if keyword.lower() in n.lower()]
+
+
 def _plcfs_member(holder, name):
     """Fetch one plcfs member by literal name.
 
@@ -2149,6 +2725,17 @@ def _plcfs_member(holder, name):
         return holder.upload_file
     if name == "delete_file":
         return holder.delete_file
+    # ScriptOnlineDevice extras (stubs 3.5.9.0) - LIVE 2026-10-22: these
+    # branches were MISSING, so mkdir/rename/rmdir always failed with
+    # "no member" even though the wrapper has them
+    if name == "create_directory":
+        return holder.create_directory
+    if name == "rename_file":
+        return holder.rename_file
+    if name == "rename_directory":
+        return holder.rename_directory
+    if name == "delete_directory":
+        return holder.delete_directory
     raise AttributeError(name)
 
 
@@ -2170,7 +2757,24 @@ def _create_online_device(project, args):
     project.find (the raw interop device from project.devices is
     REJECTED - "expected IExtendedObject[IScriptObject]"). Callers
     must Dispose() the result.
+
+    LIVE 2026-10-22 (G-26): CONNECTING this device performs a
+    login-WITH-DOWNLOAD of the open application - it only looks safe
+    when the application is uptodate (no delta to deploy). Non-uptodate
+    therefore REFUSES without args.confirm.
     """
+    try:
+        uptodate = bool(get_application(project).is_uptodate)
+    except Exception:
+        uptodate = None
+    if uptodate is False and not args.get("confirm"):
+        raise RuntimeError(
+            "create_online_device REFUSED - connecting the online "
+            "device performs a login-WITH-DOWNLOAD of the open "
+            "application and the application is NOT uptodate "
+            "(is_uptodate=false), so the connect would deploy it. "
+            "Bring the project and PLC in sync or pass args.confirm"
+            "=true explicitly (G-26).")
     try:
         odev = online.create_online_device()
         log("INFO", "created online device (active application's device)")
@@ -2341,7 +2945,11 @@ def cmd_plcfs(project, args):
                 d = os.path.dirname(local)
                 if d and not os.path.isdir(d):
                     os.makedirs(d)
-                member(local, remote, True)
+                # LIVE 2026-10-22 (G-13): this build's download_file is
+                # (remote_file, local_file) - REMOTE FIRST, opposite of
+                # the stub; (local, remote) made it look for the local
+                # path as the source ("Could not find file")
+                member(remote, local, True)
                 log("OK", "plcfs get {r} -> {l} via {n}".format(
                     r=remote, l=local, n=member_name))
                 return {"remote": remote, "local": local,
@@ -2351,10 +2959,25 @@ def cmd_plcfs(project, args):
                 if not os.path.isfile(local):
                     raise RuntimeError("local file not found: {l}".format(
                         l=local))
-                member(remote, local, True)
-                log("OK", "plcfs put {l} -> {r} via {n}".format(
-                    l=local, r=remote, n=member_name))
-                return {"local": local, "remote": remote}
+                # force defaults True; force=False on an EXISTING remote
+                # file is the overwrite-prompt trigger (prompt_answers
+                # end-to-end test, G-07-style: one clean attempt only)
+                force = bool(args.get("force", True))
+                # LIVE 2026-10-22 (G-13): upload is (local_file,
+                # remote_file) on this build - LOCAL FIRST (mirror of the
+                # download order); the stub's (remote, local) order made
+                # the engine treat the remote path as a local file
+                try:
+                    member(local, remote, force)
+                    form = "3-arg (local, remote, force)"
+                except TypeError:
+                    member(local, remote)
+                    form = "2-arg (local, remote)"
+                log("OK", "plcfs put {l} -> {r} (force={f}, {fm}) via {n}"
+                    .format(l=local, r=remote, f=force, fm=form,
+                            n=member_name))
+                return {"local": local, "remote": remote, "force": force,
+                        "form": form}
             member(remote)
             log("OK", "plcfs rm {r} via {n}".format(r=remote, n=member_name))
             return {"deleted": remote}
@@ -2373,6 +2996,9 @@ def cmd_plcfs(project, args):
             members = {"rename": ("rename_file", "rename_directory"),
                        "mkdir": ("create_directory",),
                        "rmdir": ("delete_directory",)}
+            reflected = _plcfs_reflect_members(odev, "")
+            log("INFO", "plcfs {o}: wrapper methods (CLR reflection): "
+                "{r}".format(o=op, r=reflected or "NONE"))
             for name in members[op]:
                 try:
                     member = _plcfs_member(odev, name)
@@ -2586,13 +3212,50 @@ def _version_from_filename(path):
 
 
 def _snapshot_prefix(project):
-    """Filename-safe project name for snapshot files (fallback: 'project')."""
+    """Filename-safe SHORT project name for snapshot files.
+
+    Preference: the on-disk project FILE base (what the user actually
+    calls the project), then the display name, then 'project'.
+    LIVE 2026-10-22: EScriptProject exposes neither get_name() nor
+    .name/.Name (unlike device objects), and the GUI autosave path is a
+    GUID blob - so a non-autosave project.path wins, everything else
+    falls through."""
+    try:
+        p = project.path
+        p = str(p) if p else ""
+        if p and os.path.isfile(p) and "Autosave" not in p                 and not p.endswith(".autosave"):
+            base = os.path.splitext(os.path.basename(p))[0]
+            safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", base).strip("_")
+            if safe:
+                return safe
+    except Exception:
+        pass
     try:
         name = _display_name(project)
     except Exception:
         name = ""
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name or "").strip("_")
     return safe or "project"
+
+
+def _on_disk_project_path(project):
+    """The on-disk .ecp to read/copy: the open project's path
+    (IScriptProject.path - even the GUI autosave, which IS the current
+    state), then the explicit/discovered project, then the projects-dir
+    search. Returns '' when nothing exists."""
+    try:
+        p = project.path
+        if p and os.path.isfile(str(p)):
+            return str(p)
+    except Exception:
+        pass
+    src = PROJECT_FILE or discover_project_file()
+    if src and os.path.isfile(src):
+        return src
+    src = _find_open_source_ecp()
+    if src and os.path.isfile(src):
+        return src
+    return ""
 
 
 def cmd_snapshot(project, args):
@@ -2617,20 +3280,9 @@ def cmd_snapshot(project, args):
         save_ok = False
         log("WARN", "project.save() failed ({e}) - snapshotting the last "
                     "on-disk state instead".format(e=exc))
-    src = ""
-    try:
-        # IScriptProject.path - the open project's on-disk location
-        # (ScriptEngine.chm, referenced by the save_as remarks).
-        p = project.path
-        if p and os.path.isfile(str(p)):
-            src = str(p)
-            log("INFO", "project.path: {p}".format(p=src))
-    except Exception:
-        pass
-    if not src:
-        src = PROJECT_FILE or discover_project_file()
-    if not src or not os.path.isfile(src):
-        src = _find_open_source_ecp()
+    src = _on_disk_project_path(project)
+    if src:
+        log("INFO", "on-disk project: {p}".format(p=src))
     if not src or not os.path.isfile(src):
         raise RuntimeError("cannot locate the on-disk .ecp to snapshot "
                            "(repo discovery and {d} search both empty)".format(
@@ -3288,6 +3940,11 @@ def _obj_summary(obj):
     """Name + kind markers for one tree object (all guarded)."""
     out = {"name": _short_name(obj)}
     try:
+        bp = obj.build_properties
+        out["exclude_from_build"] = bool(bp.exclude_from_build)
+    except Exception:
+        out["exclude_from_build"] = None
+    try:
         out["name"] = str(obj.get_name())
     except Exception:
         pass
@@ -3431,15 +4088,43 @@ def cmd_tree(project, args):
                        '"move" or "folder"')
 
 
+def _iecc_container(project, parent_name):
+    """Container for the ScriptIecLanguageObjectContainer create_* calls.
+
+    LIVE 2026-10-22 (G-22): EScriptProject has NO create_pou
+    ("'EScriptProject' object has no attribute 'create_pou'") - the
+    mixin lands on the APPLICATION - so the no-parent default is the
+    application, not the project (falling back to the project keeps
+    offline fakes working)."""
+    if parent_name:
+        return _find_one(project, parent_name)
+    try:
+        return get_application(project)
+    except Exception:
+        return project
+
+
+_SPECIAL_POU_TYPES = ("check_bounds", "check_pointer",
+                      "check_range_unsigned", "check_range_signed",
+                      "check_div_real_64", "check_div_real_32",
+                      "check_div_int_64", "check_div_int_32",
+                      "check_l_range_unsigned", "check_l_range_signed")
+
+
 def cmd_object_create(project, args):
     """Create project objects (ScriptIecLanguageObjectContainer stub).
 
-    args: {"kind": "pou"|"gvl"|"dut"|"interface"|"folder"|"method"|
-           "property"|"action"|"transition",
-           "name": required,
+    args: {"kind": "pou"|"gvl"|"dut"|"interface"|"special_pou"|"folder"|
+           "method"|"property"|"action"|"transition",
+           "name": required (EXCEPT special_pou - the engine names
+                   implicit-check POUs itself),
+           "special_type": SpecialPouType member (special_pou only;
+                   adding a check function FORCES A FULL RECOMPILE and
+                   prohibits online change from then on - stub warning),
            "pou_type": "program"|"functionblock"|"function" (pou only),
            "base_type"?: (dut/interface/method return),
-           "parent"?: object name (container; default the project),
+           "parent"?: object name (container; default the APPLICATION -
+                   EScriptProject itself has no create_* live, G-22),
            "declaration"?: ST text (textual objects),
            "implementation"?: ST text,
            "confirm": true}
@@ -3452,10 +4137,37 @@ def cmd_object_create(project, args):
                            "args.confirm=true (it modifies the project)")
     kind = str(args.get("kind", "")).lower()
     name = str(args.get("name", "")).strip()
+
+    if kind == "special_pou":
+        # create_pou(SpecialPouType) - implicit-check POUs (3.5.12.10).
+        special = str(args.get("special_type", "")).strip()
+        if not special:
+            raise RuntimeError("object_create special_pou needs "
+                               "args.special_type (one of: {k})"
+                               .format(k=", ".join(_SPECIAL_POU_TYPES)))
+        parent_name = str(args.get("parent", "")).strip()
+        container = _iecc_container(
+            project, str(args.get("parent", "")).strip())
+        try:
+            member = getattr(SpecialPouType, special)
+        except Exception:
+            raise RuntimeError("object_create: unknown SpecialPouType "
+                               "'{s}' (known: {k})".format(
+                                   s=special,
+                                   k=", ".join(_SPECIAL_POU_TYPES)))
+        created = container.create_pou(member)
+        log("OK", "created special_pou {s} (FORCES A FULL RECOMPILE; "
+            "online change is prohibited from then on)".format(s=special))
+        return {"created": special, "kind": "special_pou",
+                "warning": "check functions force a full recompile and "
+                           "prohibit online change",
+                "summary": _obj_summary(created)}
+
     if not name:
         raise RuntimeError("object_create needs args.name")
     parent_name = str(args.get("parent", "")).strip()
-    container = _find_one(project, parent_name) if parent_name else project
+    container = _iecc_container(
+        project, str(args.get("parent", "")).strip())
 
     created = None
     if kind == "pou":
@@ -3502,8 +4214,9 @@ def cmd_object_create(project, args):
             created = container.create_transition(name)
     else:
         raise RuntimeError('object_create needs args.kind of "pou", "gvl", '
-                           '"dut", "interface", "folder", "method", '
-                           '"property", "action" or "transition"')
+                           '"dut", "interface", "special_pou", "folder", '
+                           '"method", "property", "action" or '
+                           '"transition"')
     log("OK", "created {k} '{n}'".format(k=kind, n=name))
 
     declaration = args.get("declaration")
@@ -3684,19 +4397,104 @@ def cmd_task_config(project, args):
                        '"create_task"')
 
 
+# ScriptSymbolConfigObject stub value tables (duplicated inside the stub).
+_SYMBOL_CONTENT_FLAGS = (
+    ("SupportOPCUA", 1),
+    ("IncludeComments", 2),
+    ("IncludeAttributes", 4),
+    ("IncludeTypeNodeAttributes", 8),
+    ("IncludeExecutables", 16),
+    ("UseEmptyNamespaceByDefault", 32),
+    ("XmlIncludeNodeFlags", 1 << 16),
+    ("XmlIncludeComments", 2 << 16),
+    ("XmlIncludeAttributes", 4 << 16),
+    ("XmlIncludeTypeNodeAttributes", 8 << 16),
+    ("XmlIncludeExecutables", 16 << 16),
+)
+_SYMBOL_ATTRIBUTE_FILTER_TYPES = (
+    ("none", 0), ("All", 1), ("SimpleIdentifiers", 2),
+    ("Prefix", 3), ("Regex", 4),
+)
+_SYMBOL_COMMENT_FILTER_TYPES = (
+    ("none", 0), ("NormalComments", 1), ("DocuComments", 2), ("Both", 3),
+    ("PreferNormalComments", 4), ("PreferDocuComments", 5),
+)
+_DIRECT_IO_OBSTACLES = (
+    ("none", 0), ("OldCompilerVersion", 1),
+    ("TargetSettingSeparateApplication", 2),
+)
+
+
+def _symbol_config_dict(sym):
+    """Guarded read of the symbol configuration options
+    (ScriptSymbolConfigObject, 3.5.10.0)."""
+    out = {}
+    readers = (
+        ("content_feature_flags",
+         lambda: _flags_to_names(sym.content_feature_flags,
+                                 _SYMBOL_CONTENT_FLAGS)),
+        ("content_feature_flags_raw",
+         lambda: str(sym.content_feature_flags)),
+        ("effective_content_feature_flags",
+         lambda: _flags_to_names(sym.effective_content_feature_flags,
+                                 _SYMBOL_CONTENT_FLAGS)),
+        ("symbol_attribute_filter_type",
+         lambda: _enum_to_name(sym.symbol_attribute_filter_type,
+                               _SYMBOL_ATTRIBUTE_FILTER_TYPES)),
+        ("effective_symbol_attribute_filter_type",
+         lambda: _enum_to_name(sym.effective_symbol_attribute_filter_type,
+                               _SYMBOL_ATTRIBUTE_FILTER_TYPES)),
+        ("symbol_attribute_filter_data",
+         lambda: str(sym.symbol_attribute_filter_data)),
+        ("symbol_comment_filter_type",
+         lambda: _enum_to_name(sym.symbol_comment_filter_type,
+                               _SYMBOL_COMMENT_FILTER_TYPES)),
+        ("effective_symbol_comment_filter_type",
+         lambda: _enum_to_name(sym.effective_symbol_comment_filter_type,
+                               _SYMBOL_COMMENT_FILTER_TYPES)),
+        ("enable_direct_io_access",
+         lambda: bool(sym.enable_direct_io_access)),
+    )
+    for name, reader in readers:
+        try:
+            out[name] = reader()
+        except Exception:
+            out[name] = None
+    try:
+        out["direct_io_obstacles"] = _enum_to_name(
+            sym.check_effective_direct_io_access(), _DIRECT_IO_OBSTACLES)
+    except Exception:
+        out["direct_io_obstacles"] = None
+    return out
+
+
 def cmd_symbol_config(project, args):
-    """Create the symbol configuration / dump the variable inventory
+    """Create the symbol configuration / dump the variable inventory /
+    read-set the config options / dump the XML schema
     (ScriptSymbolConfigObject stub, 3.5.10.0).
 
     ops:
-      variables {application?, compile?: true} -> full signature +
-              variable inventory (get_all_signatures; compile=true
-              builds first - takes time, read-only)
-      create  {application?, export_comments?: false,
-               support_opc_ua?: true, confirm} -> adds the symbol
-              configuration object to the application
+      variables  {application?, compile?: true} -> full signature +
+                 variable inventory (get_all_signatures; compile=true
+                 builds first - takes time, read-only)
+      create     {application?, export_comments?: false,
+                 support_opc_ua?: true, confirm} -> adds the symbol
+                 configuration object to the application
+      config     {application?} -> content feature flags (decoded),
+                 attribute/comment filter types + data, direct-IO
+                 access (read-only)
+      config_set {application?, confirm, content_feature_flags?
+                 ('+'-combined names), attribute_filter_type?,
+                 attribute_filter_data?, comment_filter_type?}
+                 -> the option setters (CONFIRM-GATED - modifies the
+                 project); read-back after
+      xsd        {application?, file?} -> write
+                 get_symbol_configuration_xsd() (the schema as
+                 appropriate for THIS release) to a file (read-only;
+                 default <ECP_PROJECT_ROOT>/plcopensrc-export/
+                 Symbolconfiguration.xsd, else under WORK_DIR)
 
-    create modifies the project - CONFIRM-GATED.
+    create/config_set modify the project - CONFIRM-GATED.
     """
     op = args.get("op", "variables")
     app = _get_application_obj(project, args)
@@ -3718,10 +4516,42 @@ def cmd_symbol_config(project, args):
             return {"created": False,
                     "note": "symbol configuration already present",
                     "name": _short_name(sym)}
-        sym = app.create_symbol_config(
-            bool(args.get("export_comments", False)),
-            bool(args.get("support_opc_ua", True)),
-            False)  # client_side_layout_calculator: none
+        # LIVE 2026-10-22: the calculator parameter is a Guid here -
+        # the stub-stand-in `False` raises "expected Guid, got bool",
+        # and neither None nor the Guid.Empty STRING coerce. Ladder:
+        # False -> None -> CLR System.Guid.Empty -> Guid.Empty string
+        # -> 2-arg form. (Under CPython the System import fails and the
+        # CLR rung is skipped - the offline test asserts that form list.)
+        attempts = []
+        sym = None
+        forms = [False, None]
+        try:
+            from System import Guid as _DotNetGuid
+            forms.append(_DotNetGuid.Empty)
+        except Exception:
+            pass
+        forms.append("00000000-0000-0000-0000-000000000000")
+        for calc in forms:
+            try:
+                sym = app.create_symbol_config(
+                    bool(args.get("export_comments", False)),
+                    bool(args.get("support_opc_ua", True)),
+                    calc)
+                break
+            except Exception as exc:
+                attempts.append("{v}: {e}".format(v=calc,
+                                                  e=str(exc)[:90]))
+        if sym is None:
+            try:
+                sym = app.create_symbol_config(
+                    bool(args.get("export_comments", False)),
+                    bool(args.get("support_opc_ua", True)))
+                log("INFO", "create_symbol_config: 2-arg form used")
+            except Exception as exc:
+                raise RuntimeError("create_symbol_config failed in all "
+                                   "forms: " + "; ".join(attempts) +
+                                   "; 2-arg: {e}".format(
+                                       e=str(exc)[:120]))
         log("OK", "symbol configuration created")
         return {"created": True, "name": _short_name(sym)}
 
@@ -3753,8 +4583,120 @@ def cmd_symbol_config(project, args):
             "variables".format(s=len(out), v=total))
         return {"signatures": len(out), "variables": total,
                 "compiled": compile_first, "content": out}
-    raise RuntimeError('symbol_config needs args.op of "variables" or '
-                       '"create"')
+
+    if op == "config":
+        if sym is None:
+            raise RuntimeError("no symbol configuration object under the "
+                               "application - create it first "
+                               "(op=create)")
+        out = _symbol_config_dict(sym)
+        log("OK", "symbol config options read")
+        return {"application": _short_name(app), "name": _short_name(sym),
+                "config": out}
+
+    if op == "config_set":
+        if sym is None:
+            raise RuntimeError("no symbol configuration object under the "
+                               "application - create it first "
+                               "(op=create)")
+        if not args.get("confirm"):
+            raise RuntimeError("symbol_config config_set REFUSED - "
+                               "requires args.confirm=true (it modifies "
+                               "the project)")
+        applied = {}
+        flags_raw = str(args.get("content_feature_flags", "") or "").strip()
+        if flags_raw:
+            names = [t for t in re.split(r"[+,\s]+", flags_raw)
+                     if t.strip()]
+            if names == ["none"]:
+                value = 0
+                if SymbolConfigContentFeatureFlags is not None:
+                    try:
+                        value = SymbolConfigContentFeatureFlags.none
+                    except Exception:
+                        value = 0
+            else:
+                value = _enum_by_names("SymbolConfigContentFeatureFlags",
+                                       names, _SYMBOL_CONTENT_FLAGS,
+                                       SymbolConfigContentFeatureFlags)
+            sym.content_feature_flags = value
+            applied["content_feature_flags"] = names
+        attr_type = str(args.get("attribute_filter_type", "") or "").strip()
+        if attr_type:
+            value = _enum_by_names("SymbolAttributeFilterTypes",
+                                   [attr_type],
+                                   _SYMBOL_ATTRIBUTE_FILTER_TYPES,
+                                   SymbolAttributeFilterTypes)
+            sym.symbol_attribute_filter_type = value
+            applied["attribute_filter_type"] = attr_type
+        if args.get("attribute_filter_data") is not None:
+            value = str(args["attribute_filter_data"])
+            sym.symbol_attribute_filter_data = value
+            applied["attribute_filter_data"] = value
+        comment_type = str(args.get("comment_filter_type", "") or "").strip()
+        if comment_type:
+            value = _enum_by_names("SymbolCommentFilterType",
+                                   [comment_type],
+                                   _SYMBOL_COMMENT_FILTER_TYPES,
+                                   SymbolCommentFilterType)
+            sym.symbol_comment_filter_type = value
+            applied["comment_filter_type"] = comment_type
+        if not applied:
+            raise RuntimeError("symbol_config config_set needs at least "
+                               "one of content_feature_flags, "
+                               "attribute_filter_type(+data), "
+                               "comment_filter_type")
+        log("OK", "symbol config options set: {a}".format(
+            a=sorted(applied)))
+        return {"application": _short_name(app), "applied": applied,
+                "config": _symbol_config_dict(sym)}
+
+    if op == "xsd":
+        if sym is None:
+            raise RuntimeError("no symbol configuration object under the "
+                               "application - create it first "
+                               "(op=create)")
+        data = sym.get_symbol_configuration_xsd()
+        if isinstance(data, str):
+            payload = _to_bytes(data)
+        else:
+            try:
+                payload = data.tobytes()
+            except Exception:
+                try:
+                    payload = bytearray(data)
+                except Exception as exc:
+                    raise RuntimeError("unexpected XSD payload type "
+                                       "{t}: {e}".format(
+                                           t=type(data).__name__, e=exc))
+        path = str(args.get("file", "") or "").strip()
+        if not path:
+            base = (os.path.join(PROJECT_ROOT, "plcopensrc-export")
+                    if PROJECT_ROOT else WORK_DIR)
+            if not base:
+                raise RuntimeError("symbol_config xsd needs args.file "
+                                   "(or ECP_PROJECT_ROOT / ECP_WORK_DIR "
+                                   "for the default location)")
+            if not os.path.isdir(base):
+                os.makedirs(base)
+            path = os.path.join(base, "Symbolconfiguration.xsd")
+        path = os.path.abspath(path)
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        with open(path, "wb") as fh:
+            fh.write(payload)
+        size = os.path.getsize(path)
+        preview = ""
+        try:
+            preview = payload[:64].decode("utf-8", "replace")
+        except Exception:
+            pass
+        log("OK", "symbol configuration XSD written: {p} ({n} "
+            "bytes)".format(p=path, n=size))
+        return {"file": path, "bytes": size, "preview": preview}
+    raise RuntimeError('symbol_config needs args.op of "variables", '
+                       '"create", "config", "config_set" or "xsd"')
 
 
 # --------------------------------------------------------------------------
@@ -3768,6 +4710,18 @@ def _device_obj(project, args):
     if device_name:
         return _find_one(project, device_name)
     return get_device(project, "")
+
+
+def _gateway_label(gw):
+    """Readable gateway name (str(gw.name); the interop repr has no
+    Name= slice for ScriptGateway)."""
+    try:
+        name = str(gw.name)
+        if name:
+            return name
+    except Exception:
+        pass
+    return _short_name(gw)
 
 
 def cmd_device_scan(project, args):
@@ -3793,9 +4747,18 @@ def cmd_device_scan(project, args):
             except Exception:
                 raise RuntimeError("gateway '{g}' not found".format(
                     g=gw_name))
-        if len(gateways) == 0:
+        # LIVE 2026-10-22: len() on the .NET gateway collection fails
+        # ("len() of unsized object") - iterate for the first entry.
+        first = None
+        try:
+            for gw in gateways:
+                first = gw
+                break
+        except Exception:
+            first = None
+        if first is None:
             raise RuntimeError("no gateways configured in e!COCKPIT")
-        return gateways[0]
+        return first
 
     if op == "gateways":
         out = []
@@ -3821,7 +4784,7 @@ def cmd_device_scan(project, args):
     if op == "scan":
         gw = _pick_gateway()
         log("INFO", "network scan on gateway '{g}' (blocks for the scan "
-            "timeout)".format(g=_short_name(gw)))
+            "timeout)".format(g=_gateway_label(gw)))
         targets = gw.perform_network_scan()
         out = []
         for t in targets:
@@ -3841,7 +4804,7 @@ def cmd_device_scan(project, args):
                 entry["device_id"] = None
             out.append(entry)
         log("OK", "scan found {n} target(s)".format(n=len(out)))
-        return {"gateway": _short_name(gw), "count": len(out),
+        return {"gateway": _gateway_label(gw), "count": len(out),
                 "targets": out}
 
     if op == "address":
@@ -3852,7 +4815,7 @@ def cmd_device_scan(project, args):
         port = int(args.get("port", 11740) or 11740)
         address = gw.find_address_by_ip(ip, port)
         log("OK", "address for {ip}: {a}".format(ip=ip, a=address))
-        return {"ip": ip, "gateway": _short_name(gw), "address": address}
+        return {"ip": ip, "gateway": _gateway_label(gw), "address": address}
     raise RuntimeError('device_scan needs args.op of "gateways", "scan" '
                        'or "address"')
 
@@ -3922,6 +4885,227 @@ def cmd_device_comm(project, args):
     raise RuntimeError('device_comm needs args.op of "get" or "set_ip"')
 
 
+# ScriptDriverInfo / ScriptDeviceObject stub value tables.
+_STOP_RESET_VALUES = (
+    ("KeepCurrentValues", 0), ("SetToDefault", 1), ("ExecuteProgram", 2),
+)
+_ALWAYS_UPDATE_VALUES = (
+    ("Disabled", 1), ("OnlyIfUnused", 2), ("AlwaysInBusCycle", 3),
+)
+
+
+def _driver_info_dict(di):
+    """Guarded read of every ScriptDriverInfo member (3.5.9.0)."""
+    out = {}
+    readers = (
+        ("can_set_io_application",
+         lambda: bool(di.can_set_io_application)),
+        ("io_application", lambda: str(di.io_application)),
+        ("update_ios_while_in_stop",
+         lambda: bool(di.update_ios_while_in_stop)),
+        ("behaviour_for_outputs_on_stop",
+         lambda: _enum_to_name(di.behaviour_for_outputs_on_stop,
+                               _STOP_RESET_VALUES)),
+        ("user_program_for_stop_reset_behaviour",
+         lambda: str(di.user_program_for_stop_reset_behaviour)),
+        ("always_update_variables",
+         lambda: _enum_to_name(di.always_update_variables,
+                               _ALWAYS_UPDATE_VALUES)),
+        ("bus_cycle_task_by_name",
+         lambda: str(di.bus_cycle_task_by_name)),
+        ("bus_cycle_task_by_guid",
+         lambda: str(di.bus_cycle_task_by_guid)),
+        ("generate_force_variables",
+         lambda: bool(di.generate_force_variables)),
+        ("enable_diagnosis", lambda: bool(di.enable_diagnosis)),
+        ("show_io_warnings_as_errors",
+         lambda: bool(di.show_io_warnings_as_errors)),
+    )
+    for name, reader in readers:
+        try:
+            out[name] = reader()
+        except Exception:
+            out[name] = None
+    return out
+
+
+def cmd_device_info(project, args):
+    """Device identification, simulation mode and driver info
+    (ScriptDeviceObject stub, 3.5.4.0 / 3.5.9.0).
+
+    ops:
+      identification {device?} -> get_device_identification()
+              ({type, id, version}) + get_module_identification()
+              (read-only)
+      simulation     {device?} -> get_simulation_mode() (read-only)
+      simulation_set {device?, enabled, confirm} -> set_simulation_mode
+              (modifies the project device configuration - CONFIRM-GATED)
+      driver_info    {device?} -> ScriptDriverInfo dump (read-only):
+              bus cycle task, IO application, stop behaviour, always-
+              update mode, force-variable generation, diagnosis
+      driver_info_set {device?, confirm, bus_cycle_task?, io_application?,
+              update_ios_while_in_stop?, behaviour_for_outputs_on_stop?,
+              user_program_for_stop_reset_behaviour?,
+              always_update_variables?, generate_force_variables?,
+              enable_diagnosis?, show_io_warnings_as_errors?}
+              -> the ScriptDriverInfo setters (CONFIRM-GATED, modifies
+              the project device configuration); read-back after
+    """
+    op = args.get("op", "identification")
+    dev = _device_obj(project, args)
+
+    if op == "identification":
+        out = {"device": _device_label(dev)}
+        try:
+            did = dev.get_device_identification()
+            out["device_id"] = {"type": str(did.type), "id": str(did.id),
+                                "version": str(did.version)}
+        except Exception as exc:
+            out["device_id"] = {"error": str(exc)[:150]}
+        try:
+            out["module_id"] = str(dev.get_module_identification())
+        except Exception as exc:
+            out["module_id"] = "error: {e}".format(e=str(exc)[:140])
+        log("OK", "identification read")
+        return out
+
+    if op == "simulation":
+        try:
+            mode = bool(dev.get_simulation_mode())
+        except Exception as exc:
+            raise RuntimeError("get_simulation_mode failed: {e}".format(
+                e=exc))
+        log("OK", "simulation mode: {m}".format(m=mode))
+        return {"device": _device_label(dev), "simulation": mode}
+
+    if op == "simulation_set":
+        if not args.get("confirm"):
+            raise RuntimeError("device_info simulation_set REFUSED - "
+                               "requires args.confirm=true (it modifies "
+                               "the project device configuration)")
+        enabled = bool(args.get("enabled", False))
+        dev.set_simulation_mode(enabled)
+        try:
+            readback = bool(dev.get_simulation_mode())
+        except Exception:
+            readback = None
+        log("OK", "device {d}: simulation mode set to {m}".format(
+            d=_device_label(dev), m=enabled))
+        return {"device": _device_label(dev), "set": enabled,
+                "simulation": readback}
+
+    if op == "driver_info":
+        try:
+            di = dev.driver_info
+        except Exception as exc:
+            raise RuntimeError("driver_info not available: {e}".format(
+                e=exc))
+        out = _driver_info_dict(di)
+        log("OK", "driver info read (bus cycle task: {t})".format(
+            t=out.get("bus_cycle_task_by_name")))
+        return {"device": _device_label(dev), "driver_info": out}
+
+    if op == "driver_info_set":
+        if not args.get("confirm"):
+            raise RuntimeError("device_info driver_info_set REFUSED - "
+                               "requires args.confirm=true (it modifies "
+                               "the project device configuration)")
+        try:
+            di = dev.driver_info
+        except Exception as exc:
+            raise RuntimeError("driver_info not available: {e}".format(
+                e=exc))
+        applied = {}
+        if args.get("bus_cycle_task"):
+            task = str(args["bus_cycle_task"])
+            di.set_bus_cycle_task(task)
+            applied["bus_cycle_task"] = task
+        if args.get("io_application"):
+            name = str(args["io_application"])
+            found = project.find(name, True)
+            app_obj = None
+            for o in (found or []):
+                try:
+                    if o.is_application:
+                        app_obj = o
+                        break
+                except Exception:
+                    continue
+            if app_obj is None:
+                raise RuntimeError("no application named '{n}' in the "
+                                   "project".format(n=name))
+            di.set_io_application(app_obj)
+            applied["io_application"] = name
+        if args.get("update_ios_while_in_stop") is not None:
+            value = bool(args["update_ios_while_in_stop"])
+            di.update_ios_while_in_stop = value
+            applied["update_ios_while_in_stop"] = value
+        if args.get("behaviour_for_outputs_on_stop"):
+            value = _enum_by_names(
+                "StopResetBehaviour",
+                [str(args["behaviour_for_outputs_on_stop"])],
+                _STOP_RESET_VALUES, StopResetBehaviour)
+            di.behaviour_for_outputs_on_stop = value
+            applied["behaviour_for_outputs_on_stop"] = \
+                str(args["behaviour_for_outputs_on_stop"])
+        if args.get("user_program_for_stop_reset_behaviour") is not None:
+            value = str(args["user_program_for_stop_reset_behaviour"])
+            di.user_program_for_stop_reset_behaviour = value
+            applied["user_program_for_stop_reset_behaviour"] = value
+        if args.get("always_update_variables"):
+            value = _enum_by_names(
+                "AlwaysUpdateVariablesMode",
+                [str(args["always_update_variables"])],
+                _ALWAYS_UPDATE_VALUES, AlwaysUpdateVariablesMode)
+            di.always_update_variables = value
+            applied["always_update_variables"] = \
+                str(args["always_update_variables"])
+        if args.get("generate_force_variables") is not None:
+            value = bool(args["generate_force_variables"])
+            di.generate_force_variables = value
+            applied["generate_force_variables"] = value
+        if args.get("enable_diagnosis") is not None:
+            value = bool(args["enable_diagnosis"])
+            di.enable_diagnosis = value
+            applied["enable_diagnosis"] = value
+        if args.get("show_io_warnings_as_errors") is not None:
+            value = bool(args["show_io_warnings_as_errors"])
+            di.show_io_warnings_as_errors = value
+            applied["show_io_warnings_as_errors"] = value
+        if not applied:
+            raise RuntimeError("device_info driver_info_set needs at "
+                               "least one of bus_cycle_task, "
+                               "io_application, update_ios_while_in_stop, "
+                               "behaviour_for_outputs_on_stop, "
+                               "user_program_for_stop_reset_behaviour, "
+                               "always_update_variables, "
+                               "generate_force_variables, "
+                               "enable_diagnosis, "
+                               "show_io_warnings_as_errors")
+        log("OK", "driver info set: {a}".format(a=sorted(applied)))
+        return {"device": _device_label(dev), "applied": applied,
+                "driver_info": _driver_info_dict(di)}
+    raise RuntimeError('device_info needs args.op of "identification", '
+                       '"simulation", "simulation_set", "driver_info" or '
+                       '"driver_info_set"')
+
+
+def _param_elements(param):
+    """The data elements of one ScriptDeviceParameter.
+
+    LIVE 2026-10-22: iterating the parameter's element collection raises
+    the .NET positional-index error on this build - the parameter ITSELF
+    is a ScriptDataElement, so it doubles as the single-element
+    fallback."""
+    try:
+        elements = list(param)
+    except Exception:
+        elements = None
+    if not elements:
+        return [param]
+    return elements
+
+
 def cmd_device_params(project, args):
     """Device parameter introspection and online read/write
     (ScriptDeviceParameters stub).
@@ -3947,13 +5131,41 @@ def cmd_device_params(project, args):
         if pid is not None:
             return params.by_id(int(pid))
         if pname:
-            return params[pname]
+            # LIVE 2026-10-22: params[pname] feeds the string into the
+            # .NET POSITIONAL indexer ("Index was out of range ... index")
+            # - enumerate and match on name instead (same lesson as the
+            # library-manager lookups).
+            target = str(pname)
+            lower = target.lower()
+            fallback = None
+            for p in params:
+                try:
+                    p_name = str(p.name)
+                except Exception:
+                    continue
+                if p_name == target:
+                    return p
+                if fallback is None and p_name.lower() == lower:
+                    fallback = p
+            if fallback is not None:
+                return fallback
+            raise RuntimeError('no parameter named "{n}"'.format(n=target))
         raise RuntimeError("device_params {o} needs args.name or "
                            "args.id".format(o=op))
 
     def _element_summary(el, online, timeout):
-        entry = {"identifier": str(el.identifier),
-                 "visible_name": str(el.visible_name)}
+        entry = {}
+        try:
+            entry["identifier"] = str(el.identifier)
+        except Exception:
+            try:
+                entry["identifier"] = str(el.name)
+            except Exception:
+                entry["identifier"] = None
+        try:
+            entry["visible_name"] = str(el.visible_name)
+        except Exception:
+            pass
         for attr in ("unit", "description", "iec_type"):
             try:
                 entry[attr] = str(getattr(el, attr))
@@ -4009,7 +5221,7 @@ def cmd_device_params(project, args):
                     entry[attr] = None
             out.append(entry)
         log("OK", "device params: {n}".format(n=len(out)))
-        return {"device": _short_name(dev), "count": len(out),
+        return {"device": _device_label(dev), "count": len(out),
                 "parameters": out}
 
     if op == "read":
@@ -4022,7 +5234,7 @@ def cmd_device_params(project, args):
                 entry[attr] = str(getattr(param, attr))
             except Exception:
                 entry[attr] = None
-        for el in param:
+        for el in _param_elements(param):
             entry.setdefault("elements", []).append(
                 _element_summary(el, online_read, timeout))
         log("OK", "param {n}: read ({o})".format(
@@ -4041,7 +5253,7 @@ def cmd_device_params(project, args):
         timeout = args.get("timeout", 1000)
         target = str(args.get("element", "")).strip().lower()
         results = []
-        for el in param:
+        for el in _param_elements(param):
             if target and str(el.identifier).lower() != target:
                 continue
             try:
@@ -4082,6 +5294,336 @@ def cmd_device_params(project, args):
                 "elements": results}
     raise RuntimeError('device_params needs args.op of "list", "read" or '
                        '"write"')
+
+
+def _mapping_sets(dev, connector_id):
+    """(label, parameter set) pairs to walk for io mappings: the device
+    parameter set plus every connector's host_parameters - or just the
+    one named connector (ScriptDeviceParameters stub: mappings live on
+    ScriptDataElement.io_mapping, 3.5.8.0)."""
+    pairs = [("device", dev.device_parameters)]
+    if connector_id is not None:
+        conn = dev.connectors.by_id(int(connector_id))
+        return [("connector {c}".format(c=connector_id),
+                 conn.host_parameters)]
+    try:
+        for conn in dev.connectors:
+            try:
+                cid = str(conn.id)
+            except Exception:
+                cid = "?"
+            try:
+                pairs.append(("connector {c}".format(c=cid),
+                              conn.host_parameters))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return pairs
+
+
+def _device_label(dev):
+    """Readable device name: get_name() first (tree name, e.g.
+    'PFC200_2ETH_RS'), then the 'Name=<x>' repr slice, then the repr."""
+    try:
+        name = str(dev.get_name())
+        if name:
+            return name
+    except Exception:
+        pass
+    name = _short_name(dev)
+    if name.startswith("Name="):
+        return name[len("Name="):]
+    return name
+
+
+def _mapping_summary(el):
+    """One element -> mapping summary dict, or None when it carries no
+    mapping and is not mappable (ScriptDataElement.io_mapping is the
+    primary signal; is_mappable_io the fallback - LIVE 2026-10-22: the
+    engine's own CSV export sees mappings that is_mappable_io-gated
+    walks miss, so io_mapping is probed on every element)."""
+    try:
+        entry_id = str(el.identifier)
+    except Exception:
+        return None
+    try:
+        m = el.io_mapping
+    except Exception:
+        m = None
+    if m is None:
+        try:
+            if not el.is_mappable_io:
+                return None
+        except Exception:
+            return None
+        return {"identifier": entry_id, "io_mapping": None}
+    entry = {"identifier": entry_id}
+    try:
+        entry["visible_name"] = str(el.visible_name)
+    except Exception:
+        pass
+    md = {}
+    for name, reader in (
+            ("id", lambda: str(m.Id)),
+            ("variable", lambda: str(m.variable)),
+            ("default_variable", lambda: str(m.default_variable)),
+            ("mapping_creates_variable",
+             lambda: bool(m.mapping_creates_variable)),
+            ("maps_to_existing_variable",
+             lambda: bool(m.maps_to_existing_variable)),
+            ("automatic_iec_address",
+             lambda: bool(m.automatic_iec_address)),
+            ("manual_iec_address", lambda: str(m.manual_iec_address)),
+    ):
+        try:
+            md[name] = reader()
+        except Exception:
+            md[name] = None
+    entry["io_mapping"] = md
+    return entry
+
+
+def _walk_mapping_elements(el, out):
+    """Depth-first collection of mappable elements (struct parameters
+    carry their mappings on sub-elements)."""
+    entry = _mapping_summary(el)
+    if entry is not None:
+        out.append(entry)
+    try:
+        if el.has_sub_elements:
+            for sub in el:
+                _walk_mapping_elements(sub, out)
+    except Exception:
+        pass
+
+
+def _walkable_devices(project, args):
+    """Devices to walk for io mappings: the named device, or every
+    is_device object in the project tree (LIVE 2026-10-22: the mapped
+    channels live on the plugged modules below the root device - a
+    root-only walk found nothing while the engine's own CSV export
+    listed them)."""
+    name = str(args.get("device", "")).strip()
+    if name:
+        return [_device_obj(project, args)]
+    devs = []
+    try:
+        for obj in project.get_children(True):
+            try:
+                if obj.is_device:
+                    devs.append(obj)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    if not devs:
+        devs = [get_device(project, "")]
+    return devs
+
+
+def cmd_device_io(project, args):
+    """IO mapping inspection and CSV round-trip
+    (ScriptDeviceObject.export/import_io_mappings_as_csv, 3.5.8.0).
+
+    ops:
+      mappings    {device?, connector_id?} -> every mappable parameter
+                  element with its io_mapping (variable, default_variable,
+                  mapping_creates_variable, maps_to_existing_variable,
+                  automatic_iec_address, manual_iec_address) - read-only
+      set_mapping {device?, connector_id?, name?|id?, element?,
+                  variable?, manual_iec_address?, automatic?,
+                  all_elements?, confirm}
+                  -> set mapping.variable and/or manual_iec_address
+                  (automatic=true resets to the automatic address;
+                  CONFIRM-GATED - modifies the IO configuration).
+                  Multi-element parameters REFUSE without element=
+                  <identifier> unless all_elements=true (G-21)
+      export_csv  {device?, file?} -> export_io_mappings_as_csv (default
+                  <ECP_PROJECT_ROOT>/io-mappings/<device>_io_mappings.csv)
+      import_csv  {device?, file, confirm} -> import_io_mappings_from_csv
+                  (CONFIRM-GATED - modifies the IO configuration)
+    """
+    op = args.get("op", "mappings")
+    dev = _device_obj(project, args)
+
+    if op == "mappings":
+        out = []
+        for wdev in _walkable_devices(project, args):
+            dname = _device_label(wdev)
+            try:
+                sets = _mapping_sets(wdev, args.get("connector_id"))
+            except Exception:
+                continue
+            for label, params in sets:
+                for param in params:
+                    try:
+                        pname = str(param.name)
+                    except Exception:
+                        pname = "?"
+                    entries = []
+                    try:
+                        for el in param:
+                            _walk_mapping_elements(el, entries)
+                    except Exception:
+                        continue
+                    for e in entries:
+                        e["parameter"] = pname
+                        e["source"] = label
+                        e["device"] = dname
+                    out.extend(entries)
+        log("OK", "io mappings: {n} mappable element(s)".format(n=len(out)))
+        return {"device": _device_label(dev), "count": len(out),
+                "mappings": out}
+
+    if op == "set_mapping":
+        if not args.get("confirm"):
+            raise RuntimeError("device_io set_mapping REFUSED - requires "
+                               "args.confirm=true (it modifies the IO "
+                               "configuration)")
+        variable = args.get("variable")
+        set_auto = bool(args.get("automatic", False))
+        manual = args.get("manual_iec_address")
+        if variable is None and not set_auto and manual is None:
+            raise RuntimeError("device_io set_mapping needs args.variable "
+                               "and/or args.manual_iec_address / "
+                               "args.automatic")
+        pname = args.get("name", "")
+        pid = args.get("id")
+        target_name = str(pname).lower() if pname else ""
+        for label, params in _mapping_sets(dev, args.get("connector_id")):
+            param = None
+            try:
+                if pid is not None:
+                    param = params.by_id(int(pid))
+                elif target_name:
+                    # enumerate - params[name] hits the .NET positional
+                    # indexer live (2026-10-22, see device_params)
+                    for p in params:
+                        try:
+                            if str(p.name).lower() == target_name:
+                                param = p
+                                break
+                        except Exception:
+                            continue
+                else:
+                    continue
+            except Exception:
+                continue
+            if param is not None:
+                break
+        else:
+            raise RuntimeError("device_io set_mapping: no parameter "
+                               "matched args.name/args.id")
+        target = str(args.get("element", "")).strip().lower()
+        allow_all = bool(args.get("all_elements", False))
+        cands = []
+        for el in _param_elements(param):
+            if target and str(el.identifier).lower() != target:
+                continue
+            try:
+                m = el.io_mapping
+            except Exception:
+                m = None
+            if m is None:
+                continue
+            cands.append((el, m))
+        # LIVE 2026-10-22 (G-21): an unfiltered set on a multi-channel
+        # parameter rewrote ALL channel variables (16 xBtn* clobbered,
+        # repaired via the CSV round-trip) - require an explicit element
+        # unless the caller deliberately asks for every element.
+        if len(cands) > 1 and not target and not allow_all:
+            raise RuntimeError(
+                "set_mapping REFUSED - parameter '{p}' has {n} mappable "
+                "elements (e.g. {i}); pass element=<identifier> to set "
+                "exactly one, or all_elements=true to deliberately "
+                "apply to all".format(
+                    p=str(param.name), n=len(cands),
+                    i=", ".join(str(el.identifier)
+                                for el, _ in cands[:4])))
+        results = []
+        for el, m in cands:
+            touched = {}
+            if variable is not None:
+                m.variable = str(variable)
+                touched["variable"] = str(variable)
+            if set_auto:
+                m.manual_iec_address = None
+                touched["manual_iec_address"] = None
+            elif manual is not None:
+                m.manual_iec_address = str(manual)
+                touched["manual_iec_address"] = str(manual)
+            readback = {}
+            for name, reader in (
+                    ("variable", lambda: str(m.variable)),
+                    ("automatic_iec_address",
+                     lambda: bool(m.automatic_iec_address)),
+                    ("manual_iec_address",
+                     lambda: str(m.manual_iec_address))):
+                try:
+                    readback[name] = reader()
+                except Exception:
+                    readback[name] = None
+            results.append({"identifier": str(el.identifier),
+                            "set": touched, "readback": readback})
+        if not results:
+            raise RuntimeError("no mappable element matched "
+                               "'{t}'".format(t=target or "<any>"))
+        ok = all(r["readback"].get("variable") is not None
+                 for r in results)
+        log("OK" if ok else "WARN",
+            "mapping set on {n} element(s): {u}".format(
+                n=len(results), u=sorted(
+                    k for r in results for k in r["set"])))
+        return {"parameter": str(param.name), "ok": ok,
+                "elements": results}
+
+    if op == "export_csv":
+        path = str(args.get("file", "") or "").strip()
+        if not path:
+            base = PROJECT_ROOT or WORK_DIR
+            if not base:
+                raise RuntimeError("device_io export_csv needs args.file "
+                                   "(or ECP_PROJECT_ROOT / ECP_WORK_DIR "
+                                   "for the default location)")
+            target_dir = os.path.join(base, "io-mappings")
+            if not os.path.isdir(target_dir):
+                os.makedirs(target_dir)
+            sane = _device_label(dev)
+            if sane.startswith("Name="):
+                sane = sane[len("Name="):]
+            sane = re.sub(r"[^A-Za-z0-9_.-]+", "_", sane).strip("_")
+            path = os.path.join(
+                target_dir, "{d}_io_mappings.csv".format(d=sane or "device"))
+        path = os.path.abspath(path)
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        dev.export_io_mappings_as_csv(path)
+        if not os.path.isfile(path):
+            raise RuntimeError("export_io_mappings_as_csv reported "
+                               "success but wrote no file: {p}".format(
+                                   p=path))
+        size = os.path.getsize(path)
+        log("OK", "io mappings exported: {p} ({n} bytes)".format(
+            p=path, n=size))
+        return {"device": _device_label(dev), "file": path, "bytes": size}
+
+    if op == "import_csv":
+        if not args.get("confirm"):
+            raise RuntimeError("device_io import_csv REFUSED - requires "
+                               "args.confirm=true (it modifies the IO "
+                               "configuration)")
+        path = str(args.get("file", "") or "").strip()
+        if not path or not os.path.isfile(path):
+            raise RuntimeError("device_io import_csv needs args.file of "
+                               "an existing CSV (got '{p}')".format(p=path))
+        dev.import_io_mappings_from_csv(os.path.abspath(path))
+        log("OK", "io mappings imported from {p}".format(p=path))
+        return {"device": _device_label(dev), "file": os.path.abspath(path),
+                "imported": True}
+    raise RuntimeError('device_io needs args.op of "mappings", '
+                       '"set_mapping", "export_csv" or "import_csv"')
 
 
 def cmd_app_control(project, args):
@@ -4326,14 +5868,15 @@ KNOWN_COMMANDS = ("build", "import", "compile", "rebuild", "status", "read",
                   "write", "unforce", "download", "disconnect", "stop",
                   "state", "probe", "messages", "snapshot", "export",
                   "plcfs", "upload_source", "save_archive",
-                  "clear_messages",
+                  "clear_messages", "system",
                   "libs", "lib_find", "lib_install", "lib_uninstall",
                   "repos", "repo_add", "repo_remove", "repo_update",
                   "repo_move",
                   "login", "source_download", "prepared_values",
                   "tree", "object_create", "textual", "task_config",
                   "symbol_config", "device_scan", "device_comm",
-                  "device_params", "app_control", "project_control")
+                  "device_info", "device_params", "device_io",
+                  "app_control", "project_control")
 
 
 def run_command(request):
@@ -4407,6 +5950,10 @@ def run_command(request):
         elif cmd == "messages":
             # System-level: no project lookup needed.
             result["value"] = cmd_messages()
+            summary["ok"] = True
+        elif cmd == "system":
+            # System-level: the injected `system` object; no project.
+            result["value"] = cmd_system(args)
             summary["ok"] = True
         elif cmd == "snapshot":
             project = get_project()
@@ -4504,9 +6051,17 @@ def run_command(request):
             project = get_project()
             result["value"] = cmd_device_comm(project, args)
             summary["ok"] = True
+        elif cmd == "device_info":
+            project = get_project()
+            result["value"] = cmd_device_info(project, args)
+            summary["ok"] = True
         elif cmd == "device_params":
             project = get_project()
             result["value"] = cmd_device_params(project, args)
+            summary["ok"] = True
+        elif cmd == "device_io":
+            project = get_project()
+            result["value"] = cmd_device_io(project, args)
             summary["ok"] = True
         elif cmd == "app_control":
             project = get_project()

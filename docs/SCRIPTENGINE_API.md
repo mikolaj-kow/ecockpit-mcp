@@ -90,6 +90,30 @@ applications in the primary project.
 Build log rendering used by the executor:
 `C40: Error: Function 'mBuildState' requires exactly '3' inputs [Name=MqttPubLight Line 4, Column 1 (Impl)]`
 
+## System object (ScriptSystem stub — the injected `system` global)
+
+Implemented on feat/system-device-io (→ `ecockpit_system`,
+`ecockpit_system_ui`); live status per TESTING.md. Signatures from
+`ScriptLib\Stubs\scriptengine\ScriptSystem.pyi`.
+
+| Member | Notes |
+|---|---|
+| `ui_present`, `executable_filename` | environment facts (read) |
+| `trace` (get/set) | script-trace messages into the store |
+| `prompt_handling` (get/set) | PromptHandling flags: ForwardSimplePrompts=1, LogSimplePrompts=2, EnableTextPrompts=4, ProcessScriptPrompts=8, LogMessageKeys=16 (+NONE=0). The executor re-hardens LogSimplePrompts at EVERY command start (the relay re-execs executor.py), so a set lasts only for the current command |
+| `prompt_answers` (dict) | headless dialog simulation: key = prompt message key, value = PromptResult member (OK=0 Cancel=1 Yes=2 No=3 Retry=4 Abort=5 Ignore=6). Persists for the engine session. `system.ui.*` dialog methods IGNORE it (per stub) |
+| `abortable` / `abort_autocheck` (get/set), `aborting` (read) | script abort switches |
+| `progress_start(description, items, unit)` / `progress_step(item, completed)` / `progress_absolute(item, absolute_progress)` | GUI progress-bar chrome; no close member |
+| `ui.*` | ALL modal (error/warning/info/prompt/select_many/choose/query_string/query_password/query_credentials/open/save_file_dialog/browse_directory_dialog/reset_stored_result) — wedge hazard G-08; confirm-gated `ecockpit_system_ui` |
+| `exit(exitcode=0)` | shuts down e!COCKPIT **and the armed relay** — confirm-gated |
+| `commands`, `factories` | command/factory inventories (surfaced by the info op) |
+
+The executor keeps stub-derived value tables (`_PROMPT_HANDLING_FLAGS`,
+`_PROMPT_RESULT_VALUES`, `_PROMPT_CHOICE_VALUES`, `_SEVERITY_VALUES`) and
+prefers the injected enum globals (`PromptHandling`, `PromptResult`,
+`PromptChoice`, `Severity`) at runtime — same stand-in pattern as
+`PouType`/`DutType`.
+
 ## IScriptProject (e_projects.primary / open_project(...))
 
 - `save()` — saves at its **physical location** (`path` property).
@@ -242,6 +266,13 @@ feat/scriptlib-tools:
   `create_gvl(name)`, `create_dut(name, DutType..., baseType)`,
   `create_interface(name, baseInterfaces)`, and on POUs
   `create_method/create_property/create_action/create_transition`.
+  Special POUs (3.5.12.10): `create_pou(SpecialPouType)` — implicit-
+  check functions (check_bounds, check_pointer, check_range_unsigned/
+  signed, check_div_real_64/32, check_div_int_64/32,
+  check_l_range_unsigned/signed); the engine names the object itself.
+  Stub warning, passed through to the tool result: *adding a check
+  function will provoke a full recompile and prohibit an online
+  change*. → `ecockpit_object_create` kind=special_pou.
   **Text** (ScriptTextualObject, 3.5.6.0): `textual_declaration` /
   `textual_implementation` → ScriptTextDocument with `.text`,
   `.replace(new_text=...)` (whole-part replace). → `ecockpit_object_create`,
@@ -258,6 +289,31 @@ feat/scriptlib-tools:
   → signatures → variables (`name`, `type`, `effective_access`) —
   the full variable inventory for OPC UA / online tooling. →
   `ecockpit_symbol_config_variables` / `ecockpit_symbol_config_create`.
+  Options + schema (→ `ecockpit_symbol_config_options`):
+  `content_feature_flags` get/set (SymbolConfigContentFeatureFlags:
+  SupportOPCUA=1, IncludeComments=2, IncludeAttributes=4,
+  IncludeTypeNodeAttributes=8, IncludeExecutables=16,
+  UseEmptyNamespaceByDefault=32; Xml* variants above bit 16) with
+  `effective_content_feature_flags` (compiler-version-aware),
+  `symbol_attribute_filter_type` (none/All/SimpleIdentifiers/Prefix/
+  Regex) + `symbol_attribute_filter_data`,
+  `symbol_comment_filter_type` (none/NormalComments/DocuComments/
+  Both/PreferNormal/PreferDocu), `enable_direct_io_access` +
+  `check_effective_direct_io_access()`, and
+  `get_symbol_configuration_xsd()` → UTF-8 XSD byte array (the schema
+  published at 3s-software.com, as applicable to the current release).
+  NOTE: the stub has NO literal `export_comments` member — comment
+  export rides the IncludeComments/XmlIncludeComments flags.
+  **LIVE 2026-10-22 (G-20, G-24)**: `create_symbol_config`'s calculator
+  parameter is a real `System.Guid` (bool/None/string rejected,
+  2-arg absent — CLR `Guid.Empty` works); the live
+  SymbolCommentFilterType lacks the stub-documented `none` member AND
+  typed enum properties reject raw ints (`System.Enum.ToObject`
+  builds one). Special POUs live-proven: adding
+  `create_pou(SpecialPouType.check_range_signed)` flipped
+  `is_online_change_possible` true → **false**; removing it + rebuild
+  restored **true**. The create_* container is the APPLICATION —
+  `EScriptProject` has no create_pou (G-22).
 - **Device scan** (ScriptOnline gateway stack, 3.5.8.0):
   `online.gateways` (+`gateway_drivers`),
   `gateway.perform_network_scan()` → targets (`device_name`, `address`,
@@ -267,6 +323,25 @@ feat/scriptlib-tools:
   "ip:port")`, `set_gateway_and_address`, `set_gateway_and_device_name`,
   `get_device_communication_settings()` (with `scanned_*` fields). →
   `ecockpit_device_comm`.
+- **Device info** (ScriptDeviceObject + ScriptDriverInfo, 3.5.9.0):
+  `get_device_identification()` → DeviceId `{type, id, version}`
+  (ctor `DeviceID(iType, stId, stVersion)`, injected global),
+  `get_module_identification()` → str,
+  `get/set_simulation_mode(bool)`, `driver_info` → ScriptDriverInfo
+  (`bus_cycle_task_by_name/by_guid` + `set_bus_cycle_task(name|guid|
+  task)`, `io_application` + `set_io_application(ScriptApplication)`,
+  `update_ios_while_in_stop`, `behaviour_for_outputs_on_stop`
+  (StopResetBehaviour: KeepCurrentValues=0/SetToDefault=1/
+  ExecuteProgram=2), `user_program_for_stop_reset_behaviour`,
+  `always_update_variables` (AlwaysUpdateVariablesMode: Disabled=1/
+  OnlyIfUnused=2/AlwaysInBusCycle=3), `generate_force_variables`,
+  `enable_diagnosis`, `show_io_warnings_as_errors`,
+  `can_set_io_application`). → `ecockpit_device_info` (setters
+  confirm-gated). **LIVE 2026-10-22**: identification
+  (PFC200_2ETH_RS → `{4096, "1006 1201", 5.17.3.10}`), simulation and
+  the driver-info dump verified; `always_update_variables` reads **0**
+  on this device — not in the stub enum (G-18); `factories` (system
+  info) is not enumerable live.
 - **Device parameters** (ScriptDeviceParameters, 3.5.4.0):
   `device.device_parameters` / `device.connectors.by_id(id).
   host_parameters` → parameter set; elements expose `identifier`,
@@ -274,6 +349,25 @@ feat/scriptlib-tools:
   `write_online_value(value)`, enums (`allowed_values`), ranges,
   struct sub-elements. → `ecockpit_device_params` (write is
   confirm-gated, PLC-touching).
+- **IO mappings** (ScriptDeviceParameters 3.5.8.0 +
+  ScriptDeviceObject): elements carry `is_mappable_io` →
+  `io_mapping` (ScriptIoMapping: `variable` get/set — unqualified
+  creates a new variable, qualified maps to an existing one;
+  `default_variable`; `mapping_creates_variable`;
+  `maps_to_existing_variable`; `automatic_iec_address` get/set;
+  `manual_iec_address` get/set — setting an address switches auto
+  off, setting None switches it back on; the GETTER returns the
+  automatic address while auto is on) and
+  `dev.export_io_mappings_as_csv(file_path)` /
+  `dev.import_io_mappings_from_csv(file_path)` (absolute host paths).
+  → `ecockpit_device_io` (mappings inspection read-only;
+  set_mapping / import_csv confirm-gated). **LIVE 2026-10-22**:
+  export verified (10.9 KB CSV, module channels included);
+  `export_io_mappings_as_csv` sees mappings a root-only script walk
+  misses — mappings live on the plugged modules (G-19), so the tool
+  walks every `is_device` in the tree (153 elements on s4). The
+  mapped elements' `Id` reads -1 and connector `.id` is not readable
+  live (guarded to "?").
 - **Application** (ScriptApplication, 3.5.10.0 fields): `is_uptodate`,
   `is_online_change_possible`, `create_boot_application(path,
   update_compile_info=False, write_visu_files=False)` (offline boot
