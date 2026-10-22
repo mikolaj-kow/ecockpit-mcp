@@ -20,10 +20,16 @@ owner answering, and `system exit` as the session's final command (see
 TESTING.md). The owner's manual snapshot compiles GREEN — the 5
 C140/C418 errors were the old GUI session's in-memory state (resolved);
 the in-session "Symbols" symbol config went with that rollback.
-REMAINING: D2 (PLC-touching batch) and D3-follow-up (keep a special_pou)
-on per-op owner go, F (machine-wide), and the prompt_answers end-to-end
-(deferred into D2: plc_put without force is the identified prompt
-trigger). Snapshot naming fixed: `s4-v3.10.0-pre_<version>.ecp`.
+REMAINING: D2 rest (variable write + unforce on the RUNNING app, PLC
+file-op batch, prompt_answers end-to-end via plc_put without force,
+stop/reset — deliberately last), D3-follow-up (keep a special_pou),
+F (machine-wide). DONE in the D2 ramp: state/prepared_values (in-sync
+and out-of-sync guard paths), download + start, **ONLINE CHANGE**
+(body edit → login Try → app stayed running), device_params online
+read (times out on parameters even running — target limitation).
+The McpOnlineProbe FB is intentionally left in the project (the
+online-change test object; remove via GUI or a later round).
+Snapshot naming fixed: `s4-v3.10.0-pre_<version>.ecp`.
 
 **INCIDENT (2026-10-22, G-26, FIXED):** the first D2 ramp (state /
 prepared_values / plcfs ls — all intended read-only) DEPLOYED the open
