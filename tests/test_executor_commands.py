@@ -775,17 +775,20 @@ class FakeIoElement(object):
 
 
 class FakeParamSet(object):
-    """Parameter set: iterable of FakeParam + by-name lookup."""
+    """Parameter set: iterable of FakeParam. String indexing FAILS like
+    the live .NET set (positional indexer, 2026-10-22) - lookups must
+    enumerate."""
 
     def __init__(self, params):
         self._params = [FakeParam(name, els) for name, els in params]
-        self._by_name = dict((p.name, p) for p in self._params)
 
     def __iter__(self):
         return iter(self._params)
 
     def __getitem__(self, name):
-        return self._by_name[name]
+        raise IndexError("Index was out of range. Must be non-negative "
+                         "and less than the size of the collection. "
+                         "Parameter name: index")
 
 
 class FakeParam(object):

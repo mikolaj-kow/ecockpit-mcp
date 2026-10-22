@@ -4895,7 +4895,25 @@ def cmd_device_params(project, args):
         if pid is not None:
             return params.by_id(int(pid))
         if pname:
-            return params[pname]
+            # LIVE 2026-10-22: params[pname] feeds the string into the
+            # .NET POSITIONAL indexer ("Index was out of range ... index")
+            # - enumerate and match on name instead (same lesson as the
+            # library-manager lookups).
+            target = str(pname)
+            lower = target.lower()
+            fallback = None
+            for p in params:
+                try:
+                    p_name = str(p.name)
+                except Exception:
+                    continue
+                if p_name == target:
+                    return p
+                if fallback is None and p_name.lower() == lower:
+                    fallback = p
+            if fallback is not None:
+                return fallback
+            raise RuntimeError('no parameter named "{n}"'.format(n=target))
         raise RuntimeError("device_params {o} needs args.name or "
                            "args.id".format(o=op))
 
@@ -5223,20 +5241,31 @@ def cmd_device_io(project, args):
                                "args.automatic")
         pname = args.get("name", "")
         pid = args.get("id")
+        target_name = str(pname).lower() if pname else ""
         for label, params in _mapping_sets(dev, args.get("connector_id")):
+            param = None
             try:
                 if pid is not None:
                     param = params.by_id(int(pid))
-                elif pname:
-                    param = params[pname]
+                elif target_name:
+                    # enumerate - params[name] hits the .NET positional
+                    # indexer live (2026-10-22, see device_params)
+                    for p in params:
+                        try:
+                            if str(p.name).lower() == target_name:
+                                param = p
+                                break
+                        except Exception:
+                            continue
                 else:
                     continue
             except Exception:
                 continue
-            break
+            if param is not None:
+                break
         else:
-            raise RuntimeError("device_io set_mapping needs args.name or "
-                               "args.id (of a parameter)")
+            raise RuntimeError("device_io set_mapping: no parameter "
+                               "matched args.name/args.id")
         target = str(args.get("element", "")).strip().lower()
         results = []
         for el in param:
