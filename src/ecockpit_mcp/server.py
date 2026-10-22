@@ -43,7 +43,8 @@ import random
 import threading
 import time
 
-from mcp.server.mcpserver import MCPServer
+import anyio
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import ToolAnnotations
 
 
@@ -266,6 +267,95 @@ def _run(cmd, args=None, timeout_s=None):
     return result
 
 
+async def _report_progress(ctx, elapsed_s, timeout_s, cmd):
+    """Best-effort MCP progress notification. A progress-incapable or
+    disconnecting client must never fail the underlying command."""
+    try:
+        await ctx.report_progress(
+            round(float(elapsed_s), 1),
+            float(timeout_s),
+            "e!COCKPIT engine: '{c}' running".format(c=cmd),
+        )
+    except Exception:
+        pass
+
+
+async def _send_command_async(
+    cmd, args, timeout_s, ctx=None, poll_s=0.25, progress_every_s=2.0
+):
+    """Async twin of _send_command: same id-matched file protocol, but
+    the wait runs on the event loop (no worker thread parked for the
+    whole build) and MCP progress notifications go out while the engine
+    works (progress = elapsed seconds against the timeout). ctx=None
+    skips progress (direct calls, tests)."""
+    while not _SEND_LOCK.acquire(blocking=False):  # one command at a time
+        await anyio.sleep(poll_s)
+    try:
+        _require_heartbeat()
+        if not os.path.isdir(CFG.tmp_dir):
+            os.makedirs(CFG.tmp_dir)
+        rid = "{ts}-{rnd}".format(
+            ts=time.strftime("%Y%m%d-%H%M%S"), rnd=random.randint(0, 99999)
+        )
+        request = {"id": rid, "cmd": cmd, "args": args}
+        tmp = "{}.{}.tmp".format(CFG.cmd_file, rid)
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            json.dump(request, fh, separators=(",", ":"))
+        try:
+            os.remove(CFG.result_file)
+        except FileNotFoundError:
+            pass
+        os.replace(tmp, CFG.cmd_file)  # atomic on the same volume
+
+        deadline = time.time() + timeout_s
+        last_report = time.time()
+        while True:
+            if os.path.isfile(CFG.result_file):
+                try:
+                    with open(CFG.result_file, "r", encoding="utf-8") as fh:
+                        result = json.load(fh)
+                    if result.get("id") == rid:
+                        if ctx is not None:
+                            await _report_progress(
+                                ctx,
+                                time.time() - (deadline - timeout_s),
+                                timeout_s,
+                                cmd,
+                            )
+                        return result
+                except (ValueError, OSError):
+                    pass  # partial/unrelated - keep waiting
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(
+                    "no result for command '{}' (id {}) after {} s - the server "
+                    "may be busy with a long command".format(cmd, rid, timeout_s)
+                )
+            now = time.time()
+            if ctx is not None and now - last_report >= progress_every_s:
+                await _report_progress(ctx, timeout_s - remaining, timeout_s, cmd)
+                last_report = now
+            await anyio.sleep(poll_s)
+    finally:
+        _SEND_LOCK.release()
+
+
+async def _run_async(cmd, args=None, timeout_s=None, ctx=None, **poll_kwargs):
+    """Async twin of _run for the long-running tools (default timeout
+    >= 300 s): emits MCP progress notifications while waiting (see
+    _send_command_async) instead of leaving the client blind."""
+    args = args or {}
+    timeout_s = timeout_s or _TIMEOUTS.get(cmd, _DEFAULT_TIMEOUT)
+    result = await _send_command_async(cmd, args, timeout_s, ctx, **poll_kwargs)
+    if not result.get("summary_line"):
+        result["summary_line"] = "{c} -> {o}".format(
+            c=cmd, o="OK" if result.get("ok") else "FAILED"
+        )
+    if not result.get("ok"):
+        result["log_tail"] = _log_tail(result.get("log", ""), 30)
+    return result
+
+
 # --------------------------------------------------------------------------
 # MCP server + tools
 # --------------------------------------------------------------------------
@@ -285,7 +375,11 @@ mcp = MCPServer(
         "(ecockpit_lib_uninstall, ecockpit_repo_add/remove/update) change "
         "machine-wide library state and are confirm-gated the same way; "
         "ecockpit_libs, "
-        "ecockpit_lib_find and ecockpit_repos are read-only."
+        "ecockpit_lib_find and ecockpit_repos are read-only. "
+        "Long-running tools (build/import/compile/rebuild, export, "
+        "download/login family, symbol config, device scan, project "
+        "lifecycle) emit MCP progress notifications (elapsed vs timeout) "
+        "while the engine works instead of leaving the call silent."
     ),
 )
 
@@ -323,14 +417,15 @@ def ecockpit_server_status() -> str:
     "how many harvest lines come back inline for big "
     "failures."
 )
-def ecockpit_build(
+async def ecockpit_build(
     skip_import: bool = False,
     all_messages: bool = False,
     harvest_lines: int = 60,
     timeout_s: int = 900,
+    ctx: Context | None = None,
 ) -> str:
     return json.dumps(
-        _run(
+        await _run_async(
             "build",
             {
                 "skip_import": bool(skip_import),
@@ -347,8 +442,8 @@ def ecockpit_build(
     description="Re-import every Application.*.xml into the open e!COCKPIT "
     "project and delete stale POUs - no compile. Takes ~15-30 s."
 )
-def ecockpit_import(timeout_s: int = 600) -> str:
-    return json.dumps(_run("import", {}, timeout_s), indent=2)
+async def ecockpit_import(timeout_s: int = 600, ctx: Context | None = None) -> str:
+    return json.dumps(await _run_async("import", {}, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -359,9 +454,11 @@ def ecockpit_import(timeout_s: int = 600) -> str:
     "plcopensrc source tree only when you intentionally want "
     "to update the sources."
 )
-def ecockpit_export(dir: str = "", timeout_s: int = 600) -> str:
+async def ecockpit_export(
+    dir: str = "", timeout_s: int = 600, ctx: Context | None = None
+) -> str:
     args: dict[str, object] = {"dir": dir} if dir else {}
-    return json.dumps(_run("export", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("export", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -370,11 +467,14 @@ def ecockpit_export(dir: str = "", timeout_s: int = 600) -> str:
     "bypasses). harvest_lines (default 60) raises how many "
     "harvest lines come back inline."
 )
-def ecockpit_compile(
-    all_messages: bool = False, harvest_lines: int = 60, timeout_s: int = 900
+async def ecockpit_compile(
+    all_messages: bool = False,
+    harvest_lines: int = 60,
+    timeout_s: int = 900,
+    ctx: Context | None = None,
 ) -> str:
     return json.dumps(
-        _run(
+        await _run_async(
             "compile",
             {"all_messages": bool(all_messages), "harvest_lines": int(harvest_lines)},
             timeout_s,
@@ -392,11 +492,14 @@ def ecockpit_compile(
     "harvest_lines (default 60) raises how many harvest lines "
     "come back inline."
 )
-def ecockpit_rebuild(
-    all_messages: bool = False, harvest_lines: int = 60, timeout_s: int = 1200
+async def ecockpit_rebuild(
+    all_messages: bool = False,
+    harvest_lines: int = 60,
+    timeout_s: int = 1200,
+    ctx: Context | None = None,
 ) -> str:
     return json.dumps(
-        _run(
+        await _run_async(
             "rebuild",
             {"all_messages": bool(all_messages), "harvest_lines": int(harvest_lines)},
             timeout_s,
@@ -663,7 +766,7 @@ def ecockpit_system(
     "session; expect the call to time out (no result file "
     "is written).",
 )
-def ecockpit_system_ui(
+async def ecockpit_system_ui(
     op: str,
     method: str = "",
     message: str = "",
@@ -691,6 +794,7 @@ def ecockpit_system_ui(
     code: int = 0,
     confirm: bool = False,
     timeout_s: int = 600,
+    ctx: Context | None = None,
 ) -> str:
     if op not in ("ui", "exit"):
         raise ValueError("op must be ui|exit")
@@ -715,7 +819,9 @@ def ecockpit_system_ui(
     args: dict[str, object] = {"op": op, "confirm": True}
     if op == "exit":
         args["code"] = int(code)
-        return json.dumps(_run("system", args, min(int(timeout_s), 30)), indent=2)
+        return json.dumps(
+            await _run_async("system", args, min(int(timeout_s), 30)), indent=2
+        )
     if not method:
         raise ValueError("method required for op=ui")
     args["method"] = method
@@ -754,7 +860,7 @@ def ecockpit_system_ui(
         args[k] = flag
     if filter_index is not None:
         args["filter_index"] = int(filter_index)
-    return json.dumps(_run("system", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("system", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -765,9 +871,9 @@ def ecockpit_system_ui(
     "ECP_VERSION_POU source XML > dotted number in the "
     "project filename."
 )
-def ecockpit_snapshot(version: str = "") -> str:
+async def ecockpit_snapshot(version: str = "", ctx: Context | None = None) -> str:
     args: dict[str, object] = {"version": version} if version else {}
-    return json.dumps(_run("snapshot", args), indent=2)
+    return json.dumps(await _run_async("snapshot", args), indent=2)
 
 
 @mcp.tool(
@@ -813,13 +919,16 @@ def ecockpit_stop(confirm: bool = False, device: str = "", timeout_s: int = 120)
     "created by online.create_online_device - the "
     "project-tree device object has no file API."
 )
-def ecockpit_plc_ls(
-    directory: str = "/", device: str = "", timeout_s: int = 300
+async def ecockpit_plc_ls(
+    directory: str = "/",
+    device: str = "",
+    timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     args: dict[str, object] = {"op": "ls", "remote": directory or "/"}
     if device:
         args["device"] = device
-    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("plcfs", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -827,15 +936,19 @@ def ecockpit_plc_ls(
     "on the PLC). remote is the PLC path, local the host "
     "destination (overwrites)."
 )
-def ecockpit_plc_get(
-    remote: str, local: str, device: str = "", timeout_s: int = 300
+async def ecockpit_plc_get(
+    remote: str,
+    local: str,
+    device: str = "",
+    timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     if not remote or not local:
         raise ValueError("remote (PLC path) and local (host path) required")
     args: dict[str, object] = {"op": "get", "remote": remote, "local": local}
     if device:
         args["device"] = device
-    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("plcfs", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -847,13 +960,14 @@ def ecockpit_plc_get(
     "(overwrites). Pass confirm=true, never without an "
     "explicit owner instruction.",
 )
-def ecockpit_plc_put(
+async def ecockpit_plc_put(
     local: str,
     remote: str,
     device: str = "",
     force: bool = True,
     confirm: bool = False,
     timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     if not local or not remote:
         raise ValueError("local (host path) and remote (PLC path) required")
@@ -877,7 +991,7 @@ def ecockpit_plc_put(
     }
     if device:
         args["device"] = device
-    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("plcfs", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -888,8 +1002,12 @@ def ecockpit_plc_put(
     "file on the PLC file system. Pass confirm=true, never "
     "without an explicit owner instruction.",
 )
-def ecockpit_plc_rm(
-    remote: str, device: str = "", confirm: bool = False, timeout_s: int = 300
+async def ecockpit_plc_rm(
+    remote: str,
+    device: str = "",
+    confirm: bool = False,
+    timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     if not remote:
         raise ValueError("remote (PLC path) required")
@@ -907,7 +1025,7 @@ def ecockpit_plc_rm(
     args: dict[str, object] = {"op": "rm", "remote": remote, "confirm": True}
     if device:
         args["device"] = device
-    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("plcfs", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -916,13 +1034,16 @@ def ecockpit_plc_rm(
     "recover what is actually running). path defaults to "
     "<work dir>/plc_source_upload.projectarchive."
 )
-def ecockpit_upload_source(
-    path: str = "", device: str = "", timeout_s: int = 600
+async def ecockpit_upload_source(
+    path: str = "",
+    device: str = "",
+    timeout_s: int = 600,
+    ctx: Context | None = None,
 ) -> str:
     args: dict[str, object] = {"path": path} if path else {}
     if device:
         args["device"] = device
-    return json.dumps(_run("upload_source", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("upload_source", args, timeout_s), indent=2)
 
 
 # NOTE: no ecockpit_save_archive tool on purpose - e!COCKPIT 11.3.1.0
@@ -942,7 +1063,9 @@ def ecockpit_upload_source(
     "open project, and starts it. Pass confirm=true, never "
     "without an explicit owner instruction.",
 )
-def ecockpit_download(confirm: bool = False, timeout_s: int = 600) -> str:
+async def ecockpit_download(
+    confirm: bool = False, timeout_s: int = 600, ctx: Context | None = None
+) -> str:
     if not confirm:
         return json.dumps(
             {
@@ -954,7 +1077,9 @@ def ecockpit_download(confirm: bool = False, timeout_s: int = 600) -> str:
             },
             indent=2,
         )
-    return json.dumps(_run("download", {"confirm": True}, timeout_s), indent=2)
+    return json.dumps(
+        await _run_async("download", {"confirm": True}, timeout_s), indent=2
+    )
 
 
 @mcp.tool(
@@ -1013,7 +1138,9 @@ def ecockpit_login(
     "NREs on unsaved changes otherwise). Pass confirm=true, "
     "never without an explicit owner instruction.",
 )
-def ecockpit_source_download(confirm: bool = False, timeout_s: int = 300) -> str:
+async def ecockpit_source_download(
+    confirm: bool = False, timeout_s: int = 300, ctx: Context | None = None
+) -> str:
     if not confirm:
         return json.dumps(
             {
@@ -1025,7 +1152,9 @@ def ecockpit_source_download(confirm: bool = False, timeout_s: int = 300) -> str
             },
             indent=2,
         )
-    return json.dumps(_run("source_download", {"confirm": True}, timeout_s), indent=2)
+    return json.dumps(
+        await _run_async("source_download", {"confirm": True}, timeout_s), indent=2
+    )
 
 
 @mcp.tool(
@@ -1124,7 +1253,7 @@ def ecockpit_tree(
     "Pass confirm=true, never without an explicit owner "
     "instruction.",
 )
-def ecockpit_object_create(
+async def ecockpit_object_create(
     kind: str,
     name: str = "",
     parent: str = "",
@@ -1136,6 +1265,7 @@ def ecockpit_object_create(
     implementation: str = "",
     confirm: bool = False,
     timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     if not confirm:
         return json.dumps(
@@ -1158,7 +1288,7 @@ def ecockpit_object_create(
         }
         if parent:
             args["parent"] = parent
-        return json.dumps(_run("object_create", args, timeout_s), indent=2)
+        return json.dumps(await _run_async("object_create", args, timeout_s), indent=2)
     if not kind or not name:
         raise ValueError("kind and name required")
     args = {"kind": kind, "name": name, "confirm": True}
@@ -1174,7 +1304,7 @@ def ecockpit_object_create(
         args["declaration"] = declaration
     if implementation:
         args["implementation"] = implementation
-    return json.dumps(_run("object_create", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("object_create", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -1324,13 +1454,16 @@ def ecockpit_task_create(
     "symbol configuration object must exist (ecockpit_"
     "symbol_config_create).",
 )
-def ecockpit_symbol_config_variables(
-    application: str = "", compile: bool = True, timeout_s: int = 900
+async def ecockpit_symbol_config_variables(
+    application: str = "",
+    compile: bool = True,
+    timeout_s: int = 900,
+    ctx: Context | None = None,
 ) -> str:
     args: dict[str, object] = {"compile": bool(compile)}
     if application:
         args["application"] = application
-    return json.dumps(_run("symbol_config", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("symbol_config", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -1391,7 +1524,7 @@ def ecockpit_symbol_config_create(
     "Symbolconfiguration.xsd). The symbol configuration "
     "object must exist (ecockpit_symbol_config_create).",
 )
-def ecockpit_symbol_config_options(
+async def ecockpit_symbol_config_options(
     op: str = "config",
     application: str = "",
     content_feature_flags: str = "",
@@ -1401,6 +1534,7 @@ def ecockpit_symbol_config_options(
     file: str = "",
     confirm: bool = False,
     timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     if op not in ("config", "config_set", "xsd"):
         raise ValueError("op must be config|config_set|xsd")
@@ -1442,7 +1576,7 @@ def ecockpit_symbol_config_options(
         args["confirm"] = True
     if op == "xsd" and file:
         args["file"] = file
-    return json.dumps(_run("symbol_config", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("symbol_config", args, timeout_s), indent=2)
 
 
 # --------------------------------------------------------------------------
@@ -1462,12 +1596,13 @@ def ecockpit_symbol_config_options(
     "CODESYS address from an IP via find_address_by_ip. "
     "Read-only.",
 )
-def ecockpit_device_scan(
+async def ecockpit_device_scan(
     op: str = "gateways",
     gateway: str = "",
     ip: str = "",
     port: int = 11740,
     timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     if op not in ("gateways", "scan", "address"):
         raise ValueError("op must be gateways|scan|address")
@@ -1479,7 +1614,7 @@ def ecockpit_device_scan(
     if op == "address":
         args["ip"] = ip
         args["port"] = int(port)
-    return json.dumps(_run("device_scan", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("device_scan", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -1646,7 +1781,7 @@ def ecockpit_device_info(
     "confirm}: DESTRUCTIVE - import IO mappings from a CSV "
     "(modifies the IO configuration).",
 )
-def ecockpit_device_io(
+async def ecockpit_device_io(
     op: str = "mappings",
     device: str = "",
     connector_id: int | None = None,
@@ -1660,6 +1795,7 @@ def ecockpit_device_io(
     file: str = "",
     confirm: bool = False,
     timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     if op not in ("mappings", "set_mapping", "export_csv", "import_csv"):
         raise ValueError("op must be mappings|set_mapping|export_csv|import_csv")
@@ -1708,7 +1844,7 @@ def ecockpit_device_io(
         if not file:
             raise ValueError("file required for op=import_csv")
         args["file"] = file
-    return json.dumps(_run("device_io", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("device_io", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -1807,7 +1943,7 @@ def ecockpit_app_status(application: str = "", timeout_s: int = 120) -> str:
     "modify or touch the PLC/project; pass confirm=true, "
     "never without an explicit owner instruction.",
 )
-def ecockpit_app_control(
+async def ecockpit_app_control(
     op: str,
     application: str = "",
     path: str = "",
@@ -1815,6 +1951,7 @@ def ecockpit_app_control(
     force_kill: bool = False,
     confirm: bool = False,
     timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     if op not in ("status", "activate", "boot", "start", "reset"):
         raise ValueError("op must be status|activate|boot|start|reset")
@@ -1839,7 +1976,7 @@ def ecockpit_app_control(
     if op == "reset":
         args["option"] = reset_option
         args["force_kill"] = bool(force_kill)
-    return json.dumps(_run("app_control", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("app_control", args, timeout_s), indent=2)
 
 
 @mcp.tool(
@@ -1854,7 +1991,7 @@ def ecockpit_app_control(
     "unsaved changes), op=info_set (project metadata). "
     "These swap or mutate the GUI's project session.",
 )
-def ecockpit_project_control(
+async def ecockpit_project_control(
     op: str,
     path: str = "",
     archive: str = "",
@@ -1867,6 +2004,7 @@ def ecockpit_project_control(
     description: str = "",
     confirm: bool = False,
     timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     if op not in (
         "info",
@@ -1915,7 +2053,7 @@ def ecockpit_project_control(
             }.get(key, "")
             if value:
                 args[key] = value
-    return json.dumps(_run("project_control", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("project_control", args, timeout_s), indent=2)
 
 
 # --------------------------------------------------------------------------
@@ -1936,7 +2074,7 @@ def ecockpit_project_control(
     "deletes recursively). ls needs no confirm; the others "
     "never without an explicit owner instruction.",
 )
-def ecockpit_plc_fs_ops(
+async def ecockpit_plc_fs_ops(
     op: str,
     remote: str,
     new_name: str = "",
@@ -1944,6 +2082,7 @@ def ecockpit_plc_fs_ops(
     device: str = "",
     confirm: bool = False,
     timeout_s: int = 300,
+    ctx: Context | None = None,
 ) -> str:
     if op not in ("ls", "rename", "mkdir", "rmdir"):
         raise ValueError("op must be ls|rename|mkdir|rmdir")
@@ -1971,7 +2110,7 @@ def ecockpit_plc_fs_ops(
         args["recursive"] = bool(recursive)
     if device:
         args["device"] = device
-    return json.dumps(_run("plcfs", args, timeout_s), indent=2)
+    return json.dumps(await _run_async("plcfs", args, timeout_s), indent=2)
 
 
 # --------------------------------------------------------------------------
