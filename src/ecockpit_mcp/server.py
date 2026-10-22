@@ -40,7 +40,6 @@ import io
 import json
 import os
 import random
-import sys
 import threading
 import time
 
@@ -173,9 +172,11 @@ _DEFAULT_TIMEOUT = 300
 
 _SEND_LOCK = threading.Lock()
 
-REARM_HINT = ("e!COCKPIT command relay is not running. Arm it in the open "
-              "e!COCKPIT GUI: FILE -> Scripting -> Execute script file -> "
-              "relay.py (from this ecockpit-mcp checkout)")
+REARM_HINT = (
+    "e!COCKPIT command relay is not running. Arm it in the open "
+    "e!COCKPIT GUI: FILE -> Scripting -> Execute script file -> "
+    "relay.py (from this ecockpit-mcp checkout)"
+)
 
 
 class NotArmedError(RuntimeError):
@@ -203,8 +204,8 @@ def _require_heartbeat(max_wait=45.0, fresh=12.0):
             return
         time.sleep(0.5)
     raise NotArmedError(
-        "no fresh heartbeat (age {:.0f}s) - {}".format(
-            _heartbeat_age(), REARM_HINT))
+        "no fresh heartbeat (age {:.0f}s) - {}".format(_heartbeat_age(), REARM_HINT)
+    )
 
 
 def _send_command(cmd, args, timeout_s):
@@ -214,8 +215,8 @@ def _send_command(cmd, args, timeout_s):
         if not os.path.isdir(CFG.tmp_dir):
             os.makedirs(CFG.tmp_dir)
         rid = "{ts}-{rnd}".format(
-            ts=time.strftime("%Y%m%d-%H%M%S"),
-            rnd=random.randint(0, 99999))
+            ts=time.strftime("%Y%m%d-%H%M%S"), rnd=random.randint(0, 99999)
+        )
         request = {"id": rid, "cmd": cmd, "args": args}
         tmp = "{}.{}.tmp".format(CFG.cmd_file, rid)
         with open(tmp, "w", encoding="utf-8", newline="") as fh:
@@ -239,7 +240,8 @@ def _send_command(cmd, args, timeout_s):
             time.sleep(0.25)
         raise TimeoutError(
             "no result for command '{}' (id {}) after {} s - the server may "
-            "be busy with a long command".format(cmd, rid, timeout_s))
+            "be busy with a long command".format(cmd, rid, timeout_s)
+        )
 
 
 def _log_tail(path, lines=30):
@@ -257,7 +259,8 @@ def _run(cmd, args=None, timeout_s=None):
     result = _send_command(cmd, args, timeout_s)
     if not result.get("summary_line"):
         result["summary_line"] = "{c} -> {o}".format(
-            c=cmd, o="OK" if result.get("ok") else "FAILED")
+            c=cmd, o="OK" if result.get("ok") else "FAILED"
+        )
     if not result.get("ok"):
         result["log_tail"] = _log_tail(result.get("log", ""), 30)
     return result
@@ -282,12 +285,15 @@ mcp = MCPServer(
         "(ecockpit_lib_uninstall, ecockpit_repo_add/remove/update) change "
         "machine-wide library state and are confirm-gated the same way; "
         "ecockpit_libs, "
-        "ecockpit_lib_find and ecockpit_repos are read-only."))
+        "ecockpit_lib_find and ecockpit_repos are read-only."
+    ),
+)
 
 
 @mcp.tool(
     description="Check whether the in-instance e!COCKPIT command relay is "
-                "armed (heartbeat freshness) and show the last command result.")
+    "armed (heartbeat freshness) and show the last command result."
+)
 def ecockpit_server_status() -> str:
     age = _heartbeat_age()
     armed = age <= 12
@@ -306,86 +312,116 @@ def ecockpit_server_status() -> str:
 
 @mcp.tool(
     description="Build the PLC project inside the open e!COCKPIT: "
-                "re-import all Application.*.xml from the automation "
-                "project's plcopensrc/ tree, delete stale POUs "
-                "(REMOVED_POUS), compile. Takes ~30-60 s. Returns "
-                "structured compiler diagnostics (harvest) with C-code, "
-                "severity, POU and line on failure. Codes listed in "
-                "IGNORE_CODES (.env, e.g. \"C543, C100\") are filtered from "
-                "harvest and counts; set all_messages=true to bypass the "
-                "filter for this run. harvest_lines (default 60) raises "
-                "how many harvest lines come back inline for big "
-                "failures.")
-def ecockpit_build(skip_import: bool = False, all_messages: bool = False,
-                   harvest_lines: int = 60, timeout_s: int = 900) -> str:
-    return json.dumps(_run("build", {"skip_import": bool(skip_import),
-                                     "all_messages": bool(all_messages),
-                                     "harvest_lines": int(harvest_lines)},
-                           timeout_s), indent=2)
+    "re-import all Application.*.xml from the automation "
+    "project's plcopensrc/ tree, delete stale POUs "
+    "(REMOVED_POUS), compile. Takes ~30-60 s. Returns "
+    "structured compiler diagnostics (harvest) with C-code, "
+    "severity, POU and line on failure. Codes listed in "
+    'IGNORE_CODES (.env, e.g. "C543, C100") are filtered from '
+    "harvest and counts; set all_messages=true to bypass the "
+    "filter for this run. harvest_lines (default 60) raises "
+    "how many harvest lines come back inline for big "
+    "failures."
+)
+def ecockpit_build(
+    skip_import: bool = False,
+    all_messages: bool = False,
+    harvest_lines: int = 60,
+    timeout_s: int = 900,
+) -> str:
+    return json.dumps(
+        _run(
+            "build",
+            {
+                "skip_import": bool(skip_import),
+                "all_messages": bool(all_messages),
+                "harvest_lines": int(harvest_lines),
+            },
+            timeout_s,
+        ),
+        indent=2,
+    )
 
 
 @mcp.tool(
     description="Re-import every Application.*.xml into the open e!COCKPIT "
-                "project and delete stale POUs - no compile. Takes ~15-30 s.")
+    "project and delete stale POUs - no compile. Takes ~15-30 s."
+)
 def ecockpit_import(timeout_s: int = 600) -> str:
     return json.dumps(_run("import", {}, timeout_s), indent=2)
 
 
 @mcp.tool(
     description="Export the application objects of the open project back "
-                "to PLCopen XML (reverse of import; IExportReporter "
-                "captures export errors). dir defaults to "
-                "<project root>/plcopensrc-export - point it at your "
-                "plcopensrc source tree only when you intentionally want "
-                "to update the sources.")
+    "to PLCopen XML (reverse of import; IExportReporter "
+    "captures export errors). dir defaults to "
+    "<project root>/plcopensrc-export - point it at your "
+    "plcopensrc source tree only when you intentionally want "
+    "to update the sources."
+)
 def ecockpit_export(dir: str = "", timeout_s: int = 600) -> str:
-    args = {"dir": dir} if dir else {}
+    args: dict[str, object] = {"dir": dir} if dir else {}
     return json.dumps(_run("export", args, timeout_s), indent=2)
 
 
 @mcp.tool(
     description="Compile only (no XML re-import). Same diagnostics and "
-                "IGNORE_CODES filtering as build (all_messages=true "
-                "bypasses). harvest_lines (default 60) raises how many "
-                "harvest lines come back inline.")
-def ecockpit_compile(all_messages: bool = False, harvest_lines: int = 60,
-                     timeout_s: int = 900) -> str:
-    return json.dumps(_run("compile", {"all_messages": bool(all_messages),
-                                       "harvest_lines": int(harvest_lines)},
-                           timeout_s), indent=2)
+    "IGNORE_CODES filtering as build (all_messages=true "
+    "bypasses). harvest_lines (default 60) raises how many "
+    "harvest lines come back inline."
+)
+def ecockpit_compile(
+    all_messages: bool = False, harvest_lines: int = 60, timeout_s: int = 900
+) -> str:
+    return json.dumps(
+        _run(
+            "compile",
+            {"all_messages": bool(all_messages), "harvest_lines": int(harvest_lines)},
+            timeout_s,
+        ),
+        indent=2,
+    )
 
 
 @mcp.tool(
     description="FULL rebuild (app.rebuild() - scripted Build -> Clean): "
-                "compile from scratch without XML re-import. Fixes grown "
-                "GVL arrays failing incremental builds with C0106 'out of "
-                "global data memory'. Slower than compile (~1-3 min). Same "
-                "diagnostics and IGNORE_CODES filtering as build. "
-                "harvest_lines (default 60) raises how many harvest lines "
-                "come back inline.")
-def ecockpit_rebuild(all_messages: bool = False, harvest_lines: int = 60,
-                     timeout_s: int = 1200) -> str:
-    return json.dumps(_run("rebuild", {"all_messages": bool(all_messages),
-                                       "harvest_lines": int(harvest_lines)},
-                           timeout_s), indent=2)
+    "compile from scratch without XML re-import. Fixes grown "
+    "GVL arrays failing incremental builds with C0106 'out of "
+    "global data memory'. Slower than compile (~1-3 min). Same "
+    "diagnostics and IGNORE_CODES filtering as build. "
+    "harvest_lines (default 60) raises how many harvest lines "
+    "come back inline."
+)
+def ecockpit_rebuild(
+    all_messages: bool = False, harvest_lines: int = 60, timeout_s: int = 1200
+) -> str:
+    return json.dumps(
+        _run(
+            "rebuild",
+            {"all_messages": bool(all_messages), "harvest_lines": int(harvest_lines)},
+            timeout_s,
+        ),
+        indent=2,
+    )
 
 
 @mcp.tool(
     description="Project/application/device info of the open e!COCKPIT "
-                "project (names, ip, simulated flag). No PLC login.")
+    "project (names, ip, simulated flag). No PLC login."
+)
 def ecockpit_status() -> str:
     return json.dumps(_run("status", {}), indent=2)
 
 
 @mcp.tool(
     description="Read one variable ONLINE from the live PLC (logs in with "
-                ".env PLC credentials, then disconnects). Path is the "
-                "application-relative symbol, e.g. GVLName.Variable.")
+    ".env PLC credentials, then disconnects). Path is the "
+    "application-relative symbol, e.g. GVLName.Variable."
+)
 def ecockpit_read(variable: str, device: str = "") -> str:
     if not variable:
-        raise ValueError("variable path is required, e.g. "
-                         "'GVLName.Variable'")
-    args = {"path": variable}
+        raise ValueError("variable path is required, e.g. 'GVLName.Variable'")
+    args: dict[str, object] = {"path": variable}
     if device:
         args["device"] = device
     return json.dumps(_run("read", args), indent=2)
@@ -400,32 +436,44 @@ def _iec_literal(value):
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Write "
-                "values to variables on the RUNNING PLC (logs in, "
-                "prepares values, writes, reads back, disconnects). "
-                "values maps application-relative paths to IEC literals: "
-                "booleans as true/false, numbers as-is, strings passed "
-                "through verbatim (quote STRING values yourself, e.g. "
-                "\"'hello'\"). force=true forces the values (they stay "
-                "forced until ecockpit_unforce_all). Pass confirm=true, "
-                "never without an explicit owner instruction.")
-def ecockpit_write(values: dict, device: str = "", force: bool = False,
-                   confirm: bool = False, timeout_s: int = 180) -> str:
+    "values to variables on the RUNNING PLC (logs in, "
+    "prepares values, writes, reads back, disconnects). "
+    "values maps application-relative paths to IEC literals: "
+    "booleans as true/false, numbers as-is, strings passed "
+    "through verbatim (quote STRING values yourself, e.g. "
+    "\"'hello'\"). force=true forces the values (they stay "
+    "forced until ecockpit_unforce_all). Pass confirm=true, "
+    "never without an explicit owner instruction.",
+)
+def ecockpit_write(
+    values: dict,
+    device: str = "",
+    force: bool = False,
+    confirm: bool = False,
+    timeout_s: int = 180,
+) -> str:
     if not isinstance(values, dict) or not values:
         raise ValueError("values must be a non-empty {variable: value} map")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "write refused - it changes values on the RUNNING "
-                     "PLC application; call again with confirm=true only "
-                     "on an explicit owner request",
-        }, indent=2)
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "write refused - it changes values on the RUNNING "
+                "PLC application; call again with confirm=true only "
+                "on an explicit owner request",
+            },
+            indent=2,
+        )
     prepared = {str(k): _iec_literal(v) for k, v in values.items()}
-    args = {"values": prepared, "force": bool(force), "confirm": True}
+    args: dict[str, object] = {
+        "values": prepared,
+        "force": bool(force),
+        "confirm": True,
+    }
     if device:
         args["device"] = device
     return json.dumps(_run("write", args, timeout_s), indent=2)
@@ -433,80 +481,102 @@ def ecockpit_write(values: dict, device: str = "", force: bool = False,
 
 @mcp.tool(
     description="Release ALL forced values on the PLC (unforce_all_values). "
-                "Safe direction: restores normal variable writes.")
+    "Safe direction: restores normal variable writes."
+)
 def ecockpit_unforce_all(device: str = "") -> str:
-    args = {"device": device} if device else {}
+    args: dict[str, object] = {"device": device} if device else {}
     return json.dumps(_run("unforce", args), indent=2)
 
 
 @mcp.tool(
     description="Online state readout of the PLC (logs in briefly, then "
-                "disconnects): login state, application_state, "
-                "operation_state, device connection. CAUTION: if the PLC "
-                "is unreachable this can block the in-instance command "
-                "server on a GUI dialog (symptom: heartbeat goes stale, "
-                "tools report not-armed until the dialog is dismissed).")
+    "disconnects): login state, application_state, "
+    "operation_state, device connection. CAUTION: if the PLC "
+    "is unreachable this can block the in-instance command "
+    "server on a GUI dialog (symptom: heartbeat goes stale, "
+    "tools report not-armed until the dialog is dismissed)."
+)
 def ecockpit_state(device: str = "") -> str:
-    args = {"device": device} if device else {}
+    args: dict[str, object] = {"device": device} if device else {}
     return json.dumps(_run("state", args), indent=2)
 
 
 @mcp.tool(
     description="Dump the message-store category map (scripting API "
-                "debugging aid) and the active IGNORE_CODES filter list.")
+    "debugging aid) and the active IGNORE_CODES filter list."
+)
 def ecockpit_messages() -> str:
     return json.dumps(_run("messages", {}), indent=2)
 
 
 @mcp.tool(
     description="Clear the e!COCKPIT scripting message store. Call before "
-                "a build/compile to guarantee the harvest contains ONLY "
-                "that run's diagnostics (no stale messages from earlier "
-                "builds or GUI actions).")
+    "a build/compile to guarantee the harvest contains ONLY "
+    "that run's diagnostics (no stale messages from earlier "
+    "builds or GUI actions)."
+)
 def ecockpit_clear_messages() -> str:
     return json.dumps(_run("clear_messages", {}), indent=2)
 
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=False, open_world_hint=True
+    ),
     description="Access the e!COCKPIT `system` scripting object. op=info "
-                "(read-only: ui_present, prompt_handling decoded, "
-                "abort/trace flags, prompt_answers keys, commands). "
-                "op=write_message {severity: FatalError|Error|Warning|"
-                "Information|Text, text}. op=set_prompt_handling {value: "
-                "flag names '+'-combined, e.g. LogSimplePrompts+"
-                "LogMessageKeys; confirm=true only needed when it "
-                "enables ForwardSimplePrompts (GUI dialogs back on)} - "
-                "NOTE the relay re-hardens LogSimplePrompts at the "
-                "START of every command, so a set lasts only for the "
-                "current command. op=prompt_answers (list) / "
-                "op=set_prompt_answer {key, result: OK|Cancel|Yes|No|"
-                "Retry|Abort|Ignore} / op=clear_prompt_answers - "
-                "headless dialog simulation for engine prompts; these "
-                "PERSIST for the e!COCKPIT session. op=set_flags "
-                "{trace?, abortable?, abort_autocheck?}. op=progress "
-                "{action: start|step|absolute, description, items, "
-                "unit, item, completed, absolute_progress} - progress "
-                "bar chrome. Modal system.ui dialogs and exit live in "
-                "ecockpit_system_ui (separately confirm-gated).")
-def ecockpit_system(op: str = "info", value: str = "", key: str = "",
-                    result: str = "", text: str = "",
-                    severity: str = "Information",
-                    trace: bool = None, abortable: bool = None,
-                    abort_autocheck: bool = None,
-                    action: str = "", description: str = "",
-                    items: int = -1, unit: str = "", item: str = "",
-                    completed: int = 1, absolute_progress: int = 0,
-                    confirm: bool = False, timeout_s: int = 120) -> str:
-    valid = ("info", "write_message", "set_prompt_handling",
-             "prompt_answers", "set_prompt_answer",
-             "clear_prompt_answers", "set_flags", "progress")
+    "(read-only: ui_present, prompt_handling decoded, "
+    "abort/trace flags, prompt_answers keys, commands). "
+    "op=write_message {severity: FatalError|Error|Warning|"
+    "Information|Text, text}. op=set_prompt_handling {value: "
+    "flag names '+'-combined, e.g. LogSimplePrompts+"
+    "LogMessageKeys; confirm=true only needed when it "
+    "enables ForwardSimplePrompts (GUI dialogs back on)} - "
+    "NOTE the relay re-hardens LogSimplePrompts at the "
+    "START of every command, so a set lasts only for the "
+    "current command. op=prompt_answers (list) / "
+    "op=set_prompt_answer {key, result: OK|Cancel|Yes|No|"
+    "Retry|Abort|Ignore} / op=clear_prompt_answers - "
+    "headless dialog simulation for engine prompts; these "
+    "PERSIST for the e!COCKPIT session. op=set_flags "
+    "{trace?, abortable?, abort_autocheck?}. op=progress "
+    "{action: start|step|absolute, description, items, "
+    "unit, item, completed, absolute_progress} - progress "
+    "bar chrome. Modal system.ui dialogs and exit live in "
+    "ecockpit_system_ui (separately confirm-gated).",
+)
+def ecockpit_system(
+    op: str = "info",
+    value: str = "",
+    key: str = "",
+    result: str = "",
+    text: str = "",
+    severity: str = "Information",
+    trace: bool | None = None,
+    abortable: bool | None = None,
+    abort_autocheck: bool | None = None,
+    action: str = "",
+    description: str = "",
+    items: int = -1,
+    unit: str = "",
+    item: str = "",
+    completed: int = 1,
+    absolute_progress: int = 0,
+    confirm: bool = False,
+    timeout_s: int = 120,
+) -> str:
+    valid = (
+        "info",
+        "write_message",
+        "set_prompt_handling",
+        "prompt_answers",
+        "set_prompt_answer",
+        "clear_prompt_answers",
+        "set_flags",
+        "progress",
+    )
     if op not in valid:
         raise ValueError("op must be one of " + "|".join(valid))
-    args = {"op": op}
+    args: dict[str, object] = {"op": op}
     if op == "write_message":
         if not text:
             raise ValueError("text required for op=write_message")
@@ -515,29 +585,31 @@ def ecockpit_system(op: str = "info", value: str = "", key: str = "",
     if op == "set_prompt_handling":
         if not value:
             raise ValueError("value required for op=set_prompt_handling")
-        names = [t for t in value.replace(",", "+").replace(" ", "+")
-                 .split("+") if t]
+        names = [t for t in value.replace(",", "+").replace(" ", "+").split("+") if t]
         if "ForwardSimplePrompts" in names and not confirm:
-            return json.dumps({
-                "ok": False,
-                "refused": True,
-                "error": "set_prompt_handling refused - "
-                         "ForwardSimplePrompts re-enables GUI dialogs "
-                         "(wedge hazard); call again with confirm=true "
-                         "only on an explicit owner request",
-            }, indent=2)
+            return json.dumps(
+                {
+                    "ok": False,
+                    "refused": True,
+                    "error": "set_prompt_handling refused - "
+                    "ForwardSimplePrompts re-enables GUI dialogs "
+                    "(wedge hazard); call again with confirm=true "
+                    "only on an explicit owner request",
+                },
+                indent=2,
+            )
         args["value"] = value
         args["confirm"] = True
     if op == "set_prompt_answer":
         if not key or not result:
-            raise ValueError("key and result required for "
-                             "op=set_prompt_answer")
+            raise ValueError("key and result required for op=set_prompt_answer")
         args["key"] = key
         args["result"] = result
     if op == "set_flags":
         if trace is None and abortable is None and abort_autocheck is None:
-            raise ValueError("at least one of trace, abortable, "
-                             "abort_autocheck required")
+            raise ValueError(
+                "at least one of trace, abortable, abort_autocheck required"
+            )
         if trace is not None:
             args["trace"] = bool(trace)
         if abortable is not None:
@@ -565,88 +637,121 @@ def ecockpit_system(op: str = "info", value: str = "", key: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request + "
-                "confirm=true. op=ui calls a REAL modal system.ui "
-                "dialog that blocks until the owner answers it in the "
-                "e!COCKPIT GUI (the relay stalls meanwhile and the "
-                "heartbeat goes stale - that is normal, keep "
-                "timeout_s generous). method: error|warning|info "
-                "(message) | prompt (message, choice, default_result) "
-                "| select_many (message, choice, items) | choose "
-                "(message, options, initial_selection, cancellable) | "
-                "reset_stored_result (store_key) | open_file_dialog / "
-                "save_file_dialog (title, filename, directory, filter, "
-                "filter_index, default_extension, multiselect) | "
-                "browse_directory_dialog (message, path, "
-                "new_folder_button) | query_string (message, text, "
-                "multi_line) | query_password | query_credentials "
-                "(secret values pass through the result file "
-                "unencrypted on this host and are never logged). "
-                "Prefer prompt_answers simulation (ecockpit_system) "
-                "for headless runs - ui.* dialogs ignore it. op=exit "
-                "{code} SHUTS DOWN e!COCKPIT and the armed relay: "
-                "every tool goes dark until you re-arm a fresh GUI "
-                "session; expect the call to time out (no result file "
-                "is written).")
-def ecockpit_system_ui(op: str, method: str = "", message: str = "",
-                       message_key: str = "", choice: str = "YesNo",
-                       default_result: str = "", items: list = None,
-                       options: list = None, initial_selection: int = 0,
-                       cancellable: bool = True, store_key: str = "",
-                       title: str = "", filename: str = "",
-                       directory: str = "", filter: str = "",
-                       filter_index: int = None,
-                       default_extension: str = "",
-                       multiselect: bool = False, path: str = "",
-                       new_folder_button: bool = True, text: str = "",
-                       multi_line: bool = False, username: str = "",
-                       password: str = "", code: int = 0,
-                       confirm: bool = False, timeout_s: int = 600) -> str:
+    "confirm=true. op=ui calls a REAL modal system.ui "
+    "dialog that blocks until the owner answers it in the "
+    "e!COCKPIT GUI (the relay stalls meanwhile and the "
+    "heartbeat goes stale - that is normal, keep "
+    "timeout_s generous). method: error|warning|info "
+    "(message) | prompt (message, choice, default_result) "
+    "| select_many (message, choice, items) | choose "
+    "(message, options, initial_selection, cancellable) | "
+    "reset_stored_result (store_key) | open_file_dialog / "
+    "save_file_dialog (title, filename, directory, filter, "
+    "filter_index, default_extension, multiselect) | "
+    "browse_directory_dialog (message, path, "
+    "new_folder_button) | query_string (message, text, "
+    "multi_line) | query_password | query_credentials "
+    "(secret values pass through the result file "
+    "unencrypted on this host and are never logged). "
+    "Prefer prompt_answers simulation (ecockpit_system) "
+    "for headless runs - ui.* dialogs ignore it. op=exit "
+    "{code} SHUTS DOWN e!COCKPIT and the armed relay: "
+    "every tool goes dark until you re-arm a fresh GUI "
+    "session; expect the call to time out (no result file "
+    "is written).",
+)
+def ecockpit_system_ui(
+    op: str,
+    method: str = "",
+    message: str = "",
+    message_key: str = "",
+    choice: str = "YesNo",
+    default_result: str = "",
+    items: list | None = None,
+    options: list | None = None,
+    initial_selection: int = 0,
+    cancellable: bool = True,
+    store_key: str = "",
+    title: str = "",
+    filename: str = "",
+    directory: str = "",
+    filter: str = "",
+    filter_index: int | None = None,
+    default_extension: str = "",
+    multiselect: bool = False,
+    path: str = "",
+    new_folder_button: bool = True,
+    text: str = "",
+    multi_line: bool = False,
+    username: str = "",
+    password: str = "",
+    code: int = 0,
+    confirm: bool = False,
+    timeout_s: int = 600,
+) -> str:
     if op not in ("ui", "exit"):
         raise ValueError("op must be ui|exit")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "system {o} refused - {r}; call again with "
-                     "confirm=true only on an explicit owner "
-                     "request".format(
-                         o=op,
-                         r=("ui dialogs block the relay on a real GUI "
-                            "dialog (wedge hazard)" if op == "ui" else
-                            "exit shuts down the whole e!COCKPIT "
-                            "process")),
-        }, indent=2)
-    args = {"op": op, "confirm": True}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "system {o} refused - {r}; call again with "
+                "confirm=true only on an explicit owner "
+                "request".format(
+                    o=op,
+                    r=(
+                        "ui dialogs block the relay on a real GUI dialog (wedge hazard)"
+                        if op == "ui"
+                        else "exit shuts down the whole e!COCKPIT process"
+                    ),
+                ),
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"op": op, "confirm": True}
     if op == "exit":
         args["code"] = int(code)
-        return json.dumps(_run("system", args, min(int(timeout_s), 30)),
-                          indent=2)
+        return json.dumps(_run("system", args, min(int(timeout_s), 30)), indent=2)
     if not method:
         raise ValueError("method required for op=ui")
     args["method"] = method
-    for k, v in (("message", message), ("message_key", message_key),
-                 ("choice", choice), ("default_result", default_result),
-                 ("store_key", store_key), ("title", title),
-                 ("filename", filename), ("directory", directory),
-                 ("filter", filter),
-                 ("default_extension", default_extension),
-                 ("path", path), ("text", text),
-                 ("username", username), ("password", password)):
+    for k, v in (
+        ("message", message),
+        ("message_key", message_key),
+        ("choice", choice),
+        ("default_result", default_result),
+        ("store_key", store_key),
+        ("title", title),
+        ("filename", filename),
+        ("directory", directory),
+        ("filter", filter),
+        ("default_extension", default_extension),
+        ("path", path),
+        ("text", text),
+        ("username", username),
+        ("password", password),
+    ):
         if v:
             args[k] = v
-    for k, v in (("items", items), ("options", options)):
-        if v:
-            args[k] = [str(x) for x in v]
-    for k, v in (("initial_selection", initial_selection),
-                 ("cancellable", cancellable),
-                 ("multiselect", multiselect),
-                 ("new_folder_button", new_folder_button),
-                 ("multi_line", multi_line)):
-        args[k] = v
+    list_pairs: list[tuple[str, list[str] | None]] = [
+        ("items", items),
+        ("options", options),
+    ]
+    for k, lst in list_pairs:
+        if lst:
+            args[k] = [str(x) for x in lst]
+    for k, flag in (
+        ("initial_selection", initial_selection),
+        ("cancellable", cancellable),
+        ("multiselect", multiselect),
+        ("new_folder_button", new_folder_button),
+        ("multi_line", multi_line),
+    ):
+        args[k] = flag
     if filter_index is not None:
         args["filter_index"] = int(filter_index)
     return json.dumps(_run("system", args, timeout_s), indent=2)
@@ -654,44 +759,48 @@ def ecockpit_system_ui(op: str, method: str = "", message: str = "",
 
 @mcp.tool(
     description="Save the open project in place and copy it to the "
-                "snapshots dir as <project>_<version>.ecp "
-                "(ECP_SNAPSHOTS_DIR, default <project root>/snapshots). "
-                "Version: explicit arg > sAppVersion in the "
-                "ECP_VERSION_POU source XML > dotted number in the "
-                "project filename.")
+    "snapshots dir as <project>_<version>.ecp "
+    "(ECP_SNAPSHOTS_DIR, default <project root>/snapshots). "
+    "Version: explicit arg > sAppVersion in the "
+    "ECP_VERSION_POU source XML > dotted number in the "
+    "project filename."
+)
 def ecockpit_snapshot(version: str = "") -> str:
-    args = {"version": version} if version else {}
+    args: dict[str, object] = {"version": version} if version else {}
     return json.dumps(_run("snapshot", args), indent=2)
 
 
 @mcp.tool(
     description="Log out of the PLC (releases the login that blocks XML "
-                "imports). force=true uses forced_disconnect when a plain "
-                "logout hangs.")
+    "imports). force=true uses forced_disconnect when a plain "
+    "logout hangs."
+)
 def ecockpit_disconnect(force: bool = False) -> str:
     return json.dumps(_run("disconnect", {"force": bool(force)}), indent=2)
 
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. STOP the "
-                "running application on the live PLC and report the "
-                "resulting operation state. Pass confirm=true, never "
-                "without an explicit owner instruction.")
-def ecockpit_stop(confirm: bool = False, device: str = "",
-                  timeout_s: int = 120) -> str:
+    "running application on the live PLC and report the "
+    "resulting operation state. Pass confirm=true, never "
+    "without an explicit owner instruction.",
+)
+def ecockpit_stop(confirm: bool = False, device: str = "", timeout_s: int = 120) -> str:
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "stop refused - it STOPS the running PLC "
-                     "application; call again with confirm=true only on "
-                     "an explicit owner request",
-        }, indent=2)
-    args = {"confirm": True}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "stop refused - it STOPS the running PLC "
+                "application; call again with confirm=true only on "
+                "an explicit owner request",
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"confirm": True}
     if device:
         args["device"] = device
     return json.dumps(_run("stop", args, timeout_s), indent=2)
@@ -699,13 +808,15 @@ def ecockpit_stop(confirm: bool = False, device: str = "",
 
 @mcp.tool(
     description="List a directory on the PLC file system (logs in, lists, "
-                "disconnects). Entries carry name, is_directory, size, "
-                "last_modification_time. Works via the ScriptOnlineDevice "
-                "created by online.create_online_device - the "
-                "project-tree device object has no file API.")
-def ecockpit_plc_ls(directory: str = "/", device: str = "",
-                    timeout_s: int = 300) -> str:
-    args = {"op": "ls", "remote": directory or "/"}
+    "disconnects). Entries carry name, is_directory, size, "
+    "last_modification_time. Works via the ScriptOnlineDevice "
+    "created by online.create_online_device - the "
+    "project-tree device object has no file API."
+)
+def ecockpit_plc_ls(
+    directory: str = "/", device: str = "", timeout_s: int = 300
+) -> str:
+    args: dict[str, object] = {"op": "ls", "remote": directory or "/"}
     if device:
         args["device"] = device
     return json.dumps(_run("plcfs", args, timeout_s), indent=2)
@@ -713,13 +824,15 @@ def ecockpit_plc_ls(directory: str = "/", device: str = "",
 
 @mcp.tool(
     description="Download a file FROM the PLC to this machine (read-only "
-                "on the PLC). remote is the PLC path, local the host "
-                "destination (overwrites).")
-def ecockpit_plc_get(remote: str, local: str, device: str = "",
-                     timeout_s: int = 300) -> str:
+    "on the PLC). remote is the PLC path, local the host "
+    "destination (overwrites)."
+)
+def ecockpit_plc_get(
+    remote: str, local: str, device: str = "", timeout_s: int = 300
+) -> str:
     if not remote or not local:
         raise ValueError("remote (PLC path) and local (host path) required")
-    args = {"op": "get", "remote": remote, "local": local}
+    args: dict[str, object] = {"op": "get", "remote": remote, "local": local}
     if device:
         args["device"] = device
     return json.dumps(_run("plcfs", args, timeout_s), indent=2)
@@ -727,28 +840,41 @@ def ecockpit_plc_get(remote: str, local: str, device: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Upload a "
-                "file from this machine ONTO the PLC file system "
-                "(overwrites). Pass confirm=true, never without an "
-                "explicit owner instruction.")
-def ecockpit_plc_put(local: str, remote: str, device: str = "",
-                     force: bool = True, confirm: bool = False,
-                     timeout_s: int = 300) -> str:
+    "file from this machine ONTO the PLC file system "
+    "(overwrites). Pass confirm=true, never without an "
+    "explicit owner instruction.",
+)
+def ecockpit_plc_put(
+    local: str,
+    remote: str,
+    device: str = "",
+    force: bool = True,
+    confirm: bool = False,
+    timeout_s: int = 300,
+) -> str:
     if not local or not remote:
         raise ValueError("local (host path) and remote (PLC path) required")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "plc_put refused - it writes a file onto the PLC; "
-                     "call again with confirm=true only on an explicit "
-                     "owner request",
-        }, indent=2)
-    args = {"op": "put", "local": local, "remote": remote,
-            "force": bool(force), "confirm": True}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "plc_put refused - it writes a file onto the PLC; "
+                "call again with confirm=true only on an explicit "
+                "owner request",
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {
+        "op": "put",
+        "local": local,
+        "remote": remote,
+        "force": bool(force),
+        "confirm": True,
+    }
     if device:
         args["device"] = device
     return json.dumps(_run("plcfs", args, timeout_s), indent=2)
@@ -756,25 +882,29 @@ def ecockpit_plc_put(local: str, remote: str, device: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. DELETE a "
-                "file on the PLC file system. Pass confirm=true, never "
-                "without an explicit owner instruction.")
-def ecockpit_plc_rm(remote: str, device: str = "", confirm: bool = False,
-                    timeout_s: int = 300) -> str:
+    "file on the PLC file system. Pass confirm=true, never "
+    "without an explicit owner instruction.",
+)
+def ecockpit_plc_rm(
+    remote: str, device: str = "", confirm: bool = False, timeout_s: int = 300
+) -> str:
     if not remote:
         raise ValueError("remote (PLC path) required")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "plc_rm refused - it deletes a file on the PLC; "
-                     "call again with confirm=true only on an explicit "
-                     "owner request",
-        }, indent=2)
-    args = {"op": "rm", "remote": remote, "confirm": True}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "plc_rm refused - it deletes a file on the PLC; "
+                "call again with confirm=true only on an explicit "
+                "owner request",
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"op": "rm", "remote": remote, "confirm": True}
     if device:
         args["device"] = device
     return json.dumps(_run("plcfs", args, timeout_s), indent=2)
@@ -782,12 +912,14 @@ def ecockpit_plc_rm(remote: str, device: str = "", confirm: bool = False,
 
 @mcp.tool(
     description="Read the source project archive back from the PLC "
-                "(upload_source on the ScriptOnlineDevice; useful to "
-                "recover what is actually running). path defaults to "
-                "<work dir>/plc_source_upload.projectarchive.")
-def ecockpit_upload_source(path: str = "", device: str = "",
-                           timeout_s: int = 600) -> str:
-    args = {"path": path} if path else {}
+    "(upload_source on the ScriptOnlineDevice; useful to "
+    "recover what is actually running). path defaults to "
+    "<work dir>/plc_source_upload.projectarchive."
+)
+def ecockpit_upload_source(
+    path: str = "", device: str = "", timeout_s: int = 600
+) -> str:
+    args: dict[str, object] = {"path": path} if path else {}
     if device:
         args["device"] = device
     return json.dumps(_run("upload_source", args, timeout_s), indent=2)
@@ -803,56 +935,68 @@ def ecockpit_upload_source(path: str = "", device: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Logs into "
-                "the live PLC, replaces the RUNNING application with the "
-                "open project, and starts it. Pass confirm=true, never "
-                "without an explicit owner instruction.")
+    "the live PLC, replaces the RUNNING application with the "
+    "open project, and starts it. Pass confirm=true, never "
+    "without an explicit owner instruction.",
+)
 def ecockpit_download(confirm: bool = False, timeout_s: int = 600) -> str:
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "download refused - it REPLACES the running PLC "
-                     "application; call again with confirm=true only on "
-                     "an explicit owner request",
-        }, indent=2)
-    return json.dumps(_run("download", {"confirm": True}, timeout_s),
-                      indent=2)
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "download refused - it REPLACES the running PLC "
+                "application; call again with confirm=true only on "
+                "an explicit owner request",
+            },
+            indent=2,
+        )
+    return json.dumps(_run("download", {"confirm": True}, timeout_s), indent=2)
 
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Explicit "
-                "login with online-change control; the session STAYS "
-                "open (logout with ecockpit_disconnect). option: 'try' = "
-                "apply online changes if possible, else full download; "
-                "'force' = online changes or nothing; 'never' = full "
-                "download forced; 'auto' = ladder (Try -> Force -> Never "
-                "-> connect). CAUTION: a login can apply online changes "
-                "(code deltas) to the RUNNING application. Pass "
-                "confirm=true, never without an explicit owner "
-                "instruction.")
-def ecockpit_login(option: str = "try", delete_foreign_apps: bool = False,
-                   device: str = "", confirm: bool = False,
-                   timeout_s: int = 180) -> str:
+    "login with online-change control; the session STAYS "
+    "open (logout with ecockpit_disconnect). option: 'try' = "
+    "apply online changes if possible, else full download; "
+    "'force' = online changes or nothing; 'never' = full "
+    "download forced; 'auto' = ladder (Try -> Force -> Never "
+    "-> connect). CAUTION: a login can apply online changes "
+    "(code deltas) to the RUNNING application. Pass "
+    "confirm=true, never without an explicit owner "
+    "instruction.",
+)
+def ecockpit_login(
+    option: str = "try",
+    delete_foreign_apps: bool = False,
+    device: str = "",
+    confirm: bool = False,
+    timeout_s: int = 180,
+) -> str:
     if option not in ("try", "force", "never", "auto"):
         raise ValueError("option must be try|force|never|auto")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "login refused - it can apply online changes (code "
-                     "deltas) to the RUNNING PLC application; call again "
-                     "with confirm=true only on an explicit owner request",
-        }, indent=2)
-    args = {"option": option, "delete_foreign_apps": bool(delete_foreign_apps),
-            "confirm": True}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "login refused - it can apply online changes (code "
+                "deltas) to the RUNNING PLC application; call again "
+                "with confirm=true only on an explicit owner request",
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {
+        "option": option,
+        "delete_foreign_apps": bool(delete_foreign_apps),
+        "confirm": True,
+    }
     if device:
         args["device"] = device
     return json.dumps(_run("login", args, timeout_s), indent=2)
@@ -860,43 +1004,45 @@ def ecockpit_login(option: str = "try", delete_foreign_apps: bool = False,
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Write the "
-                "SOURCE project to the PLC (source_download) - unlike "
-                "ecockpit_download this ships the sources, not the "
-                "compiled application. Saves the open project first (it "
-                "NREs on unsaved changes otherwise). Pass confirm=true, "
-                "never without an explicit owner instruction.")
-def ecockpit_source_download(confirm: bool = False,
-                             timeout_s: int = 300) -> str:
+    "SOURCE project to the PLC (source_download) - unlike "
+    "ecockpit_download this ships the sources, not the "
+    "compiled application. Saves the open project first (it "
+    "NREs on unsaved changes otherwise). Pass confirm=true, "
+    "never without an explicit owner instruction.",
+)
+def ecockpit_source_download(confirm: bool = False, timeout_s: int = 300) -> str:
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "source_download refused - it writes the source "
-                     "project to the PLC; call again with confirm=true "
-                     "only on an explicit owner request",
-        }, indent=2)
-    return json.dumps(_run("source_download", {"confirm": True}, timeout_s),
-                      indent=2)
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "source_download refused - it writes the source "
+                "project to the PLC; call again with confirm=true "
+                "only on an explicit owner request",
+            },
+            indent=2,
+        )
+    return json.dumps(_run("source_download", {"confirm": True}, timeout_s), indent=2)
 
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=True,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=True, open_world_hint=True
+    ),
     description="Read back staged (prepared) and forced values from the "
-                "online application: every staged expression with its "
-                "prepared value (get_prepared_expressions + "
-                "get_prepared_value), or just `expression`'s staged "
-                "value, plus the list of currently forced variables "
-                "(get_forced_expressions). Read-only.")
-def ecockpit_prepared_values(expression: str = "", device: str = "",
-                             timeout_s: int = 120) -> str:
-    args = {}
+    "online application: every staged expression with its "
+    "prepared value (get_prepared_expressions + "
+    "get_prepared_value), or just `expression`'s staged "
+    "value, plus the list of currently forced variables "
+    "(get_forced_expressions). Read-only.",
+)
+def ecockpit_prepared_values(
+    expression: str = "", device: str = "", timeout_s: int = 120
+) -> str:
+    args: dict[str, object] = {}
     if expression:
         args["expression"] = expression
     if device:
@@ -908,30 +1054,40 @@ def ecockpit_prepared_values(expression: str = "", device: str = "",
 # Project tree + ST authoring (ScriptLib stubs)
 # --------------------------------------------------------------------------
 
+
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=True,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=True, open_world_hint=True
+    ),
     description="List/search the project tree: object names, GUIDs and "
-                "kind markers (device/application/folder/symbol config/"
-                "textual flags). name filters via project.find; "
-                "recursive defaults true; limit default 200.")
-def ecockpit_tree(op: str = "list", name: str = "", new_name: str = "",
-                  new_parent: str = "", recursive: bool = True,
-                  limit: int = 200, confirm: bool = False,
-                  timeout_s: int = 120) -> str:
+    "kind markers (device/application/folder/symbol config/"
+    "textual flags). name filters via project.find; "
+    "recursive defaults true; limit default 200.",
+)
+def ecockpit_tree(
+    op: str = "list",
+    name: str = "",
+    new_name: str = "",
+    new_parent: str = "",
+    recursive: bool = True,
+    limit: int = 200,
+    confirm: bool = False,
+    timeout_s: int = 120,
+) -> str:
     if op not in ("list", "rename", "remove", "move", "folder"):
         raise ValueError("op must be list|rename|remove|move|folder")
     if op != "list" and not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "tree {o} refused - it modifies the project; call "
-                     "again with confirm=true only on an explicit owner "
-                     "request".format(o=op),
-        }, indent=2)
-    args = {"op": op}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "tree {o} refused - it modifies the project; call "
+                "again with confirm=true only on an explicit owner "
+                "request".format(o=op),
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"op": op}
     if name:
         args["name"] = name
     if new_name:
@@ -948,48 +1104,58 @@ def ecockpit_tree(op: str = "list", name: str = "", new_name: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Create a "
-                "project object: kind pou (pou_type program|"
-                "functionblock|function, ST), gvl, dut, interface, "
-                "folder, special_pou (implicit-check POU via "
-                "create_pou(SpecialPouType): special_type check_bounds|"
-                "check_pointer|check_range_unsigned|check_range_signed|"
-                "check_div_real_64|check_div_real_32|check_div_int_64|"
-                "check_div_int_32|check_l_range_unsigned|"
-                "check_l_range_signed - the engine names the object "
-                "itself; WARNING: adding a check function FORCES A FULL "
-                "RECOMPILE and prohibits online change from then on), "
-                "or a POU member (method/property/action/transition; "
-                "needs parent). Optional declaration/implementation ST "
-                "text is written into the new object. Modifies the "
-                "project; the new code is compiled on the next build. "
-                "Pass confirm=true, never without an explicit owner "
-                "instruction.")
-def ecockpit_object_create(kind: str, name: str = "", parent: str = "",
-                           pou_type: str = "functionblock",
-                           special_type: str = "",
-                           return_type: str = "",
-                           base_type: str = "",
-                           declaration: str = "",
-                           implementation: str = "",
-                           confirm: bool = False,
-                           timeout_s: int = 300) -> str:
+    "project object: kind pou (pou_type program|"
+    "functionblock|function, ST), gvl, dut, interface, "
+    "folder, special_pou (implicit-check POU via "
+    "create_pou(SpecialPouType): special_type check_bounds|"
+    "check_pointer|check_range_unsigned|check_range_signed|"
+    "check_div_real_64|check_div_real_32|check_div_int_64|"
+    "check_div_int_32|check_l_range_unsigned|"
+    "check_l_range_signed - the engine names the object "
+    "itself; WARNING: adding a check function FORCES A FULL "
+    "RECOMPILE and prohibits online change from then on), "
+    "or a POU member (method/property/action/transition; "
+    "needs parent). Optional declaration/implementation ST "
+    "text is written into the new object. Modifies the "
+    "project; the new code is compiled on the next build. "
+    "Pass confirm=true, never without an explicit owner "
+    "instruction.",
+)
+def ecockpit_object_create(
+    kind: str,
+    name: str = "",
+    parent: str = "",
+    pou_type: str = "functionblock",
+    special_type: str = "",
+    return_type: str = "",
+    base_type: str = "",
+    declaration: str = "",
+    implementation: str = "",
+    confirm: bool = False,
+    timeout_s: int = 300,
+) -> str:
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "object_create refused - it modifies the project "
-                     "(new code objects); call again with confirm=true "
-                     "only on an explicit owner request",
-        }, indent=2)
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "object_create refused - it modifies the project "
+                "(new code objects); call again with confirm=true "
+                "only on an explicit owner request",
+            },
+            indent=2,
+        )
     if kind == "special_pou":
         if not special_type:
             raise ValueError("special_type required for kind=special_pou")
-        args = {"kind": kind, "special_type": special_type,
-                "confirm": True}
+        args: dict[str, object] = {
+            "kind": kind,
+            "special_type": special_type,
+            "confirm": True,
+        }
         if parent:
             args["parent"] = parent
         return json.dumps(_run("object_create", args, timeout_s), indent=2)
@@ -1013,17 +1179,16 @@ def ecockpit_object_create(kind: str, name: str = "", parent: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=True,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=True, open_world_hint=True
+    ),
     description="Read the ST text of a textual object: declaration and/"
-                "or implementation (ScriptTextDocument). part selects "
-                "one; default returns both. Read-only.")
-def ecockpit_textual_read(name: str, part: str = "",
-                          timeout_s: int = 120) -> str:
+    "or implementation (ScriptTextDocument). part selects "
+    "one; default returns both. Read-only.",
+)
+def ecockpit_textual_read(name: str, part: str = "", timeout_s: int = 120) -> str:
     if not name:
         raise ValueError("name (object name) required")
-    args = {"op": "read", "name": name}
+    args: dict[str, object] = {"op": "read", "name": name}
     if part:
         args["part"] = part
     return json.dumps(_run("textual", args, timeout_s), indent=2)
@@ -1031,48 +1196,57 @@ def ecockpit_textual_read(name: str, part: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Replace "
-                "the whole declaration or implementation ST text of an "
-                "object (ScriptTextDocument.replace). This rewrites "
-                "project code - it is compiled on the next build. Pass "
-                "confirm=true, never without an explicit owner "
-                "instruction.")
-def ecockpit_textual_write(name: str, text: str,
-                           part: str = "implementation",
-                           confirm: bool = False,
-                           timeout_s: int = 120) -> str:
+    "the whole declaration or implementation ST text of an "
+    "object (ScriptTextDocument.replace). This rewrites "
+    "project code - it is compiled on the next build. Pass "
+    "confirm=true, never without an explicit owner "
+    "instruction.",
+)
+def ecockpit_textual_write(
+    name: str,
+    text: str,
+    part: str = "implementation",
+    confirm: bool = False,
+    timeout_s: int = 120,
+) -> str:
     if not name or text is None:
         raise ValueError("name and text required")
     if part not in ("declaration", "implementation"):
         raise ValueError("part must be declaration|implementation")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "textual_write refused - it REPLACES project code; "
-                     "call again with confirm=true only on an explicit "
-                     "owner request",
-        }, indent=2)
-    return json.dumps(_run("textual", {"op": "write", "name": name,
-                                       "part": part, "text": text,
-                                       "confirm": True}, timeout_s),
-                      indent=2)
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "textual_write refused - it REPLACES project code; "
+                "call again with confirm=true only on an explicit "
+                "owner request",
+            },
+            indent=2,
+        )
+    return json.dumps(
+        _run(
+            "textual",
+            {"op": "write", "name": name, "part": part, "text": text, "confirm": True},
+            timeout_s,
+        ),
+        indent=2,
+    )
 
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=True,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=True, open_world_hint=True
+    ),
     description="Inspect the application's task configuration: tasks "
-                "with kind, priority, interval, watchdog and assigned "
-                "POUs. Read-only.")
-def ecockpit_task_config(application: str = "",
-                         timeout_s: int = 120) -> str:
-    args = {}
+    "with kind, priority, interval, watchdog and assigned "
+    "POUs. Read-only.",
+)
+def ecockpit_task_config(application: str = "", timeout_s: int = 120) -> str:
+    args: dict[str, object] = {}
     if application:
         args["application"] = application
     return json.dumps(_run("task_config", args, timeout_s), indent=2)
@@ -1080,35 +1254,49 @@ def ecockpit_task_config(application: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Create a "
-                "task in the application's task configuration (creates "
-                "the configuration object when missing): kind cyclic|"
-                "freewheeling|event|external_event|status|"
-                "parent_synchron, interval + unit (cyclic), priority, "
-                "watchdog, pous list. Modifies the project; compiled on "
-                "the next build. Pass confirm=true, never without an "
-                "explicit owner instruction.")
-def ecockpit_task_create(application: str, name: str, kind: str = "cyclic",
-                         interval: str = "", interval_unit: str = "ms",
-                         priority: str = "1", watchdog_enabled: bool = False,
-                         watchdog_time: str = "",
-                         pous: list = None, confirm: bool = False,
-                         timeout_s: int = 120) -> str:
+    "task in the application's task configuration (creates "
+    "the configuration object when missing): kind cyclic|"
+    "freewheeling|event|external_event|status|"
+    "parent_synchron, interval + unit (cyclic), priority, "
+    "watchdog, pous list. Modifies the project; compiled on "
+    "the next build. Pass confirm=true, never without an "
+    "explicit owner instruction.",
+)
+def ecockpit_task_create(
+    application: str,
+    name: str,
+    kind: str = "cyclic",
+    interval: str = "",
+    interval_unit: str = "ms",
+    priority: str = "1",
+    watchdog_enabled: bool = False,
+    watchdog_time: str = "",
+    pous: list | None = None,
+    confirm: bool = False,
+    timeout_s: int = 120,
+) -> str:
     if not name:
         raise ValueError("name (task name) required")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "task create refused - it modifies the project; "
-                     "call again with confirm=true only on an explicit "
-                     "owner request",
-        }, indent=2)
-    args = {"op": "create_task", "name": name, "kind": kind,
-            "confirm": True}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "task create refused - it modifies the project; "
+                "call again with confirm=true only on an explicit "
+                "owner request",
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {
+        "op": "create_task",
+        "name": name,
+        "kind": kind,
+        "confirm": True,
+    }
     if application:
         args["application"] = application
     if interval:
@@ -1127,19 +1315,19 @@ def ecockpit_task_create(application: str, name: str, kind: str = "cyclic",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=True,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=True, open_world_hint=True
+    ),
     description="Full symbol inventory of the application's symbol "
-                "configuration: signatures and variables with types and "
-                "effective access (get_all_signatures; compile=true "
-                "BUILDS first - takes time but is non-destructive). The "
-                "symbol configuration object must exist (ecockpit_"
-                "symbol_config_create).")
-def ecockpit_symbol_config_variables(application: str = "",
-                                     compile: bool = True,
-                                     timeout_s: int = 900) -> str:
-    args = {"compile": bool(compile)}
+    "configuration: signatures and variables with types and "
+    "effective access (get_all_signatures; compile=true "
+    "BUILDS first - takes time but is non-destructive). The "
+    "symbol configuration object must exist (ecockpit_"
+    "symbol_config_create).",
+)
+def ecockpit_symbol_config_variables(
+    application: str = "", compile: bool = True, timeout_s: int = 900
+) -> str:
+    args: dict[str, object] = {"compile": bool(compile)}
     if application:
         args["application"] = application
     return json.dumps(_run("symbol_config", args, timeout_s), indent=2)
@@ -1147,28 +1335,33 @@ def ecockpit_symbol_config_variables(application: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Add the "
-                "symbol configuration object to the application "
-                "(export_comments, support_opc_ua). Modifies the "
-                "project. Pass confirm=true, never without an explicit "
-                "owner instruction.")
-def ecockpit_symbol_config_create(application: str = "",
-                                  export_comments: bool = False,
-                                  support_opc_ua: bool = True,
-                                  confirm: bool = False,
-                                  timeout_s: int = 120) -> str:
+    "symbol configuration object to the application "
+    "(export_comments, support_opc_ua). Modifies the "
+    "project. Pass confirm=true, never without an explicit "
+    "owner instruction.",
+)
+def ecockpit_symbol_config_create(
+    application: str = "",
+    export_comments: bool = False,
+    support_opc_ua: bool = True,
+    confirm: bool = False,
+    timeout_s: int = 120,
+) -> str:
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "symbol_config_create refused - it modifies the "
-                     "project; call again with confirm=true only on an "
-                     "explicit owner request",
-        }, indent=2)
-    args = {"op": "create", "confirm": True}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "symbol_config_create refused - it modifies the "
+                "project; call again with confirm=true only on an "
+                "explicit owner request",
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"op": "create", "confirm": True}
     if application:
         args["application"] = application
     return json.dumps(_run("symbol_config", args, timeout_s), indent=2)
@@ -1176,54 +1369,65 @@ def ecockpit_symbol_config_create(application: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="Symbol configuration options + XML schema. op=config "
-                "(read-only): content feature flags (decoded + "
-                "effective), attribute/comment filter types + data, "
-                "direct-IO access + obstacles. op=config_set "
-                "(DESTRUCTIVE - requires explicit owner request + "
-                "confirm; modifies the project): "
-                "content_feature_flags ('+'-combined names: "
-                "SupportOPCUA, IncludeComments, IncludeAttributes, "
-                "IncludeTypeNodeAttributes, IncludeExecutables, "
-                "UseEmptyNamespaceByDefault, XmlInclude*), "
-                "attribute_filter_type (none|All|SimpleIdentifiers|"
-                "Prefix|Regex) + attribute_filter_data, "
-                "comment_filter_type (none|NormalComments|DocuComments|"
-                "Both|PreferNormalComments|PreferDocuComments); "
-                "read-back included. op=xsd {file?} (read-only): write "
-                "the symbol configuration XML schema for THIS release "
-                "to a file (default <ECP_PROJECT_ROOT>/plcopensrc-export/"
-                "Symbolconfiguration.xsd). The symbol configuration "
-                "object must exist (ecockpit_symbol_config_create).")
-def ecockpit_symbol_config_options(op: str = "config",
-                                   application: str = "",
-                                   content_feature_flags: str = "",
-                                   attribute_filter_type: str = "",
-                                   attribute_filter_data: str = "",
-                                   comment_filter_type: str = "",
-                                   file: str = "",
-                                   confirm: bool = False,
-                                   timeout_s: int = 300) -> str:
+    "(read-only): content feature flags (decoded + "
+    "effective), attribute/comment filter types + data, "
+    "direct-IO access + obstacles. op=config_set "
+    "(DESTRUCTIVE - requires explicit owner request + "
+    "confirm; modifies the project): "
+    "content_feature_flags ('+'-combined names: "
+    "SupportOPCUA, IncludeComments, IncludeAttributes, "
+    "IncludeTypeNodeAttributes, IncludeExecutables, "
+    "UseEmptyNamespaceByDefault, XmlInclude*), "
+    "attribute_filter_type (none|All|SimpleIdentifiers|"
+    "Prefix|Regex) + attribute_filter_data, "
+    "comment_filter_type (none|NormalComments|DocuComments|"
+    "Both|PreferNormalComments|PreferDocuComments); "
+    "read-back included. op=xsd {file?} (read-only): write "
+    "the symbol configuration XML schema for THIS release "
+    "to a file (default <ECP_PROJECT_ROOT>/plcopensrc-export/"
+    "Symbolconfiguration.xsd). The symbol configuration "
+    "object must exist (ecockpit_symbol_config_create).",
+)
+def ecockpit_symbol_config_options(
+    op: str = "config",
+    application: str = "",
+    content_feature_flags: str = "",
+    attribute_filter_type: str = "",
+    attribute_filter_data: str = "",
+    comment_filter_type: str = "",
+    file: str = "",
+    confirm: bool = False,
+    timeout_s: int = 300,
+) -> str:
     if op not in ("config", "config_set", "xsd"):
         raise ValueError("op must be config|config_set|xsd")
     if op == "config_set":
         if not confirm:
-            return json.dumps({
-                "ok": False,
-                "refused": True,
-                "error": "symbol_config config_set refused - it modifies "
-                         "the project; call again with confirm=true only "
-                         "on an explicit owner request",
-            }, indent=2)
-        if not (content_feature_flags or attribute_filter_type or
-                attribute_filter_data or comment_filter_type):
-            raise ValueError("config_set needs content_feature_flags "
-                             "and/or attribute_filter_type(+data) / "
-                             "comment_filter_type")
-    args = {"op": op}
+            return json.dumps(
+                {
+                    "ok": False,
+                    "refused": True,
+                    "error": "symbol_config config_set refused - it modifies "
+                    "the project; call again with confirm=true only "
+                    "on an explicit owner request",
+                },
+                indent=2,
+            )
+        if not (
+            content_feature_flags
+            or attribute_filter_type
+            or attribute_filter_data
+            or comment_filter_type
+        ):
+            raise ValueError(
+                "config_set needs content_feature_flags "
+                "and/or attribute_filter_type(+data) / "
+                "comment_filter_type"
+            )
+    args: dict[str, object] = {"op": op}
     if application:
         args["application"] = application
     if op == "config_set":
@@ -1245,26 +1449,31 @@ def ecockpit_symbol_config_options(op: str = "config",
 # Device domain: scan / communication / parameters
 # --------------------------------------------------------------------------
 
+
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=True,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=True, open_world_hint=True
+    ),
     description="Gateway + network device discovery. op=gateways lists "
-                "configured gateways and drivers; op=scan performs a "
-                "network scan on a gateway (blocks for the scan "
-                "timeout) and returns discovered targets (name, "
-                "address, vendor, id, version); op=address resolves a "
-                "CODESYS address from an IP via find_address_by_ip. "
-                "Read-only.")
-def ecockpit_device_scan(op: str = "gateways", gateway: str = "",
-                         ip: str = "", port: int = 11740,
-                         timeout_s: int = 300) -> str:
+    "configured gateways and drivers; op=scan performs a "
+    "network scan on a gateway (blocks for the scan "
+    "timeout) and returns discovered targets (name, "
+    "address, vendor, id, version); op=address resolves a "
+    "CODESYS address from an IP via find_address_by_ip. "
+    "Read-only.",
+)
+def ecockpit_device_scan(
+    op: str = "gateways",
+    gateway: str = "",
+    ip: str = "",
+    port: int = 11740,
+    timeout_s: int = 300,
+) -> str:
     if op not in ("gateways", "scan", "address"):
         raise ValueError("op must be gateways|scan|address")
     if op == "address" and not ip:
         raise ValueError("ip required for op=address")
-    args = {"op": op}
+    args: dict[str, object] = {"op": op}
     if gateway:
         args["gateway"] = gateway
     if op == "address":
@@ -1275,33 +1484,41 @@ def ecockpit_device_scan(op: str = "gateways", gateway: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="Device communication settings. op=get (read-only): "
-                "gateway guid, address, scanned_* values from the last "
-                "network scan. op=set_ip (DESTRUCTIVE - requires "
-                "explicit owner request + confirm): point the device at "
-                "an IP via a gateway (modifies the project device "
-                "configuration).")
-def ecockpit_device_comm(op: str = "get", device: str = "",
-                         gateway: str = "", ip: str = "",
-                         device_name: str = "", confirm: bool = False,
-                         timeout_s: int = 120) -> str:
+    "gateway guid, address, scanned_* values from the last "
+    "network scan. op=set_ip (DESTRUCTIVE - requires "
+    "explicit owner request + confirm): point the device at "
+    "an IP via a gateway (modifies the project device "
+    "configuration).",
+)
+def ecockpit_device_comm(
+    op: str = "get",
+    device: str = "",
+    gateway: str = "",
+    ip: str = "",
+    device_name: str = "",
+    confirm: bool = False,
+    timeout_s: int = 120,
+) -> str:
     if op not in ("get", "set_ip"):
         raise ValueError("op must be get|set_ip")
     if op == "set_ip":
         if not ip:
             raise ValueError("ip required for op=set_ip")
         if not confirm:
-            return json.dumps({
-                "ok": False,
-                "refused": True,
-                "error": "device_comm set_ip refused - it modifies the "
-                         "project device configuration; call again with "
-                         "confirm=true only on an explicit owner request",
-            }, indent=2)
-    args = {"op": op}
+            return json.dumps(
+                {
+                    "ok": False,
+                    "refused": True,
+                    "error": "device_comm set_ip refused - it modifies the "
+                    "project device configuration; call again with "
+                    "confirm=true only on an explicit owner request",
+                },
+                indent=2,
+            )
+    args: dict[str, object] = {"op": op}
     if device:
         args["device"] = device
     if op == "set_ip":
@@ -1316,54 +1533,67 @@ def ecockpit_device_comm(op: str = "get", device: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="Device identification / simulation / driver info (the "
-                "visible parts of the PLC Settings tab). op="
-                "identification (read-only): DeviceId {type, id, "
-                "version} + module identification. op=simulation "
-                "(read-only) / op=simulation_set {enabled, confirm - "
-                "DESTRUCTIVE: changes the device's simulation flag in "
-                "the project}. op=driver_info (read-only): bus cycle "
-                "task, IO application, update-while-stop, outputs-on-"
-                "stop behaviour, always-update mode, force-variable "
-                "generation, diagnosis. op=driver_info_set (DESTRUCTIVE "
-                "- requires explicit owner request + confirm): "
-                "bus_cycle_task, io_application (application name), "
-                "update_ios_while_in_stop, behaviour_for_outputs_on_stop "
-                "(KeepCurrentValues|SetToDefault|ExecuteProgram), "
-                "user_program_for_stop_reset_behaviour, "
-                "always_update_variables (Disabled|OnlyIfUnused|"
-                "AlwaysInBusCycle), generate_force_variables, "
-                "enable_diagnosis, show_io_warnings_as_errors; "
-                "read-back included.")
-def ecockpit_device_info(op: str = "identification", device: str = "",
-                         enabled: bool = False,
-                         bus_cycle_task: str = "",
-                         io_application: str = "",
-                         update_ios_while_in_stop: bool = None,
-                         behaviour_for_outputs_on_stop: str = "",
-                         user_program_for_stop_reset_behaviour: str = "",
-                         always_update_variables: str = "",
-                         generate_force_variables: bool = None,
-                         enable_diagnosis: bool = None,
-                         show_io_warnings_as_errors: bool = None,
-                         confirm: bool = False,
-                         timeout_s: int = 120) -> str:
-    if op not in ("identification", "simulation", "simulation_set",
-                  "driver_info", "driver_info_set"):
-        raise ValueError("op must be identification|simulation|"
-                         "simulation_set|driver_info|driver_info_set")
+    "visible parts of the PLC Settings tab). op="
+    "identification (read-only): DeviceId {type, id, "
+    "version} + module identification. op=simulation "
+    "(read-only) / op=simulation_set {enabled, confirm - "
+    "DESTRUCTIVE: changes the device's simulation flag in "
+    "the project}. op=driver_info (read-only): bus cycle "
+    "task, IO application, update-while-stop, outputs-on-"
+    "stop behaviour, always-update mode, force-variable "
+    "generation, diagnosis. op=driver_info_set (DESTRUCTIVE "
+    "- requires explicit owner request + confirm): "
+    "bus_cycle_task, io_application (application name), "
+    "update_ios_while_in_stop, behaviour_for_outputs_on_stop "
+    "(KeepCurrentValues|SetToDefault|ExecuteProgram), "
+    "user_program_for_stop_reset_behaviour, "
+    "always_update_variables (Disabled|OnlyIfUnused|"
+    "AlwaysInBusCycle), generate_force_variables, "
+    "enable_diagnosis, show_io_warnings_as_errors; "
+    "read-back included.",
+)
+def ecockpit_device_info(
+    op: str = "identification",
+    device: str = "",
+    enabled: bool = False,
+    bus_cycle_task: str = "",
+    io_application: str = "",
+    update_ios_while_in_stop: bool | None = None,
+    behaviour_for_outputs_on_stop: str = "",
+    user_program_for_stop_reset_behaviour: str = "",
+    always_update_variables: str = "",
+    generate_force_variables: bool | None = None,
+    enable_diagnosis: bool | None = None,
+    show_io_warnings_as_errors: bool | None = None,
+    confirm: bool = False,
+    timeout_s: int = 120,
+) -> str:
+    if op not in (
+        "identification",
+        "simulation",
+        "simulation_set",
+        "driver_info",
+        "driver_info_set",
+    ):
+        raise ValueError(
+            "op must be identification|simulation|"
+            "simulation_set|driver_info|driver_info_set"
+        )
     if op in ("simulation_set", "driver_info_set") and not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "device_info {o} refused - it modifies the project "
-                     "device configuration; call again with confirm=true "
-                     "only on an explicit owner request".format(o=op),
-        }, indent=2)
-    args = {"op": op}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "device_info {o} refused - it modifies the project "
+                "device configuration; call again with confirm=true "
+                "only on an explicit owner request".format(o=op),
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"op": op}
     if device:
         args["device"] = device
     if op == "simulation_set":
@@ -1376,69 +1606,75 @@ def ecockpit_device_info(op: str = "identification", device: str = "",
         if io_application:
             args["io_application"] = io_application
         if update_ios_while_in_stop is not None:
-            args["update_ios_while_in_stop"] = bool(
-                update_ios_while_in_stop)
+            args["update_ios_while_in_stop"] = bool(update_ios_while_in_stop)
         if behaviour_for_outputs_on_stop:
-            args["behaviour_for_outputs_on_stop"] = \
-                behaviour_for_outputs_on_stop
+            args["behaviour_for_outputs_on_stop"] = behaviour_for_outputs_on_stop
         if user_program_for_stop_reset_behaviour:
-            args["user_program_for_stop_reset_behaviour"] = \
+            args["user_program_for_stop_reset_behaviour"] = (
                 user_program_for_stop_reset_behaviour
+            )
         if always_update_variables:
             args["always_update_variables"] = always_update_variables
         if generate_force_variables is not None:
-            args["generate_force_variables"] = bool(
-                generate_force_variables)
+            args["generate_force_variables"] = bool(generate_force_variables)
         if enable_diagnosis is not None:
             args["enable_diagnosis"] = bool(enable_diagnosis)
         if show_io_warnings_as_errors is not None:
-            args["show_io_warnings_as_errors"] = bool(
-                show_io_warnings_as_errors)
+            args["show_io_warnings_as_errors"] = bool(show_io_warnings_as_errors)
     return json.dumps(_run("device_info", args, timeout_s), indent=2)
 
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="IO mapping inspection + CSV round-trip. op=mappings "
-                "(read-only): every mappable parameter element with its "
-                "io_mapping (variable, default_variable, "
-                "mapping_creates_variable, maps_to_existing_variable, "
-                "automatic_iec_address, manual_iec_address); "
-                "connector_id scopes to one connector. op=set_mapping "
-                "(DESTRUCTIVE - requires explicit owner request + "
-                "confirm): set variable and/or manual_iec_address "
-                "(automatic=true resets to the automatic address) on a "
-                "parameter's element - element=<identifier> targets one "
-                "channel; multi-element parameters REFUSE without it "
-                "unless all_elements=true (G-21). "
-                "op=export_csv {file?}: export the device's IO mappings "
-                "to CSV (default <ECP_PROJECT_ROOT>/io-mappings/"
-                "<device>_io_mappings.csv). op=import_csv {file, "
-                "confirm}: DESTRUCTIVE - import IO mappings from a CSV "
-                "(modifies the IO configuration).")
-def ecockpit_device_io(op: str = "mappings", device: str = "",
-                       connector_id: int = None, name: str = "",
-                       id: int = None, element: str = "",
-                       variable: str = "", manual_iec_address: str = "",
-                       automatic: bool = False,
-                       all_elements: bool = False, file: str = "",
-                       confirm: bool = False,
-                       timeout_s: int = 300) -> str:
+    "(read-only): every mappable parameter element with its "
+    "io_mapping (variable, default_variable, "
+    "mapping_creates_variable, maps_to_existing_variable, "
+    "automatic_iec_address, manual_iec_address); "
+    "connector_id scopes to one connector. op=set_mapping "
+    "(DESTRUCTIVE - requires explicit owner request + "
+    "confirm): set variable and/or manual_iec_address "
+    "(automatic=true resets to the automatic address) on a "
+    "parameter's element - element=<identifier> targets one "
+    "channel; multi-element parameters REFUSE without it "
+    "unless all_elements=true (G-21). "
+    "op=export_csv {file?}: export the device's IO mappings "
+    "to CSV (default <ECP_PROJECT_ROOT>/io-mappings/"
+    "<device>_io_mappings.csv). op=import_csv {file, "
+    "confirm}: DESTRUCTIVE - import IO mappings from a CSV "
+    "(modifies the IO configuration).",
+)
+def ecockpit_device_io(
+    op: str = "mappings",
+    device: str = "",
+    connector_id: int | None = None,
+    name: str = "",
+    id: int | None = None,
+    element: str = "",
+    variable: str = "",
+    manual_iec_address: str = "",
+    automatic: bool = False,
+    all_elements: bool = False,
+    file: str = "",
+    confirm: bool = False,
+    timeout_s: int = 300,
+) -> str:
     if op not in ("mappings", "set_mapping", "export_csv", "import_csv"):
-        raise ValueError("op must be mappings|set_mapping|export_csv|"
-                         "import_csv")
+        raise ValueError("op must be mappings|set_mapping|export_csv|import_csv")
     if op in ("set_mapping", "import_csv") and not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "device_io {o} refused - it modifies the IO "
-                     "configuration; call again with confirm=true only "
-                     "on an explicit owner request".format(o=op),
-        }, indent=2)
-    args = {"op": op}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "device_io {o} refused - it modifies the IO "
+                "configuration; call again with confirm=true only "
+                "on an explicit owner request".format(o=op),
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"op": op}
     if device:
         args["device"] = device
     if connector_id is not None:
@@ -1447,8 +1683,10 @@ def ecockpit_device_io(op: str = "mappings", device: str = "",
         if not name and id is None:
             raise ValueError("name or id required for op=set_mapping")
         if not variable and not manual_iec_address and not automatic:
-            raise ValueError("variable and/or manual_iec_address/"
-                             "automatic required for op=set_mapping")
+            raise ValueError(
+                "variable and/or manual_iec_address/"
+                "automatic required for op=set_mapping"
+            )
         if name:
             args["name"] = name
         if id is not None:
@@ -1475,25 +1713,32 @@ def ecockpit_device_io(op: str = "mappings", device: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="Device parameter access. op=list: parameter inventory "
-                "(id, name, type, section). op=read: parameter value - "
-                "offline (default) or online=true to read from the PLC. "
-                "op=write: DESTRUCTIVE - ONLINE PARAMETER WRITE to the "
-                "device; enums are validated against allowed values; "
-                "struct parameters take element. Write requires "
-                "confirm=true on an explicit owner request.")
-def ecockpit_device_params(op: str = "list", device: str = "",
-                           name: str = "", id: int = None,
-                           connector_id: int = None, element: str = "",
-                           value: str = "", online: bool = False,
-                           timeout: int = 1000, confirm: bool = False,
-                           timeout_s: int = 180) -> str:
+    "(id, name, type, section). op=read: parameter value - "
+    "offline (default) or online=true to read from the PLC. "
+    "op=write: DESTRUCTIVE - ONLINE PARAMETER WRITE to the "
+    "device; enums are validated against allowed values; "
+    "struct parameters take element. Write requires "
+    "confirm=true on an explicit owner request.",
+)
+def ecockpit_device_params(
+    op: str = "list",
+    device: str = "",
+    name: str = "",
+    id: int | None = None,
+    connector_id: int | None = None,
+    element: str = "",
+    value: str = "",
+    online: bool = False,
+    timeout: int = 1000,
+    confirm: bool = False,
+    timeout_s: int = 180,
+) -> str:
     if op not in ("list", "read", "write"):
         raise ValueError("op must be list|read|write")
-    args = {"op": op, "timeout": int(timeout)}
+    args: dict[str, object] = {"op": op, "timeout": int(timeout)}
     if device:
         args["device"] = device
     if connector_id is not None:
@@ -1511,13 +1756,16 @@ def ecockpit_device_params(op: str = "list", device: str = "",
         if value == "":
             raise ValueError("value required for op=write")
         if not confirm:
-            return json.dumps({
-                "ok": False,
-                "refused": True,
-                "error": "device_params write refused - it writes a "
-                         "parameter to the DEVICE; call again with "
-                         "confirm=true only on an explicit owner request",
-            }, indent=2)
+            return json.dumps(
+                {
+                    "ok": False,
+                    "refused": True,
+                    "error": "device_params write refused - it writes a "
+                    "parameter to the DEVICE; call again with "
+                    "confirm=true only on an explicit owner request",
+                },
+                indent=2,
+            )
         args["value"] = value
         args["confirm"] = True
         if element:
@@ -1529,17 +1777,17 @@ def ecockpit_device_params(op: str = "list", device: str = "",
 # Application + project lifecycle
 # --------------------------------------------------------------------------
 
+
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=True,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=True, open_world_hint=True
+    ),
     description="Application status (read-only): is_active, is_uptodate "
-                "(matches what runs on the PLC) and "
-                "is_online_change_possible.")
-def ecockpit_app_status(application: str = "",
-                        timeout_s: int = 120) -> str:
-    args = {"op": "status"}
+    "(matches what runs on the PLC) and "
+    "is_online_change_possible.",
+)
+def ecockpit_app_status(application: str = "", timeout_s: int = 120) -> str:
+    args: dict[str, object] = {"op": "status"}
     if application:
         args["application"] = application
     return json.dumps(_run("app_control", args, timeout_s), indent=2)
@@ -1547,40 +1795,46 @@ def ecockpit_app_status(application: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. op="
-                "activate: make this application the active one. op="
-                "boot: write an OFFLINE boot application file on this "
-                "host (NOT a PLC download). op=start: start the program "
-                "on the RUNNING PLC. op=reset: reset the PLC - option "
-                "warm|cold|original, where original DELETES all "
-                "applications, boot project and retain data. All ops "
-                "modify or touch the PLC/project; pass confirm=true, "
-                "never without an explicit owner instruction.")
-def ecockpit_app_control(op: str, application: str = "", path: str = "",
-                         reset_option: str = "warm",
-                         force_kill: bool = False,
-                         confirm: bool = False,
-                         timeout_s: int = 300) -> str:
+    "activate: make this application the active one. op="
+    "boot: write an OFFLINE boot application file on this "
+    "host (NOT a PLC download). op=start: start the program "
+    "on the RUNNING PLC. op=reset: reset the PLC - option "
+    "warm|cold|original, where original DELETES all "
+    "applications, boot project and retain data. All ops "
+    "modify or touch the PLC/project; pass confirm=true, "
+    "never without an explicit owner instruction.",
+)
+def ecockpit_app_control(
+    op: str,
+    application: str = "",
+    path: str = "",
+    reset_option: str = "warm",
+    force_kill: bool = False,
+    confirm: bool = False,
+    timeout_s: int = 300,
+) -> str:
     if op not in ("status", "activate", "boot", "start", "reset"):
         raise ValueError("op must be status|activate|boot|start|reset")
     if op != "status" and not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "app_control {o} refused - it touches the project "
-                     "or the RUNNING PLC; call again with confirm=true "
-                     "only on an explicit owner request".format(o=op),
-        }, indent=2)
-    args = {"op": op, "confirm": True}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "app_control {o} refused - it touches the project "
+                "or the RUNNING PLC; call again with confirm=true "
+                "only on an explicit owner request".format(o=op),
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"op": op, "confirm": True}
     if application:
         args["application"] = application
     if op == "boot":
         if not path:
-            raise ValueError("path (host .bootapp file) required for "
-                             "op=boot")
+            raise ValueError("path (host .bootapp file) required for op=boot")
         args["path"] = path
     if op == "reset":
         args["option"] = reset_option
@@ -1590,39 +1844,54 @@ def ecockpit_app_control(op: str, application: str = "", path: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="Project lifecycle + info. op=info and op=save are "
-                "safe. DESTRUCTIVE - requires explicit owner request + "
-                "confirm: op=create (NEW project, becomes primary), "
-                "op=open (opens a project as primary), op=open_archive "
-                "(restore a .projectarchive), op=close (DISCARDS "
-                "unsaved changes), op=info_set (project metadata). "
-                "These swap or mutate the GUI's project session.")
-def ecockpit_project_control(op: str, path: str = "",
-                             archive: str = "", project_path: str = "",
-                             overwrite: bool = False,
-                             company: str = "", title: str = "",
-                             version: str = "", author: str = "",
-                             description: str = "",
-                             confirm: bool = False,
-                             timeout_s: int = 300) -> str:
-    if op not in ("info", "info_set", "save", "create", "open",
-                  "open_archive", "close"):
-        raise ValueError("op must be info|info_set|save|create|open|"
-                         "open_archive|close")
+    "safe. DESTRUCTIVE - requires explicit owner request + "
+    "confirm: op=create (NEW project, becomes primary), "
+    "op=open (opens a project as primary), op=open_archive "
+    "(restore a .projectarchive), op=close (DISCARDS "
+    "unsaved changes), op=info_set (project metadata). "
+    "These swap or mutate the GUI's project session.",
+)
+def ecockpit_project_control(
+    op: str,
+    path: str = "",
+    archive: str = "",
+    project_path: str = "",
+    overwrite: bool = False,
+    company: str = "",
+    title: str = "",
+    version: str = "",
+    author: str = "",
+    description: str = "",
+    confirm: bool = False,
+    timeout_s: int = 300,
+) -> str:
+    if op not in (
+        "info",
+        "info_set",
+        "save",
+        "create",
+        "open",
+        "open_archive",
+        "close",
+    ):
+        raise ValueError("op must be info|info_set|save|create|open|open_archive|close")
     gated = op in ("info_set", "create", "open", "open_archive", "close")
     if gated and not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "project {o} refused - it mutates the GUI project "
-                     "session or project metadata; call again with "
-                     "confirm=true only on an explicit owner "
-                     "request".format(o=op),
-        }, indent=2)
-    args = {"op": op}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "project {o} refused - it mutates the GUI project "
+                "session or project metadata; call again with "
+                "confirm=true only on an explicit owner "
+                "request".format(o=op),
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"op": op}
     if gated:
         args["confirm"] = True
     if op == "create" or op == "open":
@@ -1631,17 +1900,19 @@ def ecockpit_project_control(op: str, path: str = "",
         args["path"] = path
     if op == "open_archive":
         if not archive or not project_path:
-            raise ValueError("archive and project_path required for "
-                             "op=open_archive")
+            raise ValueError("archive and project_path required for op=open_archive")
         args["archive"] = archive
         args["project_path"] = project_path
         args["overwrite"] = bool(overwrite)
     if op == "info_set":
-        for key in ("company", "title", "version", "author",
-                    "description"):
-            value = {"company": company, "title": title,
-                     "version": version, "author": author,
-                     "description": description}.get(key, "")
+        for key in ("company", "title", "version", "author", "description"):
+            value = {
+                "company": company,
+                "title": title,
+                "version": version,
+                "author": author,
+                "description": description,
+            }.get(key, "")
             if value:
                 args[key] = value
     return json.dumps(_run("project_control", args, timeout_s), indent=2)
@@ -1651,23 +1922,29 @@ def ecockpit_project_control(op: str, path: str = "",
 # PLC file system: manipulation ops (ls/get/put/rm have their own tools)
 # --------------------------------------------------------------------------
 
+
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="PLC file system operations on the ScriptOnlineDevice. "
-                "op=ls is READ-ONLY (list a directory; the runtime root "
-                "is '.' — '/' is refused, the result reports the probed "
-                "directory). DESTRUCTIVE - requires explicit owner "
-                "request + confirm: op=rename (remote + new_name), "
-                "op=mkdir (remote), op=rmdir (remote; recursive=true "
-                "deletes recursively). ls needs no confirm; the others "
-                "never without an explicit owner instruction.")
-def ecockpit_plc_fs_ops(op: str, remote: str, new_name: str = "",
-                        recursive: bool = False, device: str = "",
-                        confirm: bool = False,
-                        timeout_s: int = 300) -> str:
+    "op=ls is READ-ONLY (list a directory; the runtime root "
+    "is '.' — '/' is refused, the result reports the probed "
+    "directory). DESTRUCTIVE - requires explicit owner "
+    "request + confirm: op=rename (remote + new_name), "
+    "op=mkdir (remote), op=rmdir (remote; recursive=true "
+    "deletes recursively). ls needs no confirm; the others "
+    "never without an explicit owner instruction.",
+)
+def ecockpit_plc_fs_ops(
+    op: str,
+    remote: str,
+    new_name: str = "",
+    recursive: bool = False,
+    device: str = "",
+    confirm: bool = False,
+    timeout_s: int = 300,
+) -> str:
     if op not in ("ls", "rename", "mkdir", "rmdir"):
         raise ValueError("op must be ls|rename|mkdir|rmdir")
     if not remote:
@@ -1675,14 +1952,17 @@ def ecockpit_plc_fs_ops(op: str, remote: str, new_name: str = "",
     if op == "rename" and not new_name:
         raise ValueError("new_name required for op=rename")
     if op != "ls" and not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "plc_fs_ops {o} refused - it modifies the PLC file "
-                     "system; call again with confirm=true only on an "
-                     "explicit owner request".format(o=op),
-        }, indent=2)
-    args = {"op": op, "remote": remote}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "plc_fs_ops {o} refused - it modifies the PLC file "
+                "system; call again with confirm=true only on an "
+                "explicit owner request".format(o=op),
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"op": op, "remote": remote}
     if op != "ls":
         args["confirm"] = True
     if op == "rename":
@@ -1704,10 +1984,14 @@ def _run_http():
     if not token and not loopback:
         raise SystemExit(
             "refusing to bind {} without a bearer token - set ECP_MCP_TOKEN "
-            "(env or .env) or pass --token".format(host))
+            "(env or .env) or pass --token".format(host)
+        )
     if not token:
-        print("[ecockpit-mcp] tokenless loopback bind - set ECP_MCP_TOKEN "
-              "to require bearer auth", flush=True)
+        print(
+            "[ecockpit-mcp] tokenless loopback bind - set ECP_MCP_TOKEN "
+            "to require bearer auth",
+            flush=True,
+        )
 
     app = mcp.streamable_http_app(host=host)
 
@@ -1722,53 +2006,66 @@ def _run_http():
                 headers = dict(scope.get("headers") or [])
                 supplied = headers.get(b"authorization", b"")
                 if supplied != "Bearer {}".format(token).encode():
-                    await send({
-                        "type": "http.response.start",
-                        "status": 401,
-                        "headers": [(b"content-type",
-                                     b"application/json")],
-                    })
-                    await send({
-                        "type": "http.response.body",
-                        "body": b'{"error":"unauthorized - missing or '
-                                b'invalid bearer token"}',
-                    })
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": 401,
+                            "headers": [(b"content-type", b"application/json")],
+                        }
+                    )
+                    await send(
+                        {
+                            "type": "http.response.body",
+                            "body": b'{"error":"unauthorized - missing or '
+                            b'invalid bearer token"}',
+                        }
+                    )
                     return
             await self.inner(scope, receive, send)
 
     import uvicorn
-    print("[ecockpit-mcp] streamable-http on http://{h}:{p}/mcp "
-          "(token: {t})".format(
-              h=host, p=CFG.port,
-              t="required" if token else "DISABLED (loopback)"), flush=True)
-    uvicorn.run(BearerTokenMiddleware(app), host=host, port=CFG.port,
-                log_level="warning")
+
+    print(
+        "[ecockpit-mcp] streamable-http on http://{h}:{p}/mcp (token: {t})".format(
+            h=host, p=CFG.port, t="required" if token else "DISABLED (loopback)"
+        ),
+        flush=True,
+    )
+    uvicorn.run(
+        BearerTokenMiddleware(app), host=host, port=CFG.port, log_level="warning"
+    )
 
 
 # --------------------------------------------------------------------------
 # Library curation (global `librarymanager` / ILibManager)
 # --------------------------------------------------------------------------
 
+
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=True,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=True, open_world_hint=True
+    ),
     description="List the installed (managed) libraries known to the "
-                "e!COCKPIT library manager: display name, version, "
-                "company, namespace, dependencies, repository file path. "
-                "repo scopes the listing to one repository; shadowed=true "
-                "also lists libraries shadowed by higher-priority "
-                "repositories (default: excluded). filter is a "
-                "case-insensitive substring on displayname/title/name - "
-                "USE IT (or page via offset) when exploring: the System "
-                "repository alone holds ~4000 libraries and results are "
-                "paged (limit default 200, 0 = unlimited). The result "
-                "carries total/offset/count/truncated for walking pages.")
-def ecockpit_libs(repo: str = "", shadowed: bool = False, filter: str = "",
-                  offset: int = 0, limit: int = 200,
-                  timeout_s: int = 120) -> str:
-    args = {}
+    "e!COCKPIT library manager: display name, version, "
+    "company, namespace, dependencies, repository file path. "
+    "repo scopes the listing to one repository; shadowed=true "
+    "also lists libraries shadowed by higher-priority "
+    "repositories (default: excluded). filter is a "
+    "case-insensitive substring on displayname/title/name - "
+    "USE IT (or page via offset) when exploring: the System "
+    "repository alone holds ~4000 libraries and results are "
+    "paged (limit default 200, 0 = unlimited). The result "
+    "carries total/offset/count/truncated for walking pages.",
+)
+def ecockpit_libs(
+    repo: str = "",
+    shadowed: bool = False,
+    filter: str = "",
+    offset: int = 0,
+    limit: int = 200,
+    timeout_s: int = 120,
+) -> str:
+    args: dict[str, object] = {}
     if repo:
         args["repo"] = repo
     if shadowed:
@@ -1784,22 +2081,23 @@ def ecockpit_libs(repo: str = "", shadowed: bool = False, filter: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=True,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=True, open_world_hint=True
+    ),
     description="Find a library by display name or title. Searches "
-                "repositories in their configured order and returns every "
-                "match with its repository, file path and a shadowed flag "
-                "(true when an earlier repository in search order has the "
-                "same library - the first match wins). exact=true matches "
-                "the full display name/title only; the default also "
-                "accepts the bare title ('NETWORK' finds 'NETWORK, 1.3.5.3 "
-                "(OSCAT)'). repo narrows the search.")
-def ecockpit_lib_find(name: str, repo: str = "", exact: bool = False,
-                      timeout_s: int = 120) -> str:
+    "repositories in their configured order and returns every "
+    "match with its repository, file path and a shadowed flag "
+    "(true when an earlier repository in search order has the "
+    "same library - the first match wins). exact=true matches "
+    "the full display name/title only; the default also "
+    "accepts the bare title ('NETWORK' finds 'NETWORK, 1.3.5.3 "
+    "(OSCAT)'). repo narrows the search.",
+)
+def ecockpit_lib_find(
+    name: str, repo: str = "", exact: bool = False, timeout_s: int = 120
+) -> str:
     if not name:
         raise ValueError("name (library name or display name) required")
-    args = {"name": name}
+    args: dict[str, object] = {"name": name}
     if repo:
         args["repo"] = repo
     if exact:
@@ -1809,30 +2107,37 @@ def ecockpit_lib_find(name: str, repo: str = "", exact: bool = False,
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=False, open_world_hint=True
+    ),
     description="Install a compiled-library file (e.g. .library) into a "
-                "library repository. repo names the target repository "
-                "(default: the FIRST repository in the search order). "
-                "overwrite=true replaces an existing library and requires "
-                "confirm=true (as does any replacement - call with "
-                "confirm only on an explicit owner request). Modifies the "
-                "machine-wide library repositories, not the open project.")
-def ecockpit_lib_install(path: str, repo: str = "",
-                         overwrite: bool = False, confirm: bool = False,
-                         timeout_s: int = 120) -> str:
+    "library repository. repo names the target repository "
+    "(default: the FIRST repository in the search order). "
+    "overwrite=true replaces an existing library and requires "
+    "confirm=true (as does any replacement - call with "
+    "confirm only on an explicit owner request). Modifies the "
+    "machine-wide library repositories, not the open project.",
+)
+def ecockpit_lib_install(
+    path: str,
+    repo: str = "",
+    overwrite: bool = False,
+    confirm: bool = False,
+    timeout_s: int = 120,
+) -> str:
     if not path:
         raise ValueError("path (compiled-library file) required")
     if overwrite and not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "lib_install refused - overwrite=true replaces an "
-                     "existing library; call again with confirm=true only "
-                     "on an explicit owner request",
-        }, indent=2)
-    args = {"path": path, "overwrite": bool(overwrite)}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "lib_install refused - overwrite=true replaces an "
+                "existing library; call again with confirm=true only "
+                "on an explicit owner request",
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"path": path, "overwrite": bool(overwrite)}
     if repo:
         args["repo"] = repo
     if overwrite:
@@ -1842,30 +2147,33 @@ def ecockpit_lib_install(path: str, repo: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Uninstall "
-                "a library from a library repository (removes the files "
-                "from the repository; projects referencing it will stop "
-                "resolving). If the library exists in several "
-                "repositories the command is refused unless repo names "
-                "one. Pass confirm=true, never without an explicit owner "
-                "instruction.")
-def ecockpit_lib_uninstall(name: str, repo: str = "",
-                           confirm: bool = False,
-                           timeout_s: int = 120) -> str:
+    "a library from a library repository (removes the files "
+    "from the repository; projects referencing it will stop "
+    "resolving). If the library exists in several "
+    "repositories the command is refused unless repo names "
+    "one. Pass confirm=true, never without an explicit owner "
+    "instruction.",
+)
+def ecockpit_lib_uninstall(
+    name: str, repo: str = "", confirm: bool = False, timeout_s: int = 120
+) -> str:
     if not name:
         raise ValueError("name (library name or display name) required")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "lib_uninstall refused - it removes a library from a "
-                     "repository; call again with confirm=true only on an "
-                     "explicit owner request",
-        }, indent=2)
-    args = {"name": name, "confirm": True}
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "lib_uninstall refused - it removes a library from a "
+                "repository; call again with confirm=true only on an "
+                "explicit owner request",
+            },
+            indent=2,
+        )
+    args: dict[str, object] = {"name": name, "confirm": True}
     if repo:
         args["repo"] = repo
     return json.dumps(_run("lib_uninstall", args, timeout_s), indent=2)
@@ -1873,142 +2181,187 @@ def ecockpit_lib_uninstall(name: str, repo: str = "",
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=False,
-        readOnlyHint=True,
-        openWorldHint=True),
+        destructive_hint=False, read_only_hint=True, open_world_hint=True
+    ),
     description="List the library repositories in their configured search "
-                "order (first match wins when resolving libraries): "
-                "name, root folder, editable flag (system repositories "
-                "are not), and per-repository library count.")
+    "order (first match wins when resolving libraries): "
+    "name, root folder, editable flag (system repositories "
+    "are not), and per-repository library count.",
+)
 def ecockpit_repos(timeout_s: int = 120) -> str:
     return json.dumps(_run("repos", {}, timeout_s), indent=2)
 
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Register "
-                "a NEW library repository (machine-wide change). "
-                "rootfolder must already exist on disk; index places it "
-                "in the search order (-1 = append at the end). Pass "
-                "confirm=true, never without an explicit owner "
-                "instruction.")
-def ecockpit_repo_add(rootfolder: str, name: str, index: int = -1,
-                      confirm: bool = False, timeout_s: int = 120) -> str:
+    "a NEW library repository (machine-wide change). "
+    "rootfolder must already exist on disk; index places it "
+    "in the search order (-1 = append at the end). Pass "
+    "confirm=true, never without an explicit owner "
+    "instruction.",
+)
+def ecockpit_repo_add(
+    rootfolder: str,
+    name: str,
+    index: int = -1,
+    confirm: bool = False,
+    timeout_s: int = 120,
+) -> str:
     if not rootfolder or not name:
-        raise ValueError("rootfolder (existing directory) and name "
-                         "required")
+        raise ValueError("rootfolder (existing directory) and name required")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "repo_add refused - it changes the machine-wide "
-                     "library repository list; call again with "
-                     "confirm=true only on an explicit owner request",
-        }, indent=2)
-    return json.dumps(_run("repo_add",
-                           {"rootfolder": rootfolder, "name": name,
-                            "index": int(index), "confirm": True},
-                           timeout_s), indent=2)
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "repo_add refused - it changes the machine-wide "
+                "library repository list; call again with "
+                "confirm=true only on an explicit owner request",
+            },
+            indent=2,
+        )
+    return json.dumps(
+        _run(
+            "repo_add",
+            {
+                "rootfolder": rootfolder,
+                "name": name,
+                "index": int(index),
+                "confirm": True,
+            },
+            timeout_s,
+        ),
+        indent=2,
+    )
 
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Unregister "
-                "a library repository. delete_on_disk=true ALSO DELETES "
-                "the repository directory with all its library files - "
-                "only on an explicit owner instruction. System "
-                "repositories are not removable. Pass confirm=true, never "
-                "without an explicit owner instruction.")
-def ecockpit_repo_remove(name: str, delete_on_disk: bool = False,
-                         confirm: bool = False,
-                         timeout_s: int = 120) -> str:
+    "a library repository. delete_on_disk=true ALSO DELETES "
+    "the repository directory with all its library files - "
+    "only on an explicit owner instruction. System "
+    "repositories are not removable. Pass confirm=true, never "
+    "without an explicit owner instruction.",
+)
+def ecockpit_repo_remove(
+    name: str, delete_on_disk: bool = False, confirm: bool = False, timeout_s: int = 120
+) -> str:
     if not name:
         raise ValueError("name (repository name) required")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "repo_remove refused - it changes the machine-wide "
-                     "library repository list (delete_on_disk=true also "
-                     "deletes the directory); call again with confirm=true "
-                     "only on an explicit owner request",
-        }, indent=2)
-    return json.dumps(_run("repo_remove",
-                           {"name": name,
-                            "delete_on_disk": bool(delete_on_disk),
-                            "confirm": True},
-                           timeout_s), indent=2)
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "repo_remove refused - it changes the machine-wide "
+                "library repository list (delete_on_disk=true also "
+                "deletes the directory); call again with confirm=true "
+                "only on an explicit owner request",
+            },
+            indent=2,
+        )
+    return json.dumps(
+        _run(
+            "repo_remove",
+            {"name": name, "delete_on_disk": bool(delete_on_disk), "confirm": True},
+            timeout_s,
+        ),
+        indent=2,
+    )
 
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        destructiveHint=True,
-        readOnlyHint=False,
-        openWorldHint=True),
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
     description="DESTRUCTIVE - requires explicit owner request. Rename a "
-                "library repository (new_name) and/or move it to "
-                "new_location (must exist; copy_libraries=true installs "
-                "the old location's libraries at the new one when "
-                "missing). Pass confirm=true, never without an explicit "
-                "owner instruction.")
-def ecockpit_repo_update(name: str, new_name: str = "",
-                         new_location: str = "",
-                         copy_libraries: bool = False,
-                         confirm: bool = False,
-                         timeout_s: int = 120) -> str:
+    "library repository (new_name) and/or move it to "
+    "new_location (must exist; copy_libraries=true installs "
+    "the old location's libraries at the new one when "
+    "missing). Pass confirm=true, never without an explicit "
+    "owner instruction.",
+)
+def ecockpit_repo_update(
+    name: str,
+    new_name: str = "",
+    new_location: str = "",
+    copy_libraries: bool = False,
+    confirm: bool = False,
+    timeout_s: int = 120,
+) -> str:
     if not name:
         raise ValueError("name (repository name) required")
     if not new_name and not new_location:
         raise ValueError("new_name and/or new_location required")
     if not confirm:
-        return json.dumps({
-            "ok": False,
-            "refused": True,
-            "error": "repo_update refused - it changes the machine-wide "
-                     "library repository list; call again with "
-                     "confirm=true only on an explicit owner request",
-        }, indent=2)
-    return json.dumps(_run("repo_update",
-                           {"name": name, "new_name": new_name,
-                            "new_location": new_location,
-                            "copy_libraries": bool(copy_libraries),
-                            "confirm": True},
-                           timeout_s), indent=2)
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "repo_update refused - it changes the machine-wide "
+                "library repository list; call again with "
+                "confirm=true only on an explicit owner request",
+            },
+            indent=2,
+        )
+    return json.dumps(
+        _run(
+            "repo_update",
+            {
+                "name": name,
+                "new_name": new_name,
+                "new_location": new_location,
+                "copy_libraries": bool(copy_libraries),
+                "confirm": True,
+            },
+            timeout_s,
+        ),
+        indent=2,
+    )
 
 
 @mcp.tool(
     description="Reorder the library repository search order (first "
-                "repository wins when a library name resolves to several "
-                "ones). index is the new position, -1 moves the "
-                "repository to the end. Reversible settings change - no "
-                "confirm needed.")
+    "repository wins when a library name resolves to several "
+    "ones). index is the new position, -1 moves the "
+    "repository to the end. Reversible settings change - no "
+    "confirm needed."
+)
 def ecockpit_repo_move(name: str, index: int, timeout_s: int = 120) -> str:
     if not name:
         raise ValueError("name (repository name) required")
-    return json.dumps(_run("repo_move",
-                           {"name": name, "index": int(index)},
-                           timeout_s), indent=2)
+    return json.dumps(
+        _run("repo_move", {"name": name, "index": int(index)}, timeout_s), indent=2
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--transport", choices=("http", "stdio"),
-                        default=None,
-                        help="http (default) or stdio (client-spawned)")
-    parser.add_argument("--work-dir", default=None,
-                        help="file-protocol work dir (default: tmp/ next "
-                             "to this script, or ECP_WORK_DIR)")
+    parser.add_argument(
+        "--transport",
+        choices=("http", "stdio"),
+        default=None,
+        help="http (default) or stdio (client-spawned)",
+    )
+    parser.add_argument(
+        "--work-dir",
+        default=None,
+        help="file-protocol work dir (default: tmp/ next "
+        "to this script, or ECP_WORK_DIR)",
+    )
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
-    parser.add_argument("--token", default=None,
-                        help="bearer token for http; required for "
-                             "non-loopback binds")
+    parser.add_argument(
+        "--token",
+        default=None,
+        help="bearer token for http; required for non-loopback binds",
+    )
     ns = parser.parse_args()
 
     if ns.work_dir:
@@ -2026,10 +2379,10 @@ def main():
         raise SystemExit(
             "bundled executor missing: {e} - keep the ecockpit-mcp "
             "checkout intact (executor.py next to this "
-            "server)".format(e=executor))
+            "server)".format(e=executor)
+        )
 
-    print("[ecockpit-mcp] work dir: {r}".format(r=CFG.tmp_dir),
-          flush=True)
+    print("[ecockpit-mcp] work dir: {r}".format(r=CFG.tmp_dir), flush=True)
     if CFG.transport == "stdio":
         # No print() after this - stdout carries the MCP protocol.
         mcp.run(transport="stdio")
