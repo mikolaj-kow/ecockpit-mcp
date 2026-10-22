@@ -19,6 +19,7 @@ nav:
   - Home: index.md
   - Architecture: architecture.md
   - Testing (live results): TESTING.md
+  - Test plan: TESTPLAN.md
   - ScriptEngine reference:
       - API reference (verified): SCRIPTENGINE_API.md
       - Gotchas (G-nn): SCRIPTENGINE_GOTCHAS.md

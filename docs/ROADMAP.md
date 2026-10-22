@@ -54,7 +54,7 @@ Non-negotiable discipline:
 - Packaging: src-layout package, `__version__` single-sourcing, console
   entry point, sdist+wheel build in CI, wheel install + entry-point
   smoke, license/notice metadata (Apache-2.0).
-- Quality gates: strict flake8 fail-fast, offline test suite (31 tests;
+- Quality gates: strict flake8 fail-fast, offline test suite (34 tests;
   fake `ILibManager` for the library commands, fakes for the system /
   device-info / device-IO / symbol-options / special-POU domains),
   build gate, dead-tool absence pins.
@@ -84,7 +84,7 @@ Non-negotiable discipline:
   setting, `dev.export/import_io_mappings_as_csv`,
   `sym.get_symbol_configuration_xsd()`/`content_feature_flags`/
   attribute+comment filters, `create_pou(SpecialPouType.*)`; offline
-  test suite grown 15 → 31 tests with fakes for the new domains.
+  test suite grown 15 → 34 tests with fakes for the new domains.
 - Live-verified: export (file + string forms), login ladder (Try, 15 s),
   plc_ls (directory fallback), prepared_values, libs/repos/find,
   tree/task_config/device_scan/project info.

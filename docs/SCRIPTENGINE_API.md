@@ -304,6 +304,16 @@ feat/scriptlib-tools:
   published at 3s-software.com, as applicable to the current release).
   NOTE: the stub has NO literal `export_comments` member — comment
   export rides the IncludeComments/XmlIncludeComments flags.
+  **LIVE 2026-10-22 (G-20, G-24)**: `create_symbol_config`'s calculator
+  parameter is a real `System.Guid` (bool/None/string rejected,
+  2-arg absent — CLR `Guid.Empty` works); the live
+  SymbolCommentFilterType lacks the stub-documented `none` member AND
+  typed enum properties reject raw ints (`System.Enum.ToObject`
+  builds one). Special POUs live-proven: adding
+  `create_pou(SpecialPouType.check_range_signed)` flipped
+  `is_online_change_possible` true → **false**; removing it + rebuild
+  restored **true**. The create_* container is the APPLICATION —
+  `EScriptProject` has no create_pou (G-22).
 - **Device scan** (ScriptOnline gateway stack, 3.5.8.0):
   `online.gateways` (+`gateway_drivers`),
   `gateway.perform_network_scan()` → targets (`device_name`, `address`,
