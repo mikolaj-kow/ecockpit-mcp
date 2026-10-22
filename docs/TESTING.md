@@ -27,7 +27,7 @@ SCRIPTENGINE_API.md cross-reference.
 | 2026-10-22 | ecockpit_task_config | op=inspect | VERIFIED | Monitor task (POUs S/A/D/M, prio 14, t#50ms) + second task |
 | 2026-10-22 | ecockpit_device_scan | op=gateways | VERIFIED | WACDefaultGateway; drivers SharedMemory/TCP-IP |
 | 2026-10-22 | ecockpit_project_control | op=info | VERIFIED | s4-v3.10.0-pre.ecp, dirty=false |
-| 2026-10-22 | ecockpit_plc_fs_ops | op=ls | PENDING | tool gains op=ls this round; run after server restart |
+| 2026-10-22 | ecockpit_plc_fs_ops | op=ls, remote="/" | VERIFIED | tool now accepts ls (read-only); connected + listed `.` — 7 entries via `create_online_device.get_file_list_of_directory` |
 | 2026-10-22 | ecockpit_device_params | op=list / read online=true | PENDING | read-only; run in the next armed session |
 | 2026-10-22 | ecockpit_symbol_config_variables | compile=true | PENDING | builds first (slow but safe) |
 | — | ecockpit_app_control op=activate/boot/start/reset | confirm=true | PENDING | DESTRUCTIVE — owner request only |
