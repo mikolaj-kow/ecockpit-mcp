@@ -1132,6 +1132,26 @@ class FakeSpecialContainer(object):
         return FakeSpecialPou()
 
 
+def test_object_create_container_falls_back_to_application(monkeypatch):
+    # G-22: EScriptProject has no create_pou live - the no-parent
+    # default container is the APPLICATION
+    class FakeSPT2(object):
+        check_bounds = 2
+
+    monkeypatch.setattr(ex, "SpecialPouType", FakeSPT2)
+    app = FakeSpecialContainer()
+
+    class RootProject(object):
+        def find(self, name, recursive):
+            return [app]
+
+    monkeypatch.setattr(ex, "get_application", lambda project: app)
+    out = ex.cmd_object_create(RootProject(), {
+        "kind": "special_pou", "special_type": "check_bounds",
+        "confirm": True})
+    assert app.calls and out["created"] == "check_bounds"
+
+
 def test_object_create_special_pou(monkeypatch):
     class FakeSPT(object):
         check_bounds = 2

@@ -3954,6 +3954,22 @@ def cmd_tree(project, args):
                        '"move" or "folder"')
 
 
+def _iecc_container(project, parent_name):
+    """Container for the ScriptIecLanguageObjectContainer create_* calls.
+
+    LIVE 2026-10-22 (G-22): EScriptProject has NO create_pou
+    ("'EScriptProject' object has no attribute 'create_pou'") - the
+    mixin lands on the APPLICATION - so the no-parent default is the
+    application, not the project (falling back to the project keeps
+    offline fakes working)."""
+    if parent_name:
+        return _find_one(project, parent_name)
+    try:
+        return get_application(project)
+    except Exception:
+        return project
+
+
 _SPECIAL_POU_TYPES = ("check_bounds", "check_pointer",
                       "check_range_unsigned", "check_range_signed",
                       "check_div_real_64", "check_div_real_32",
@@ -3973,7 +3989,8 @@ def cmd_object_create(project, args):
                    prohibits online change from then on - stub warning),
            "pou_type": "program"|"functionblock"|"function" (pou only),
            "base_type"?: (dut/interface/method return),
-           "parent"?: object name (container; default the project),
+           "parent"?: object name (container; default the APPLICATION -
+                   EScriptProject itself has no create_* live, G-22),
            "declaration"?: ST text (textual objects),
            "implementation"?: ST text,
            "confirm": true}
@@ -3995,8 +4012,8 @@ def cmd_object_create(project, args):
                                "args.special_type (one of: {k})"
                                .format(k=", ".join(_SPECIAL_POU_TYPES)))
         parent_name = str(args.get("parent", "")).strip()
-        container = _find_one(project, parent_name) \
-            if parent_name else project
+        container = _iecc_container(
+            project, str(args.get("parent", "")).strip())
         try:
             member = getattr(SpecialPouType, special)
         except Exception:
@@ -4015,7 +4032,8 @@ def cmd_object_create(project, args):
     if not name:
         raise RuntimeError("object_create needs args.name")
     parent_name = str(args.get("parent", "")).strip()
-    container = _find_one(project, parent_name) if parent_name else project
+    container = _iecc_container(
+        project, str(args.get("parent", "")).strip())
 
     created = None
     if kind == "pou":
