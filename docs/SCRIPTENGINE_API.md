@@ -327,7 +327,11 @@ feat/scriptlib-tools:
   OnlyIfUnused=2/AlwaysInBusCycle=3), `generate_force_variables`,
   `enable_diagnosis`, `show_io_warnings_as_errors`,
   `can_set_io_application`). → `ecockpit_device_info` (setters
-  confirm-gated).
+  confirm-gated). **LIVE 2026-10-22**: identification
+  (PFC200_2ETH_RS → `{4096, "1006 1201", 5.17.3.10}`), simulation and
+  the driver-info dump verified; `always_update_variables` reads **0**
+  on this device — not in the stub enum (G-18); `factories` (system
+  info) is not enumerable live.
 - **Device parameters** (ScriptDeviceParameters, 3.5.4.0):
   `device.device_parameters` / `device.connectors.by_id(id).
   host_parameters` → parameter set; elements expose `identifier`,
@@ -342,11 +346,18 @@ feat/scriptlib-tools:
   `default_variable`; `mapping_creates_variable`;
   `maps_to_existing_variable`; `automatic_iec_address` get/set;
   `manual_iec_address` get/set — setting an address switches auto
-  off, setting None switches it back on) and
+  off, setting None switches it back on; the GETTER returns the
+  automatic address while auto is on) and
   `dev.export_io_mappings_as_csv(file_path)` /
   `dev.import_io_mappings_from_csv(file_path)` (absolute host paths).
   → `ecockpit_device_io` (mappings inspection read-only;
-  set_mapping / import_csv confirm-gated).
+  set_mapping / import_csv confirm-gated). **LIVE 2026-10-22**:
+  export verified (10.9 KB CSV, module channels included);
+  `export_io_mappings_as_csv` sees mappings a root-only script walk
+  misses — mappings live on the plugged modules (G-19), so the tool
+  walks every `is_device` in the tree (153 elements on s4). The
+  mapped elements' `Id` reads -1 and connector `.id` is not readable
+  live (guarded to "?").
 - **Application** (ScriptApplication, 3.5.10.0 fields): `is_uptodate`,
   `is_online_change_possible`, `create_boot_application(path,
   update_compile_info=False, write_visu_files=False)` (offline boot

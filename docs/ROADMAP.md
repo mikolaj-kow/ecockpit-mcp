@@ -91,13 +91,14 @@ Non-negotiable discipline:
 
 ## Next
 
-- **Live-test pass for the feat/system-device-io round**: ecockpit_system
-  info/prompt-simulation ops, ecockpit_device_info
-  identification/simulation/driver_info, ecockpit_device_io
-  mappings/export_csv, ecockpit_symbol_config_options config/xsd —
-  read-only first (arm the relay from the worktree checkout), then
-  owner-authorized destructive checks; record every result in
-  TESTING.md.
+- **Live-test pass for the feat/system-device-io round**: read-only
+  ops DONE 2026-10-22 (system info, identification, simulation,
+  driver_info, mappings, export_csv — see TESTING.md; G-18/G-19 came
+  out of it). Remaining: prompt-simulation ops (set_prompt_answer +
+  a prompt-issuing engine call), symbol_config config/xsd once a
+  symbol configuration object exists, and the destructive set
+  (simulation_set, driver_info_set, set_mapping, import_csv,
+  special_pou, ui.*, exit) — owner request only.
 - **`ecockpit-mcp install-scripts <dir>`**: write `relay.py` +
   `executor.py` (plus a starter `.env`) to an arming directory, so the
   wheel alone is enough to arm e!COCKPIT.

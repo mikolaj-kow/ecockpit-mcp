@@ -39,6 +39,14 @@ SCRIPTENGINE_API.md cross-reference.
 | 2026-10-22 | ecockpit_symbol_config_options | op=config / xsd | PENDING | read-only (feat/system-device-io) |
 | 2026-10-22 | ecockpit_symbol_config_options | op=config_set | PENDING | DESTRUCTIVE — project symbol config; owner request only |
 | 2026-10-22 | ecockpit_object_create | kind=special_pou (any check function) | PENDING | DESTRUCTIVE — forces a full recompile, disables online change; owner request only |
+| 2026-10-22 | ecockpit_system | op=info | VERIFIED | ui_present=true, prompt_handling decoded [LogSimplePrompts], abort flags, commands inventory (capped 50); factories NOT enumerable live (factory_count null) — armed-session pass, worktree relay |
+| 2026-10-22 | ecockpit_device_info | op=identification | VERIFIED | PFC200_2ETH_RS: DeviceId {type 4096, id "1006 1201", version 5.17.3.10}; module_id "" (none, per stub semantics) |
+| 2026-10-22 | ecockpit_device_info | op=simulation | VERIFIED | false (live device, not simulated) |
+| 2026-10-22 | ecockpit_device_info | op=driver_info | VERIFIED | no bus cycle task configured (empty name, zero guid); io_application guid set; **always_update_variables reads 0 — the stub enum has no 0 (G-18)** |
+| 2026-10-22 | ecockpit_device_io | op=mappings | VERIFIED | 153 mappable elements across the whole tree (Kbus, DI1_16_PB_classic, ...). First run found 0 — mappings live on the PLUGGED MODULES, a root-only walk misses them (fixed same commit: walk every is_device). Connector .id reads fail live → "source: connector ?" (guarded) |
+| 2026-10-22 | ecockpit_device_io | op=export_csv | VERIFIED | 10,875 bytes → `<ECP_PROJECT_ROOT>/io-mappings/PFC200_2ETH_RS_io_mappings.csv`; engine's own export confirmed the module-channel mappings the script walk originally missed |
+| 2026-10-22 | ecockpit_symbol_config_options | op=config / op=xsd | VERIFIED (precondition path) | clean error: no symbol configuration object under Application — create it first (ecockpit_symbol_config_create, destructive, owner request); op=config/xsd untested until then |
+| 2026-10-22 | ecockpit_device_params | op=list | VERIFIED | root device: 4 params (Processor Load * set); parameter-set iteration confirmed live (was PENDING from the ScriptLib round; read online=true stays PENDING) |
 | — | ecockpit_app_control op=activate/boot/start/reset | confirm=true | PENDING | DESTRUCTIVE — owner request only |
 | — | ecockpit_download | confirm=true | PENDING | DESTRUCTIVE — replaces the RUNNING app; owner request only |
 | — | ecockpit_device_params op=write | confirm=true | PENDING | DESTRUCTIVE — PLC parameter write; owner request only |
