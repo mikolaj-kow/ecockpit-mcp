@@ -4350,12 +4350,21 @@ def cmd_symbol_config(project, args):
                     "note": "symbol configuration already present",
                     "name": _short_name(sym)}
         # LIVE 2026-10-22: the calculator parameter is a Guid here -
-        # the stub-stand-in `False` raises "expected Guid, got bool".
-        # Ladder: False -> None -> Guid.Empty string -> 2-arg form.
+        # the stub-stand-in `False` raises "expected Guid, got bool",
+        # and neither None nor the Guid.Empty STRING coerce. Ladder:
+        # False -> None -> CLR System.Guid.Empty -> Guid.Empty string
+        # -> 2-arg form. (Under CPython the System import fails and the
+        # CLR rung is skipped - the offline test asserts that form list.)
         attempts = []
         sym = None
-        for calc in (False, None,
-                     "00000000-0000-0000-0000-000000000000"):
+        forms = [False, None]
+        try:
+            from System import Guid as _DotNetGuid
+            forms.append(_DotNetGuid.Empty)
+        except Exception:
+            pass
+        forms.append("00000000-0000-0000-0000-000000000000")
+        for calc in forms:
             try:
                 sym = app.create_symbol_config(
                     bool(args.get("export_comments", False)),
