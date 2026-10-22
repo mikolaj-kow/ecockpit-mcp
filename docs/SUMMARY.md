@@ -25,9 +25,9 @@ more). Live results: [TESTING.md](TESTING.md).
 | Category | Tool | Status | Function / call chain | Comments |
 |---|---|---|---|---|
 | System / messages | — | ✅ | `system.write_message(severity, text)` | executor logs |
-| System / messages | — | ✅ | `system.get_message_categories()` | ecockpit_messages / ecockpit_clear_messages |
-| System / messages | — | ✅ | `system.get_message_objects(category, severities)` | ecockpit_messages + build harvest |
-| System / messages | — | ✅ | `system.clear_messages(category)` | ecockpit_clear_messages |
+| System / messages | ecockpit_messages | ✅ | `system.get_message_categories()` | consumed with get_message_objects |
+| System / messages | ecockpit_messages | ✅ | `system.get_message_objects(category, severities)` | build harvest reads these |
+| System / messages | ecockpit_clear_messages | ✅ | `system.clear_messages(category)` | iterates all categories |
 | System / messages | — | ✅ | `system.delay(ms)` / `process_messageloop()` | internal |
 | System / messages | — | 🟡 | `system.prompt_handling` / `prompt_answers` (headless dialog simulation) | LogSimplePrompts applied; answers not wired |
 | System / messages | — | ❌ | `system.get_message_category_description(category)` | not callable in this build |
@@ -130,7 +130,7 @@ more). Live results: [TESTING.md](TESTING.md).
 | Libraries (repo) | ecockpit_repo_add/remove/update/move | ✅ | `insert_repository` / `remove_repository` / `update_repository` / `move_repository` | — |
 | Libraries (repo) | (internal) | ✅ | `get_file_path(lib)` | libs listing |
 | Libraries (repo) | — | 🟡 | `categories` / `top_level_categories` / `get_category(guid)` | metadata only |
-| Libraries (in-project) | — | 🟡 | `app.get_library_manager()` → `add_library(name|ManagedLib)` / `add_placeholder(name, resolution)` / `remove_library(name)` | nearest-term; stub discovered 2026-10-22 |
+| Libraries (in-project) | — | 🟡 | `app.get_library_manager()` → `add_library(name\|ManagedLib)` / `add_placeholder(name, resolution)` / `remove_library(name)` | nearest-term; stub discovered 2026-10-22 |
 | Libraries (in-project) | — | 🟡 | `lm.references[name]` → placeholder `.set_redirection(...)` / `.default_resolution` / `.qualified_only` / `.optional` | — |
 | Libraries (in-project) | — | 🟡 | `lm.references[name].parameters["P"] = expr` (library parameters) | — |
 | Device repository | — | 🟡 | `device_repository.get_all_devices(...)` / `get_device(device_id)` | installed-device inventory |
