@@ -753,15 +753,16 @@ class FakeIoMapping(object):
 
 
 class FakeIoElement(object):
-    def __init__(self, identifier, mapping=None):
+    def __init__(self, identifier, mapping=None, mappable=False):
         self.identifier = identifier
         self.visible_name = identifier
         self._mapping = mapping
+        self._mappable = mappable or mapping is not None
         self.has_sub_elements = False
 
     @property
     def is_mappable_io(self):
-        return self._mapping is not None
+        return self._mappable
 
     @property
     def io_mapping(self):
@@ -803,6 +804,8 @@ class FakeConnector(object):
 
 
 class FakeIoDevice(object):
+    is_device = True
+
     def __init__(self, device_set, connectors=()):
         self._device_set = device_set
         self._connectors = list(connectors)
@@ -811,6 +814,9 @@ class FakeIoDevice(object):
 
     def __str__(self):
         return "ScriptDeviceObject{Name=FakeDev}"
+
+    def get_name(self):
+        return "FakeDev"
 
     @property
     def device_parameters(self):
@@ -829,12 +835,22 @@ class FakeIoDevice(object):
         self.imported = path
 
 
+class FakeDevicesProject(object):
+    def __init__(self, devices):
+        self._devices = devices
+
+    def get_children(self, recursive):
+        return list(self._devices)
+
+
 @pytest.fixture()
 def iodev(monkeypatch):
     input_map = FakeIoMapping(variable="old_var", auto=True)
     conn_map = FakeIoMapping(variable="c_var", auto=False, manual="%QW0")
     device = FakeIoDevice(
-        FakeParamSet([("IO-Params", [FakeIoElement("plain_param", None)]),
+        FakeParamSet([("IO-Params", [FakeIoElement("plain_param", None),
+                                     FakeIoElement("unmapped_io",
+                                                   None, mappable=True)]),
                       ("IO-Map", [FakeIoElement("input_io", input_map)])]),
         [FakeConnector(1, FakeParamSet([
             ("ConnIo", [FakeIoElement("conn_io", conn_map)])]))])
@@ -845,15 +861,30 @@ def iodev(monkeypatch):
 
 
 def test_device_io_mappings_walk(iodev):
-    out = ex.cmd_device_io(None, {"op": "mappings"})
-    assert out["count"] == 2
+    # a plugged submodule below the root carries its own mapped channel
+    # (LIVE 2026-10-22: the root-only walk missed the module channels
+    # the engine's own CSV export lists)
+    sub_map = FakeIoMapping(variable="s_var", auto=False, manual="%IX2.0")
+    sub = FakeIoDevice(
+        FakeParamSet([("ModIo", [FakeIoElement("sub_io", sub_map)])]))
+    sub.get_name = lambda: "SubDev"
+
+    out = ex.cmd_device_io(FakeDevicesProject([iodev, sub]),
+                           {"op": "mappings"})
+    assert out["count"] == 4
     by_id = dict((m["identifier"], m) for m in out["mappings"])
     assert "plain_param" not in by_id          # not mappable -> skipped
     assert by_id["input_io"]["io_mapping"]["variable"] == "old_var"
     assert by_id["input_io"]["io_mapping"]["automatic_iec_address"] is True
+    assert by_id["input_io"]["device"] == "FakeDev"
     assert by_id["conn_io"]["parameter"] == "ConnIo"
     assert by_id["conn_io"]["source"] == "connector 1"
     assert by_id["conn_io"]["io_mapping"]["manual_iec_address"] == "%QW0"
+    # mappable but unmapped -> listed with a null mapping
+    assert by_id["unmapped_io"]["io_mapping"] is None
+    # submodule channels are found via the project-tree walk
+    assert by_id["sub_io"]["device"] == "SubDev"
+    assert by_id["sub_io"]["io_mapping"]["variable"] == "s_var"
 
 
 def test_device_io_set_mapping_gates_and_effects(iodev):

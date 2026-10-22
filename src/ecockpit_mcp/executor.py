@@ -4735,7 +4735,7 @@ def cmd_device_info(project, args):
     dev = _device_obj(project, args)
 
     if op == "identification":
-        out = {"device": _short_name(dev)}
+        out = {"device": _device_label(dev)}
         try:
             did = dev.get_device_identification()
             out["device_id"] = {"type": str(did.type), "id": str(did.id),
@@ -4756,7 +4756,7 @@ def cmd_device_info(project, args):
             raise RuntimeError("get_simulation_mode failed: {e}".format(
                 e=exc))
         log("OK", "simulation mode: {m}".format(m=mode))
-        return {"device": _short_name(dev), "simulation": mode}
+        return {"device": _device_label(dev), "simulation": mode}
 
     if op == "simulation_set":
         if not args.get("confirm"):
@@ -4770,8 +4770,8 @@ def cmd_device_info(project, args):
         except Exception:
             readback = None
         log("OK", "device {d}: simulation mode set to {m}".format(
-            d=_short_name(dev), m=enabled))
-        return {"device": _short_name(dev), "set": enabled,
+            d=_device_label(dev), m=enabled))
+        return {"device": _device_label(dev), "set": enabled,
                 "simulation": readback}
 
     if op == "driver_info":
@@ -4783,7 +4783,7 @@ def cmd_device_info(project, args):
         out = _driver_info_dict(di)
         log("OK", "driver info read (bus cycle task: {t})".format(
             t=out.get("bus_cycle_task_by_name")))
-        return {"device": _short_name(dev), "driver_info": out}
+        return {"device": _device_label(dev), "driver_info": out}
 
     if op == "driver_info_set":
         if not args.get("confirm"):
@@ -4863,7 +4863,7 @@ def cmd_device_info(project, args):
                                "enable_diagnosis, "
                                "show_io_warnings_as_errors")
         log("OK", "driver info set: {a}".format(a=sorted(applied)))
-        return {"device": _short_name(dev), "applied": applied,
+        return {"device": _device_label(dev), "applied": applied,
                 "driver_info": _driver_info_dict(di)}
     raise RuntimeError('device_info needs args.op of "identification", '
                        '"simulation", "simulation_set", "driver_info" or '
@@ -4957,7 +4957,7 @@ def cmd_device_params(project, args):
                     entry[attr] = None
             out.append(entry)
         log("OK", "device params: {n}".format(n=len(out)))
-        return {"device": _short_name(dev), "count": len(out),
+        return {"device": _device_label(dev), "count": len(out),
                 "parameters": out}
 
     if op == "read":
@@ -5058,26 +5058,47 @@ def _mapping_sets(dev, connector_id):
     return pairs
 
 
-def _mapping_summary(el):
-    """One element -> mapping summary dict, or None when it is not a
-    mappable IO (ScriptDataElement.is_mappable_io / .io_mapping)."""
+def _device_label(dev):
+    """Readable device name: get_name() first (tree name, e.g.
+    'PFC200_2ETH_RS'), then the 'Name=<x>' repr slice, then the repr."""
     try:
-        if not el.is_mappable_io:
-            return None
-    except Exception:
-        return None
-    entry = {"identifier": str(el.identifier)}
-    try:
-        entry["visible_name"] = str(el.visible_name)
+        name = str(dev.get_name())
+        if name:
+            return name
     except Exception:
         pass
+    name = _short_name(dev)
+    if name.startswith("Name="):
+        return name[len("Name="):]
+    return name
+
+
+def _mapping_summary(el):
+    """One element -> mapping summary dict, or None when it carries no
+    mapping and is not mappable (ScriptDataElement.io_mapping is the
+    primary signal; is_mappable_io the fallback - LIVE 2026-10-22: the
+    engine's own CSV export sees mappings that is_mappable_io-gated
+    walks miss, so io_mapping is probed on every element)."""
+    try:
+        entry_id = str(el.identifier)
+    except Exception:
+        return None
     try:
         m = el.io_mapping
     except Exception:
         m = None
     if m is None:
-        entry["io_mapping"] = None
-        return entry
+        try:
+            if not el.is_mappable_io:
+                return None
+        except Exception:
+            return None
+        return {"identifier": entry_id, "io_mapping": None}
+    entry = {"identifier": entry_id}
+    try:
+        entry["visible_name"] = str(el.visible_name)
+    except Exception:
+        pass
     md = {}
     for name, reader in (
             ("id", lambda: str(m.Id)),
@@ -5113,6 +5134,30 @@ def _walk_mapping_elements(el, out):
         pass
 
 
+def _walkable_devices(project, args):
+    """Devices to walk for io mappings: the named device, or every
+    is_device object in the project tree (LIVE 2026-10-22: the mapped
+    channels live on the plugged modules below the root device - a
+    root-only walk found nothing while the engine's own CSV export
+    listed them)."""
+    name = str(args.get("device", "")).strip()
+    if name:
+        return [_device_obj(project, args)]
+    devs = []
+    try:
+        for obj in project.get_children(True):
+            try:
+                if obj.is_device:
+                    devs.append(obj)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    if not devs:
+        devs = [get_device(project, "")]
+    return devs
+
+
 def cmd_device_io(project, args):
     """IO mapping inspection and CSV round-trip
     (ScriptDeviceObject.export/import_io_mappings_as_csv, 3.5.8.0).
@@ -5137,24 +5182,31 @@ def cmd_device_io(project, args):
 
     if op == "mappings":
         out = []
-        for label, params in _mapping_sets(dev, args.get("connector_id")):
-            for param in params:
-                try:
-                    pname = str(param.name)
-                except Exception:
-                    pname = "?"
-                entries = []
-                try:
-                    for el in param:
-                        _walk_mapping_elements(el, entries)
-                except Exception:
-                    continue
-                for e in entries:
-                    e["parameter"] = pname
-                    e["source"] = label
-                out.extend(entries)
+        for wdev in _walkable_devices(project, args):
+            dname = _device_label(wdev)
+            try:
+                sets = _mapping_sets(wdev, args.get("connector_id"))
+            except Exception:
+                continue
+            for label, params in sets:
+                for param in params:
+                    try:
+                        pname = str(param.name)
+                    except Exception:
+                        pname = "?"
+                    entries = []
+                    try:
+                        for el in param:
+                            _walk_mapping_elements(el, entries)
+                    except Exception:
+                        continue
+                    for e in entries:
+                        e["parameter"] = pname
+                        e["source"] = label
+                        e["device"] = dname
+                    out.extend(entries)
         log("OK", "io mappings: {n} mappable element(s)".format(n=len(out)))
-        return {"device": _short_name(dev), "count": len(out),
+        return {"device": _device_label(dev), "count": len(out),
                 "mappings": out}
 
     if op == "set_mapping":
@@ -5242,7 +5294,7 @@ def cmd_device_io(project, args):
             target_dir = os.path.join(base, "io-mappings")
             if not os.path.isdir(target_dir):
                 os.makedirs(target_dir)
-            sane = _short_name(dev)
+            sane = _device_label(dev)
             if sane.startswith("Name="):
                 sane = sane[len("Name="):]
             sane = re.sub(r"[^A-Za-z0-9_.-]+", "_", sane).strip("_")
@@ -5260,7 +5312,7 @@ def cmd_device_io(project, args):
         size = os.path.getsize(path)
         log("OK", "io mappings exported: {p} ({n} bytes)".format(
             p=path, n=size))
-        return {"device": _short_name(dev), "file": path, "bytes": size}
+        return {"device": _device_label(dev), "file": path, "bytes": size}
 
     if op == "import_csv":
         if not args.get("confirm"):
@@ -5273,7 +5325,7 @@ def cmd_device_io(project, args):
                                "an existing CSV (got '{p}')".format(p=path))
         dev.import_io_mappings_from_csv(os.path.abspath(path))
         log("OK", "io mappings imported from {p}".format(p=path))
-        return {"device": _short_name(dev), "file": os.path.abspath(path),
+        return {"device": _device_label(dev), "file": os.path.abspath(path),
                 "imported": True}
     raise RuntimeError('device_io needs args.op of "mappings", '
                        '"set_mapping", "export_csv" or "import_csv"')
