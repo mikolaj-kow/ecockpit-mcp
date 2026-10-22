@@ -1409,7 +1409,9 @@ def ecockpit_device_info(op: str = "identification", device: str = "",
                 "(DESTRUCTIVE - requires explicit owner request + "
                 "confirm): set variable and/or manual_iec_address "
                 "(automatic=true resets to the automatic address) on a "
-                "parameter's elements (name or id, optional element). "
+                "parameter's element - element=<identifier> targets one "
+                "channel; multi-element parameters REFUSE without it "
+                "unless all_elements=true (G-21). "
                 "op=export_csv {file?}: export the device's IO mappings "
                 "to CSV (default <ECP_PROJECT_ROOT>/io-mappings/"
                 "<device>_io_mappings.csv). op=import_csv {file, "
@@ -1419,7 +1421,8 @@ def ecockpit_device_io(op: str = "mappings", device: str = "",
                        connector_id: int = None, name: str = "",
                        id: int = None, element: str = "",
                        variable: str = "", manual_iec_address: str = "",
-                       automatic: bool = False, file: str = "",
+                       automatic: bool = False,
+                       all_elements: bool = False, file: str = "",
                        confirm: bool = False,
                        timeout_s: int = 300) -> str:
     if op not in ("mappings", "set_mapping", "export_csv", "import_csv"):
@@ -1456,6 +1459,8 @@ def ecockpit_device_io(op: str = "mappings", device: str = "",
             args["manual_iec_address"] = manual_iec_address
         if automatic:
             args["automatic"] = True
+        if all_elements:
+            args["all_elements"] = True
         args["confirm"] = True
     if op == "export_csv" and file:
         args["file"] = file

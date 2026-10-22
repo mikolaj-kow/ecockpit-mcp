@@ -5280,10 +5280,13 @@ def cmd_device_io(project, args):
                   mapping_creates_variable, maps_to_existing_variable,
                   automatic_iec_address, manual_iec_address) - read-only
       set_mapping {device?, connector_id?, name?|id?, element?,
-                  variable?, manual_iec_address?, automatic?, confirm}
+                  variable?, manual_iec_address?, automatic?,
+                  all_elements?, confirm}
                   -> set mapping.variable and/or manual_iec_address
                   (automatic=true resets to the automatic address;
-                  CONFIRM-GATED - modifies the IO configuration)
+                  CONFIRM-GATED - modifies the IO configuration).
+                  Multi-element parameters REFUSE without element=
+                  <identifier> unless all_elements=true (G-21)
       export_csv  {device?, file?} -> export_io_mappings_as_csv (default
                   <ECP_PROJECT_ROOT>/io-mappings/<device>_io_mappings.csv)
       import_csv  {device?, file, confirm} -> import_io_mappings_from_csv
@@ -5361,8 +5364,9 @@ def cmd_device_io(project, args):
             raise RuntimeError("device_io set_mapping: no parameter "
                                "matched args.name/args.id")
         target = str(args.get("element", "")).strip().lower()
-        results = []
-        for el in param:
+        allow_all = bool(args.get("all_elements", False))
+        cands = []
+        for el in _param_elements(param):
             if target and str(el.identifier).lower() != target:
                 continue
             try:
@@ -5371,6 +5375,22 @@ def cmd_device_io(project, args):
                 m = None
             if m is None:
                 continue
+            cands.append((el, m))
+        # LIVE 2026-10-22 (G-21): an unfiltered set on a multi-channel
+        # parameter rewrote ALL channel variables (16 xBtn* clobbered,
+        # repaired via the CSV round-trip) - require an explicit element
+        # unless the caller deliberately asks for every element.
+        if len(cands) > 1 and not target and not allow_all:
+            raise RuntimeError(
+                "set_mapping REFUSED - parameter '{p}' has {n} mappable "
+                "elements (e.g. {i}); pass element=<identifier> to set "
+                "exactly one, or all_elements=true to deliberately "
+                "apply to all".format(
+                    p=str(param.name), n=len(cands),
+                    i=", ".join(str(el.identifier)
+                                for el, _ in cands[:4])))
+        results = []
+        for el, m in cands:
             touched = {}
             if variable is not None:
                 m.variable = str(variable)

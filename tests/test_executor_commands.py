@@ -934,6 +934,37 @@ def test_device_io_set_mapping_gates_and_effects(iodev):
                                 "confirm": True})
 
 
+def test_device_io_set_mapping_multi_element_guard(iodev, monkeypatch):
+    # G-21: a multi-channel parameter refuses an unfiltered set
+    two = FakeIoDevice(FakeParamSet([
+        ("Multi", [
+            FakeIoElement("ch1", FakeIoMapping(variable="a",
+                                               auto=False, manual="%IX0")),
+            FakeIoElement("ch2", FakeIoMapping(variable="b",
+                                               auto=False, manual="%IX1")),
+        ])]))
+    monkeypatch.setattr(ex, "get_device", lambda project, name="": two)
+    with pytest.raises(RuntimeError, match="REFUSED.*mappable elements"):
+        ex.cmd_device_io(None, {"op": "set_mapping", "name": "Multi",
+                                "variable": "c", "confirm": True})
+
+    # element= targets exactly one channel
+    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "Multi",
+                                  "element": "ch2", "variable": "c",
+                                  "confirm": True})
+    assert len(out["elements"]) == 1
+    assert out["elements"][0]["identifier"] == "ch2"
+    assert out["elements"][0]["readback"]["variable"] == "c"
+
+    # all_elements=true is the explicit escape hatch
+    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "Multi",
+                                  "variable": "d", "all_elements": True,
+                                  "confirm": True})
+    assert len(out["elements"]) == 2
+    assert all(r["readback"]["variable"] == "d"
+               for r in out["elements"])
+
+
 def test_device_io_csv_round_trip(iodev, tmp_path, monkeypatch):
     out = ex.cmd_device_io(None, {"op": "export_csv",
                                   "file": str(tmp_path / "m.csv")})
