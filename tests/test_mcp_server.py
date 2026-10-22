@@ -37,6 +37,7 @@ def test_expected_tools_registered():
                  "ecockpit_task_config", "ecockpit_task_create",
                  "ecockpit_symbol_config_variables",
                  "ecockpit_symbol_config_create",
+                 "ecockpit_symbol_config_options",
                  "ecockpit_device_scan", "ecockpit_device_comm",
                  "ecockpit_device_params",
                  "ecockpit_app_status", "ecockpit_app_control",

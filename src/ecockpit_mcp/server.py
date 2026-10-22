@@ -1155,6 +1155,73 @@ def ecockpit_symbol_config_create(application: str = "",
     return json.dumps(_run("symbol_config", args, timeout_s), indent=2)
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        destructiveHint=True,
+        readOnlyHint=False,
+        openWorldHint=True),
+    description="Symbol configuration options + XML schema. op=config "
+                "(read-only): content feature flags (decoded + "
+                "effective), attribute/comment filter types + data, "
+                "direct-IO access + obstacles. op=config_set "
+                "(DESTRUCTIVE - requires explicit owner request + "
+                "confirm; modifies the project): "
+                "content_feature_flags ('+'-combined names: "
+                "SupportOPCUA, IncludeComments, IncludeAttributes, "
+                "IncludeTypeNodeAttributes, IncludeExecutables, "
+                "UseEmptyNamespaceByDefault, XmlInclude*), "
+                "attribute_filter_type (none|All|SimpleIdentifiers|"
+                "Prefix|Regex) + attribute_filter_data, "
+                "comment_filter_type (none|NormalComments|DocuComments|"
+                "Both|PreferNormalComments|PreferDocuComments); "
+                "read-back included. op=xsd {file?} (read-only): write "
+                "the symbol configuration XML schema for THIS release "
+                "to a file (default <ECP_PROJECT_ROOT>/plcopensrc-export/"
+                "Symbolconfiguration.xsd). The symbol configuration "
+                "object must exist (ecockpit_symbol_config_create).")
+def ecockpit_symbol_config_options(op: str = "config",
+                                   application: str = "",
+                                   content_feature_flags: str = "",
+                                   attribute_filter_type: str = "",
+                                   attribute_filter_data: str = "",
+                                   comment_filter_type: str = "",
+                                   file: str = "",
+                                   confirm: bool = False,
+                                   timeout_s: int = 300) -> str:
+    if op not in ("config", "config_set", "xsd"):
+        raise ValueError("op must be config|config_set|xsd")
+    if op == "config_set":
+        if not confirm:
+            return json.dumps({
+                "ok": False,
+                "refused": True,
+                "error": "symbol_config config_set refused - it modifies "
+                         "the project; call again with confirm=true only "
+                         "on an explicit owner request",
+            }, indent=2)
+        if not (content_feature_flags or attribute_filter_type or
+                attribute_filter_data or comment_filter_type):
+            raise ValueError("config_set needs content_feature_flags "
+                             "and/or attribute_filter_type(+data) / "
+                             "comment_filter_type")
+    args = {"op": op}
+    if application:
+        args["application"] = application
+    if op == "config_set":
+        if content_feature_flags:
+            args["content_feature_flags"] = content_feature_flags
+        if attribute_filter_type:
+            args["attribute_filter_type"] = attribute_filter_type
+        if attribute_filter_data:
+            args["attribute_filter_data"] = attribute_filter_data
+        if comment_filter_type:
+            args["comment_filter_type"] = comment_filter_type
+        args["confirm"] = True
+    if op == "xsd" and file:
+        args["file"] = file
+    return json.dumps(_run("symbol_config", args, timeout_s), indent=2)
+
+
 # --------------------------------------------------------------------------
 # Device domain: scan / communication / parameters
 # --------------------------------------------------------------------------

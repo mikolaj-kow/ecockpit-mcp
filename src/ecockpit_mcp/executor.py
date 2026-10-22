@@ -167,6 +167,19 @@ if "AlwaysUpdateVariablesMode" not in globals():
     # ScriptDriverInfo stub: always-update-variables mode -
     # Disabled=1, OnlyIfUnused=2, AlwaysInBusCycle=3.
     AlwaysUpdateVariablesMode = None
+if "SymbolConfigContentFeatureFlags" not in globals():
+    # ScriptSymbolConfigObject stub: symbol XML content flags
+    # (SupportOPCUA=1, IncludeComments=2, ...; Xml* live above bit 16).
+    SymbolConfigContentFeatureFlags = None
+if "SymbolAttributeFilterTypes" not in globals():
+    # ScriptSymbolConfigObject stub: none=0, All=1, SimpleIdentifiers=2,
+    # Prefix=3, Regex=4.
+    SymbolAttributeFilterTypes = None
+if "SymbolCommentFilterType" not in globals():
+    # ScriptSymbolConfigObject stub: none=0, NormalComments=1,
+    # DocuComments=2, Both=3, PreferNormalComments=4,
+    # PreferDocuComments=5.
+    SymbolCommentFilterType = None
 if "ImplementationLanguages" not in globals():
     # ST/CFC/FBD/... implementation language GUIDs (injected global).
     ImplementationLanguages = None
@@ -4172,19 +4185,104 @@ def cmd_task_config(project, args):
                        '"create_task"')
 
 
+# ScriptSymbolConfigObject stub value tables (duplicated inside the stub).
+_SYMBOL_CONTENT_FLAGS = (
+    ("SupportOPCUA", 1),
+    ("IncludeComments", 2),
+    ("IncludeAttributes", 4),
+    ("IncludeTypeNodeAttributes", 8),
+    ("IncludeExecutables", 16),
+    ("UseEmptyNamespaceByDefault", 32),
+    ("XmlIncludeNodeFlags", 1 << 16),
+    ("XmlIncludeComments", 2 << 16),
+    ("XmlIncludeAttributes", 4 << 16),
+    ("XmlIncludeTypeNodeAttributes", 8 << 16),
+    ("XmlIncludeExecutables", 16 << 16),
+)
+_SYMBOL_ATTRIBUTE_FILTER_TYPES = (
+    ("none", 0), ("All", 1), ("SimpleIdentifiers", 2),
+    ("Prefix", 3), ("Regex", 4),
+)
+_SYMBOL_COMMENT_FILTER_TYPES = (
+    ("none", 0), ("NormalComments", 1), ("DocuComments", 2), ("Both", 3),
+    ("PreferNormalComments", 4), ("PreferDocuComments", 5),
+)
+_DIRECT_IO_OBSTACLES = (
+    ("none", 0), ("OldCompilerVersion", 1),
+    ("TargetSettingSeparateApplication", 2),
+)
+
+
+def _symbol_config_dict(sym):
+    """Guarded read of the symbol configuration options
+    (ScriptSymbolConfigObject, 3.5.10.0)."""
+    out = {}
+    readers = (
+        ("content_feature_flags",
+         lambda: _flags_to_names(sym.content_feature_flags,
+                                 _SYMBOL_CONTENT_FLAGS)),
+        ("content_feature_flags_raw",
+         lambda: str(sym.content_feature_flags)),
+        ("effective_content_feature_flags",
+         lambda: _flags_to_names(sym.effective_content_feature_flags,
+                                 _SYMBOL_CONTENT_FLAGS)),
+        ("symbol_attribute_filter_type",
+         lambda: _enum_to_name(sym.symbol_attribute_filter_type,
+                               _SYMBOL_ATTRIBUTE_FILTER_TYPES)),
+        ("effective_symbol_attribute_filter_type",
+         lambda: _enum_to_name(sym.effective_symbol_attribute_filter_type,
+                               _SYMBOL_ATTRIBUTE_FILTER_TYPES)),
+        ("symbol_attribute_filter_data",
+         lambda: str(sym.symbol_attribute_filter_data)),
+        ("symbol_comment_filter_type",
+         lambda: _enum_to_name(sym.symbol_comment_filter_type,
+                               _SYMBOL_COMMENT_FILTER_TYPES)),
+        ("effective_symbol_comment_filter_type",
+         lambda: _enum_to_name(sym.effective_symbol_comment_filter_type,
+                               _SYMBOL_COMMENT_FILTER_TYPES)),
+        ("enable_direct_io_access",
+         lambda: bool(sym.enable_direct_io_access)),
+    )
+    for name, reader in readers:
+        try:
+            out[name] = reader()
+        except Exception:
+            out[name] = None
+    try:
+        out["direct_io_obstacles"] = _enum_to_name(
+            sym.check_effective_direct_io_access(), _DIRECT_IO_OBSTACLES)
+    except Exception:
+        out["direct_io_obstacles"] = None
+    return out
+
+
 def cmd_symbol_config(project, args):
-    """Create the symbol configuration / dump the variable inventory
+    """Create the symbol configuration / dump the variable inventory /
+    read-set the config options / dump the XML schema
     (ScriptSymbolConfigObject stub, 3.5.10.0).
 
     ops:
-      variables {application?, compile?: true} -> full signature +
-              variable inventory (get_all_signatures; compile=true
-              builds first - takes time, read-only)
-      create  {application?, export_comments?: false,
-               support_opc_ua?: true, confirm} -> adds the symbol
-              configuration object to the application
+      variables  {application?, compile?: true} -> full signature +
+                 variable inventory (get_all_signatures; compile=true
+                 builds first - takes time, read-only)
+      create     {application?, export_comments?: false,
+                 support_opc_ua?: true, confirm} -> adds the symbol
+                 configuration object to the application
+      config     {application?} -> content feature flags (decoded),
+                 attribute/comment filter types + data, direct-IO
+                 access (read-only)
+      config_set {application?, confirm, content_feature_flags?
+                 ('+'-combined names), attribute_filter_type?,
+                 attribute_filter_data?, comment_filter_type?}
+                 -> the option setters (CONFIRM-GATED - modifies the
+                 project); read-back after
+      xsd        {application?, file?} -> write
+                 get_symbol_configuration_xsd() (the schema as
+                 appropriate for THIS release) to a file (read-only;
+                 default <ECP_PROJECT_ROOT>/plcopensrc-export/
+                 Symbolconfiguration.xsd, else under WORK_DIR)
 
-    create modifies the project - CONFIRM-GATED.
+    create/config_set modify the project - CONFIRM-GATED.
     """
     op = args.get("op", "variables")
     app = _get_application_obj(project, args)
@@ -4241,8 +4339,120 @@ def cmd_symbol_config(project, args):
             "variables".format(s=len(out), v=total))
         return {"signatures": len(out), "variables": total,
                 "compiled": compile_first, "content": out}
-    raise RuntimeError('symbol_config needs args.op of "variables" or '
-                       '"create"')
+
+    if op == "config":
+        if sym is None:
+            raise RuntimeError("no symbol configuration object under the "
+                               "application - create it first "
+                               "(op=create)")
+        out = _symbol_config_dict(sym)
+        log("OK", "symbol config options read")
+        return {"application": _short_name(app), "name": _short_name(sym),
+                "config": out}
+
+    if op == "config_set":
+        if sym is None:
+            raise RuntimeError("no symbol configuration object under the "
+                               "application - create it first "
+                               "(op=create)")
+        if not args.get("confirm"):
+            raise RuntimeError("symbol_config config_set REFUSED - "
+                               "requires args.confirm=true (it modifies "
+                               "the project)")
+        applied = {}
+        flags_raw = str(args.get("content_feature_flags", "") or "").strip()
+        if flags_raw:
+            names = [t for t in re.split(r"[+,\s]+", flags_raw)
+                     if t.strip()]
+            if names == ["none"]:
+                value = 0
+                if SymbolConfigContentFeatureFlags is not None:
+                    try:
+                        value = SymbolConfigContentFeatureFlags.none
+                    except Exception:
+                        value = 0
+            else:
+                value = _enum_by_names("SymbolConfigContentFeatureFlags",
+                                       names, _SYMBOL_CONTENT_FLAGS,
+                                       SymbolConfigContentFeatureFlags)
+            sym.content_feature_flags = value
+            applied["content_feature_flags"] = names
+        attr_type = str(args.get("attribute_filter_type", "") or "").strip()
+        if attr_type:
+            value = _enum_by_names("SymbolAttributeFilterTypes",
+                                   [attr_type],
+                                   _SYMBOL_ATTRIBUTE_FILTER_TYPES,
+                                   SymbolAttributeFilterTypes)
+            sym.symbol_attribute_filter_type = value
+            applied["attribute_filter_type"] = attr_type
+        if args.get("attribute_filter_data") is not None:
+            value = str(args["attribute_filter_data"])
+            sym.symbol_attribute_filter_data = value
+            applied["attribute_filter_data"] = value
+        comment_type = str(args.get("comment_filter_type", "") or "").strip()
+        if comment_type:
+            value = _enum_by_names("SymbolCommentFilterType",
+                                   [comment_type],
+                                   _SYMBOL_COMMENT_FILTER_TYPES,
+                                   SymbolCommentFilterType)
+            sym.symbol_comment_filter_type = value
+            applied["comment_filter_type"] = comment_type
+        if not applied:
+            raise RuntimeError("symbol_config config_set needs at least "
+                               "one of content_feature_flags, "
+                               "attribute_filter_type(+data), "
+                               "comment_filter_type")
+        log("OK", "symbol config options set: {a}".format(
+            a=sorted(applied)))
+        return {"application": _short_name(app), "applied": applied,
+                "config": _symbol_config_dict(sym)}
+
+    if op == "xsd":
+        if sym is None:
+            raise RuntimeError("no symbol configuration object under the "
+                               "application - create it first "
+                               "(op=create)")
+        data = sym.get_symbol_configuration_xsd()
+        if isinstance(data, str):
+            payload = _to_bytes(data)
+        else:
+            try:
+                payload = data.tobytes()
+            except Exception:
+                try:
+                    payload = bytearray(data)
+                except Exception as exc:
+                    raise RuntimeError("unexpected XSD payload type "
+                                       "{t}: {e}".format(
+                                           t=type(data).__name__, e=exc))
+        path = str(args.get("file", "") or "").strip()
+        if not path:
+            base = (os.path.join(PROJECT_ROOT, "plcopensrc-export")
+                    if PROJECT_ROOT else WORK_DIR)
+            if not base:
+                raise RuntimeError("symbol_config xsd needs args.file "
+                                   "(or ECP_PROJECT_ROOT / ECP_WORK_DIR "
+                                   "for the default location)")
+            if not os.path.isdir(base):
+                os.makedirs(base)
+            path = os.path.join(base, "Symbolconfiguration.xsd")
+        path = os.path.abspath(path)
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        with open(path, "wb") as fh:
+            fh.write(payload)
+        size = os.path.getsize(path)
+        preview = ""
+        try:
+            preview = payload[:64].decode("utf-8", "replace")
+        except Exception:
+            pass
+        log("OK", "symbol configuration XSD written: {p} ({n} "
+            "bytes)".format(p=path, n=size))
+        return {"file": path, "bytes": size, "preview": preview}
+    raise RuntimeError('symbol_config needs args.op of "variables", '
+                       '"create", "config", "config_set" or "xsd"')
 
 
 # --------------------------------------------------------------------------

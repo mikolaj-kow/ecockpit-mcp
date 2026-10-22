@@ -183,6 +183,7 @@ Task + symbol configuration:
 | `ecockpit_task_create(application, name, ..., confirm)` | **destructive** — create a task (kind/interval/priority/watchdog/POUs); creates the task configuration when missing |
 | `ecockpit_symbol_config_variables(application?, compile?)` | full signature + variable inventory (`compile=true` builds first — slow but safe) |
 | `ecockpit_symbol_config_create(application?, ..., confirm)` | **destructive** — add the symbol configuration object |
+| `ecockpit_symbol_config_options(op?, ...)` | options read (`config`: content flags decoded, attribute/comment filters, direct-IO), `config_set` (**destructive**, confirm-gated), `xsd` (writes the release's symbol-configuration schema) |
 
 Device scan / communication / parameters:
 

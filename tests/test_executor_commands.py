@@ -914,3 +914,104 @@ def test_device_io_csv_round_trip(iodev, tmp_path, monkeypatch):
         ex.cmd_device_io(None, {"op": "import_csv",
                                 "file": str(tmp_path / "gone.csv"),
                                 "confirm": True})
+
+
+class FakeSym(object):
+    """ScriptSymbolConfigObject option surface per the stub."""
+
+    is_symbol_config = True
+
+    def __init__(self):
+        self.content_feature_flags = 3          # SupportOPCUA|IncludeComments
+        self.effective_content_feature_flags = 3
+        self.symbol_attribute_filter_type = 0
+        self.effective_symbol_attribute_filter_type = 0
+        self.symbol_attribute_filter_data = ""
+        self.symbol_comment_filter_type = 0
+        self.effective_symbol_comment_filter_type = 0
+        self.enable_direct_io_access = False
+        self.xsd_bytes = [60, 63, 120, 109, 108]  # "<?xml"
+
+    def check_effective_direct_io_access(self):
+        return 0
+
+    def get_symbol_configuration_xsd(self):
+        return list(self.xsd_bytes)
+
+
+class FakeSymApp(object):
+    def __init__(self):
+        self.sym = FakeSym()
+
+    def get_children(self, recursive):
+        return [self.sym]
+
+
+@pytest.fixture()
+def symapp(monkeypatch):
+    app = FakeSymApp()
+    monkeypatch.setattr(ex, "get_application", lambda project: app)
+    return app
+
+
+def test_symbol_config_options_read_and_set(symapp):
+    out = ex.cmd_symbol_config(None, {"op": "config"})
+    cfg = out["config"]
+    assert cfg["content_feature_flags"] == ["SupportOPCUA",
+                                            "IncludeComments"]
+    assert cfg["symbol_attribute_filter_type"] == "none"
+    assert cfg["direct_io_obstacles"] == "none"
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_symbol_config(None, {"op": "config_set",
+                                    "content_feature_flags": "SupportOPCUA"})
+
+    out = ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
+                                      "content_feature_flags":
+                                      "SupportOPCUA+IncludeAttributes",
+                                      "attribute_filter_type": "Prefix",
+                                      "attribute_filter_data": "GVL_",
+                                      "comment_filter_type": "Both"})
+    sym = symapp.sym
+    assert sym.content_feature_flags == 1 | 4
+    assert sym.symbol_attribute_filter_type == 3
+    assert sym.symbol_attribute_filter_data == "GVL_"
+    assert sym.symbol_comment_filter_type == 3
+    assert out["applied"]["attribute_filter_type"] == "Prefix"
+    assert out["config"]["symbol_attribute_filter_type"] == "Prefix"
+
+    # standalone filter data update + none reset
+    ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
+                                "attribute_filter_data": "PB_"})
+    assert sym.symbol_attribute_filter_data == "PB_"
+    ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
+                                "content_feature_flags": "none"})
+    assert sym.content_feature_flags == 0
+
+    with pytest.raises(RuntimeError, match="at least one"):
+        ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True})
+    with pytest.raises(RuntimeError, match="unknown "
+                                            "SymbolConfigContentFeature"):
+        ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
+                                    "content_feature_flags": "Nope"})
+
+
+def test_symbol_config_xsd_write(symapp, tmp_path):
+    out = ex.cmd_symbol_config(None, {"op": "xsd",
+                                      "file": str(tmp_path / "s.xsd")})
+    assert out["bytes"] == 5
+    assert out["preview"].startswith("<?xml")
+    with open(str(tmp_path / "s.xsd"), "rb") as fh:
+        assert fh.read() == b"<?xml"
+
+    # default location under PROJECT_ROOT/plcopensrc-export
+    old_root = ex.PROJECT_ROOT
+    ex.PROJECT_ROOT = str(tmp_path)
+    try:
+        out = ex.cmd_symbol_config(None, {"op": "xsd"})
+    finally:
+        ex.PROJECT_ROOT = old_root
+    expected = os.path.join(str(tmp_path), "plcopensrc-export",
+                            "Symbolconfiguration.xsd")
+    assert os.path.isfile(expected)
+    assert out["file"] == os.path.abspath(expected)

@@ -74,7 +74,7 @@ more). Live results: [TESTING.md](TESTING.md).
 | Task config | ecockpit_task_create | ✅ | `task.pous.add/insert/replace/remove` | — |
 | Symbol config | ecockpit_symbol_config_create | ✅ | `app.create_symbol_config(export_comments, support_opc_ua, calculator)` | confirm-gated |
 | Symbol config | ecockpit_symbol_config_variables | ✅ | `sym.get_all_signatures(compile)` → signatures + variables (name/type/effective_access) | compile=true builds first (slow, safe) |
-| Symbol config | — | 🟡 | `sym.get_symbol_configuration_xsd()` / `content_feature_flags` / attribute+comment filters | — |
+| Symbol config | ecockpit_symbol_config_options | ✅ | `sym.get_symbol_configuration_xsd()` / `content_feature_flags` (+effective) / `symbol_attribute_filter_type+data` / `symbol_comment_filter_type` | op=config (read) / config_set (confirm) / xsd (schema file for THIS release) |
 | Device scan/comm | ecockpit_device_scan | ✅ | `online.gateways` / `gateway_drivers` | op=gateways (LIVE: WACDefaultGateway) |
 | Device scan/comm | ecockpit_device_scan | ✅ | `gateway.perform_network_scan()` → discovered targets | op=scan (blocks for scan timeout) |
 | Device scan/comm | ecockpit_device_scan | ✅ | `gateway.find_address_by_ip(ip, port)` | op=address |

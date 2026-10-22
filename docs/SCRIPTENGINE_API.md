@@ -282,6 +282,21 @@ feat/scriptlib-tools:
   → signatures → variables (`name`, `type`, `effective_access`) —
   the full variable inventory for OPC UA / online tooling. →
   `ecockpit_symbol_config_variables` / `ecockpit_symbol_config_create`.
+  Options + schema (→ `ecockpit_symbol_config_options`):
+  `content_feature_flags` get/set (SymbolConfigContentFeatureFlags:
+  SupportOPCUA=1, IncludeComments=2, IncludeAttributes=4,
+  IncludeTypeNodeAttributes=8, IncludeExecutables=16,
+  UseEmptyNamespaceByDefault=32; Xml* variants above bit 16) with
+  `effective_content_feature_flags` (compiler-version-aware),
+  `symbol_attribute_filter_type` (none/All/SimpleIdentifiers/Prefix/
+  Regex) + `symbol_attribute_filter_data`,
+  `symbol_comment_filter_type` (none/NormalComments/DocuComments/
+  Both/PreferNormal/PreferDocu), `enable_direct_io_access` +
+  `check_effective_direct_io_access()`, and
+  `get_symbol_configuration_xsd()` → UTF-8 XSD byte array (the schema
+  published at 3s-software.com, as applicable to the current release).
+  NOTE: the stub has NO literal `export_comments` member — comment
+  export rides the IncludeComments/XmlIncludeComments flags.
 - **Device scan** (ScriptOnline gateway stack, 3.5.8.0):
   `online.gateways` (+`gateway_drivers`),
   `gateway.perform_network_scan()` → targets (`device_name`, `address`,
