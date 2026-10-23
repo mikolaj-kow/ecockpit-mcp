@@ -67,7 +67,7 @@ jobs:
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
     - name: Test with pytest (coverage gate on the host half)
       run: |
-        pytest --cov-fail-under=50
+        pytest --cov-fail-under=55
     - name: Build sdist and wheel
       run: |
         python -m pip install build
