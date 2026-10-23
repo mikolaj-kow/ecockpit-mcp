@@ -1,6 +1,6 @@
 # Roadmap
 
-Where the packaging and the tool are headed. Status as of 2026-10-22 —
+Where the packaging and the tool are headed. Status as of 2026-10-23 —
 items move to "Done" as they land; the deferred ScriptEngine
 capabilities live in [SUMMARY.md](SUMMARY.md) (rows with status
 `possible`) and are tracked per-domain there.
@@ -32,8 +32,9 @@ The open work, in priority order:
 
 Non-negotiable discipline:
 
-- Atomic commits per domain; gates before every commit (pytest, flake8
-  strict pair, `python -m build`, `mkdocs build --strict` when docs
+- Atomic commits per domain; gates before every commit (pytest under
+  the coverage gate, ruff check + format, mypy on the CPython half,
+  pre-commit, `python -m build`, `mkdocs build --strict` when docs
   changed).
 - The docs are a machine-readable contract: any code change updates
   SCRIPTENGINE_GOTCHAS.md (new `G-nn` rows), SUMMARY.md (status flips),
@@ -54,10 +55,35 @@ Non-negotiable discipline:
 - Packaging: src-layout package, `__version__` single-sourcing, console
   entry point, sdist+wheel build in CI, wheel install + entry-point
   smoke, license/notice metadata (Apache-2.0).
-- Quality gates: strict flake8 fail-fast, offline test suite (39 tests;
-  fake `ILibManager` for the library commands, fakes for the system /
-  device-info / device-IO / symbol-options / special-POU domains),
-  build gate, dead-tool absence pins.
+- Quality gates (2026-10-23): ruff lint + format on the CPython half
+  (IronPython pair syntax-checked separately via E9), mypy gate on
+  server.py, pytest-cov coverage gate (server.py 62%, enforced in CI),
+  pre-commit hooks (ruff check/format, mypy, hygiene), CI split into
+  lint/type/build/docs jobs; offline test suite grown 39 → 70 tests
+  with fakes for the tree / task-config / device-params domains (all
+  destructive paths covered offline: tree rename/remove/move/folder,
+  task create incl. on-demand config object and the KindOfTask enum,
+  ONLINE device parameter write incl. enum validation and element
+  targeting) plus a schema-driven sweep calling all 54 tool wrappers
+  offline (confirm-gate refusals + arg assembly pinned).
+- MCP-protocol maturity (2026-10-23): resources
+  `ecockpit://project/tree`, `ecockpit://messages` and the
+  `ecockpit://project/textual/{name}` template (reads degrade to
+  ok:false payloads with the rearm hint instead of protocol errors),
+  the `diagnose-failed-build` prompt, progress notifications for the
+  22 long-running tools (async wait on the event loop, elapsed/timeout
+  notifications every 2 s), validation errors as typed `ToolError` so
+  the agent sees the reason, and a conformance suite driving the real
+  server with a real MCP client over in-memory streams (initialize +
+  capabilities, schema/annotation invariants incl. destructive→confirm,
+  resources, prompts, refusal-as-data shapes, end-to-end progress
+  notification).
+- Security page (2026-10-23): docs/security.md — bearer token
+  (mandatory off-loopback), loopback default semantics, the
+  confirm-gated tool set, the online-commands-can-deploy caution,
+  credential handling (no defaults, never logged, system_ui secret
+  dialogs' unencrypted host-file caveat), trust-boundaries table;
+  linked from README and mkdocs nav.
 - Docs contract: machine-readable `SCRIPTENGINE_*` suite
   (API reference, GOTCHAS with stable IDs, NOT_EXPOSED inventory,
   EXPLORATION how-to, SUMMARY done+possible master table), TESTING.md
@@ -113,18 +139,10 @@ Non-negotiable discipline:
 
 ## Later
 
-- **Quality gates**: ruff (lint+format), mypy/pyright on the CPython
-  half, coverage gate on the host half, pre-commit hooks; extend the
-  ScriptEngine fake to the remaining domains (tree, task, device
-  params) so destructive paths get offline coverage too.
 - **PyPI publication** via trusted publishing (OIDC); `pipx install
   ecockpit-mcp`; tag-triggered release workflow with provenance.
-- **MCP-protocol maturity**: resources (project tree, messages),
-  prompts (diagnose-failed-build), progress notifications for long
-  operations instead of blocking HTTP calls, MCP-spec conformance checks.
-- **Security page**: bearer token, loopback default, confirm-gated
-  destructive ops, online-commands-can-deploy caution, no credentials
-  in logs.
+- **Security hardening extras**: result-file ACL guidance for shared
+  hosts; optional token-requirement flag for loopback binds.
 - **Deferred ScriptEngine capabilities**: everything in SUMMARY.md with
   status `possible` — in-project library references, device-tree
   authoring (add/plug/update), user management (project + device),

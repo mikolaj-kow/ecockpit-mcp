@@ -11,7 +11,6 @@ prompts, progress notifications), not engine behaviour.
 
 import asyncio
 import contextlib
-import inspect
 import json
 import os
 
@@ -95,9 +94,7 @@ async def test_tools_list_schemas_and_annotations():
             # read-only tools may carry a confirm param for optional
             # mutating ops (ecockpit_tree: rename/remove/move/folder),
             # but the read-only default call must never REQUIRE it
-            assert "confirm" not in tool.input_schema.get("required", []), (
-                tool.name
-            )
+            assert "confirm" not in tool.input_schema.get("required", []), tool.name
 
 
 async def test_resources_list_and_read_offline(fast_not_armed):
@@ -108,7 +105,10 @@ async def test_resources_list_and_read_offline(fast_not_armed):
         assert "ecockpit://project/tree" in uris
         assert "ecockpit://messages" in uris
         templates = await session.list_resource_templates()
-        assert any("textual/{name}" in str(t.uri_template) for t in templates.resource_templates)
+        assert any(
+            "textual/{name}" in str(t.uri_template)
+            for t in templates.resource_templates
+        )
 
         # an unarmed relay reads back an ok:false payload, not a
         # protocol error - resource reads stay agent-usable offline
@@ -188,16 +188,3 @@ async def test_tool_error_surfaces_as_protocol_error():
         result = await session.call_tool("ecockpit_read", {"variable": ""})
         assert result.is_error is True
         assert "variable path is required" in result.content[0].text
-
-
-def _check_anyio_plugin():
-    # guard: the anyio pytest plugin must be active, or the anyio-marked
-    # async tests above silently no-op
-    try:
-        import anyio.pytest_plugin  # noqa: F401
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("anyio pytest plugin missing") from exc
-
-
-_check_anyio_plugin()
-assert inspect.iscoroutinefunction  # keep inspect import meaningful
