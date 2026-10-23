@@ -141,7 +141,11 @@ async def test_prompts_list_and_get():
         assert "ecockpit_rebuild" in text  # checklist step 3
 
 
-async def test_call_tool_offline_status_and_refusal_shapes():
+async def test_call_tool_offline_status_and_refusal_shapes(monkeypatch, tmp_path):
+    # isolate from the live relay: this test pins the OFFLINE shapes, so
+    # point CFG at an empty work dir (no heartbeat -> armed false) even
+    # when e!COCKPIT is actually running and armed on this host
+    monkeypatch.setattr(srv.CFG, "work_dir", str(tmp_path))
     async with conformance_session() as session:
         await session.initialize()
         # harmless local tool: offline-safe JSON blob
