@@ -30,8 +30,16 @@ class FakeRepo(object):
 
 
 class FakeLib(object):
-    def __init__(self, name, displayname=None, version="1.0.0.0",
-                 company="WAGO", namespace="", title="", dependencies=None):
+    def __init__(
+        self,
+        name,
+        displayname=None,
+        version="1.0.0.0",
+        company="WAGO",
+        namespace="",
+        title="",
+        dependencies=None,
+    ):
         self.name = name
         self.displayname = displayname if displayname is not None else name
         self.version = version
@@ -57,8 +65,9 @@ class FakeLibManager(object):
             libs = []
             for pos, repo in enumerate(self.repositories):
                 for lib in repo.libs.values():
-                    shadowed = any(r.libs.get(lib.name)
-                                   for r in self.repositories[:pos])
+                    shadowed = any(
+                        r.libs.get(lib.name) for r in self.repositories[:pos]
+                    )
                     if not arg or not shadowed:
                         libs.append(lib)
             return libs
@@ -76,8 +85,7 @@ class FakeLibManager(object):
         return r"C:\libs\{}.library".format(lib.displayname)
 
     def install_library(self, filepath, repository=None, overwrite=False):
-        repo = repository if repository is not None \
-            else self.repositories[0]
+        repo = repository if repository is not None else self.repositories[0]
         displayname = os.path.basename(filepath).rsplit(".", 1)[0]
         if displayname in repo.libs and not overwrite:
             raise RuntimeError("library already exists")
@@ -99,8 +107,9 @@ class FakeLibManager(object):
     def remove_repository(self, repository, delete_on_disk=False):
         self.repositories.remove(repository)
 
-    def update_repository(self, repository, new_name=None,
-                          new_location=None, copy_libraries=False):
+    def update_repository(
+        self, repository, new_name=None, new_location=None, copy_libraries=False
+    ):
         if new_name:
             repository.name = new_name
         if new_location:
@@ -119,10 +128,12 @@ def mgr(monkeypatch):
     system = FakeRepo("System", r"C:\SystemLibs", editable=False)
     wago = FakeRepo("WAGO", r"C:\WagoLibs")
     wago.libs["WagoAppDateTime"] = FakeLib(
-        "WagoAppDateTime", version="1.2.3.4", namespace="WagoAppDateTime")
+        "WagoAppDateTime", version="1.2.3.4", namespace="WagoAppDateTime"
+    )
     user = FakeRepo("User", r"C:\UserLibs")
-    user.libs["MyHelpers"] = FakeLib("MyHelpers", displayname="My Helpers",
-                                     version="0.1.0.0")
+    user.libs["MyHelpers"] = FakeLib(
+        "MyHelpers", displayname="My Helpers", version="0.1.0.0"
+    )
     fake = FakeLibManager([system, wago, user])
     monkeypatch.setattr(ex, "librarymanager", fake)
     return fake
@@ -135,8 +146,8 @@ def test_libs_lists_shadowed_and_scoped(mgr):
     out = ex.cmd_libs({})
     assert out["count"] == 2  # shadowed WAGO copy excluded by default
     versions = {lib["version"] for lib in out["libraries"]}
-    assert "1.2.3.4" not in versions   # shadowed by the System copy
-    assert "9.9.9.9" in versions       # the shadowing System copy stays
+    assert "1.2.3.4" not in versions  # shadowed by the System copy
+    assert "9.9.9.9" in versions  # the shadowing System copy stays
     assert out["shadowed_included"] is False
 
     out = ex.cmd_libs({"shadowed": True})
@@ -157,28 +168,27 @@ def test_lib_find_displayname_bare_title_and_shadowed(mgr):
     assert out["count"] == 1
     assert out["matches"][0]["repo"] == "User"
 
-    out = ex.cmd_lib_find({"name": "MyHelpers"})   # library name key
+    out = ex.cmd_lib_find({"name": "MyHelpers"})  # library name key
     assert out["count"] == 1
     assert out["matches"][0]["repo"] == "User"
 
     # exact wants the full display name / name - the bare-title prefix
     # form is a non-exact convenience only
-    assert ex.cmd_lib_find({"name": "My Helpers", "exact": True})[
-        "count"] == 1
-    assert ex.cmd_lib_find({"name": "My Helper", "exact": True})[
-        "count"] == 0
+    assert ex.cmd_lib_find({"name": "My Helpers", "exact": True})["count"] == 1
+    assert ex.cmd_lib_find({"name": "My Helper", "exact": True})["count"] == 0
 
     out = ex.cmd_lib_find({"name": "WagoAppDateTime", "exact": True})
     assert out["matches"][0]["version"] == "1.2.3.4"
 
     # a same-name copy in an earlier repository is reported shadowed
     mgr.repositories[0].libs["MyHelpers"] = FakeLib(
-        "MyHelpers", displayname="My Helpers", version="9.9.9.9")
+        "MyHelpers", displayname="My Helpers", version="9.9.9.9"
+    )
     out = ex.cmd_lib_find({"name": "My Helpers"})
     assert out["count"] == 2
     flags = {(m["repo"], m["shadowed"]) for m in out["matches"]}
-    assert ("System", False) in flags   # first in search order: wins
-    assert ("User", True) in flags      # shadowed by the System copy
+    assert ("System", False) in flags  # first in search order: wins
+    assert ("User", True) in flags  # shadowed by the System copy
 
     with pytest.raises(RuntimeError, match="needs args.name"):
         ex.cmd_lib_find({})
@@ -197,8 +207,9 @@ def test_lib_install_first_repo_named_repo_overwrite_gate(mgr, tmp_path):
 
     with pytest.raises(RuntimeError, match="REFUSED"):
         ex.cmd_lib_install({"path": str(lib_file), "overwrite": True})
-    ex.cmd_lib_install({"path": str(lib_file), "repo": "User",
-                        "overwrite": True, "confirm": True})
+    ex.cmd_lib_install(
+        {"path": str(lib_file), "repo": "User", "overwrite": True, "confirm": True}
+    )
 
     with pytest.raises(RuntimeError, match="not found"):
         ex.cmd_lib_install({"path": str(tmp_path / "gone.library")})
@@ -209,22 +220,23 @@ def test_lib_uninstall_gate_ambiguity_and_verify(mgr):
         ex.cmd_lib_uninstall({"name": "MyHelpers"})
 
     # install a second copy elsewhere -> ambiguous without repo
-    mgr.repositories[0].libs["MyHelpers"] = FakeLib("MyHelpers",
-                                    displayname="My Helpers")
+    mgr.repositories[0].libs["MyHelpers"] = FakeLib(
+        "MyHelpers", displayname="My Helpers"
+    )
     with pytest.raises(RuntimeError, match="ambiguous"):
         ex.cmd_lib_uninstall({"name": "MyHelpers", "confirm": True})
 
     # two variants INSIDE one repository -> name the exact display name
     mgr.repositories[2].libs["MyHelpersOld"] = FakeLib(
-        "MyHelpersOld", displayname="My Helpers, 0.0.9.0")
+        "MyHelpersOld", displayname="My Helpers, 0.0.9.0"
+    )
     with pytest.raises(RuntimeError, match="full display name"):
-        ex.cmd_lib_uninstall({"name": "My Helpers", "repo": "User",
-                              "confirm": True})
+        ex.cmd_lib_uninstall({"name": "My Helpers", "repo": "User", "confirm": True})
 
-    out = ex.cmd_lib_uninstall({"name": "My Helpers", "repo": "User",
-                                "exact": True, "confirm": True})
-    assert out == {"uninstalled": "My Helpers", "repo": "User",
-                   "verified_gone": True}
+    out = ex.cmd_lib_uninstall(
+        {"name": "My Helpers", "repo": "User", "exact": True, "confirm": True}
+    )
+    assert out == {"uninstalled": "My Helpers", "repo": "User", "verified_gone": True}
 
     with pytest.raises(RuntimeError, match="not found"):
         ex.cmd_lib_uninstall({"name": "Ghost", "confirm": True})
@@ -242,20 +254,18 @@ def test_repo_crud_gates_and_effects(mgr, tmp_path):
     with pytest.raises(RuntimeError, match="REFUSED"):
         ex.cmd_repo_add({"rootfolder": str(tmp_path), "name": "New"})
     with pytest.raises(RuntimeError, match="existing directory"):
-        ex.cmd_repo_add({"rootfolder": str(tmp_path / "nope"),
-                         "name": "New", "confirm": True})
+        ex.cmd_repo_add(
+            {"rootfolder": str(tmp_path / "nope"), "name": "New", "confirm": True}
+        )
 
-    ex.cmd_repo_add({"rootfolder": str(tmp_path), "name": "New",
-                     "confirm": True})
-    assert [r.name for r in mgr.repositories] == \
-        ["System", "WAGO", "User", "New"]
+    ex.cmd_repo_add({"rootfolder": str(tmp_path), "name": "New", "confirm": True})
+    assert [r.name for r in mgr.repositories] == ["System", "WAGO", "User", "New"]
 
     with pytest.raises(RuntimeError, match="not editable"):
         ex.cmd_repo_remove({"name": "System", "confirm": True})
     ex.cmd_repo_remove({"name": "New", "confirm": True})
 
-    ex.cmd_repo_update({"name": "User", "new_name": "Mine",
-                        "confirm": True})
+    ex.cmd_repo_update({"name": "User", "new_name": "Mine", "confirm": True})
     assert mgr.repositories[2].name == "Mine"
 
     out = ex.cmd_repo_move({"name": "Mine", "index": 0})
@@ -271,7 +281,8 @@ def test_libs_paging_and_filter(mgr):
     user = mgr.repositories[2]
     for i in range(250):
         user.libs["Bulk{0:03d}".format(i)] = FakeLib(
-            "BulkLib{0:03d}".format(i), displayname="Bulk {0:03d} lib".format(i))
+            "BulkLib{0:03d}".format(i), displayname="Bulk {0:03d} lib".format(i)
+        )
     user.libs["Needle"] = FakeLib("NeedleLib", displayname="The Needle, 1.0")
 
     # default limit pages the 253 matches (250 bulk + needle + the two
@@ -329,14 +340,10 @@ def test_export_reporter_base_resolution(monkeypatch):
 
 def test_export_target_path_sanitized(tmp_path):
     # _short_name's "Name=<x>" prefix is stripped, bad chars underscored
-    assert ex._export_target_path(str(tmp_path), "Name=My App").endswith(
-        "My_App.xml")
-    assert ex._export_target_path(str(tmp_path), "Name=A/B:C").endswith(
-        "A_B_C.xml")
-    assert ex._export_target_path(str(tmp_path), "").endswith(
-        "application.xml")
-    assert ex._export_target_path(str(tmp_path), "Name=").endswith(
-        "application.xml")
+    assert ex._export_target_path(str(tmp_path), "Name=My App").endswith("My_App.xml")
+    assert ex._export_target_path(str(tmp_path), "Name=A/B:C").endswith("A_B_C.xml")
+    assert ex._export_target_path(str(tmp_path), "").endswith("application.xml")
+    assert ex._export_target_path(str(tmp_path), "Name=").endswith("application.xml")
 
 
 class FakeArchiveProject(object):
@@ -392,8 +399,7 @@ def test_online_commands_reach_dispatch_without_unbound_project():
     # 2026-10-21: UnboundLocalError because the branch referenced the
     # dispatcher-local `project` without assigning it)
     for cmd in ("login", "source_download", "prepared_values"):
-        out = ex.run_command({"id": "t-" + cmd, "cmd": cmd,
-                              "args": {"confirm": True}})
+        out = ex.run_command({"id": "t-" + cmd, "cmd": cmd, "args": {"confirm": True}})
         assert "referenced before assignment" not in (out.get("error") or "")
         assert out["error"], "expected a real offline error (no project)"
 
@@ -412,6 +418,7 @@ class FakeUI(object):
             if self.results:
                 return self.results.pop(0)
             return None
+
         return _call
 
 
@@ -440,6 +447,7 @@ class FakeSystem(object):
         def _call(*argv):
             self.calls.append((name,) + argv)
             return None
+
         return _call
 
 
@@ -451,41 +459,62 @@ def sysobj(monkeypatch):
 
 
 def test_system_flags_decode_and_enum_helpers():
-    assert ex._flags_to_names(3, ex._PROMPT_HANDLING_FLAGS) == \
-        ["ForwardSimplePrompts", "LogSimplePrompts"]
+    assert ex._flags_to_names(3, ex._PROMPT_HANDLING_FLAGS) == [
+        "ForwardSimplePrompts",
+        "LogSimplePrompts",
+    ]
     assert ex._flags_to_names(0, ex._PROMPT_HANDLING_FLAGS) == ["NONE"]
     assert ex._flags_to_names(32, ex._PROMPT_HANDLING_FLAGS) == ["0x20"]
     assert ex._enum_to_name(2, ex._PROMPT_RESULT_VALUES) == "Yes"
     assert ex._enum_to_name(99, ex._PROMPT_RESULT_VALUES) == "99"
 
     # stand-in enum globals (None) fall back to the stub int table
-    assert ex._enum_by_names("PromptResult", ["Yes"],
-                             ex._PROMPT_RESULT_VALUES, None) == 2
+    assert (
+        ex._enum_by_names("PromptResult", ["Yes"], ex._PROMPT_RESULT_VALUES, None) == 2
+    )
 
     # injected enum globals are preferred (getattr on them is established)
     class FakePH(object):
         LogSimplePrompts = 2
         LogMessageKeys = 16
 
-    assert ex._enum_by_names("PromptHandling flag",
-                             ["LogSimplePrompts", "LogMessageKeys"],
-                             ex._PROMPT_HANDLING_FLAGS, FakePH) == 18
+    assert (
+        ex._enum_by_names(
+            "PromptHandling flag",
+            ["LogSimplePrompts", "LogMessageKeys"],
+            ex._PROMPT_HANDLING_FLAGS,
+            FakePH,
+        )
+        == 18
+    )
 
     # G-20: the LIVE enum can lack a member the stub documents
     # (SymbolCommentFilterType has no 'none') - stub int fallback
     class FakeNoNone(object):
         NormalComments = 1
 
-    assert ex._enum_by_names("SymbolCommentFilterType", ["none"],
-                             ex._SYMBOL_COMMENT_FILTER_TYPES,
-                             FakeNoNone()) == 0
-    assert ex._enum_by_names("SymbolCommentFilterType",
-                             ["NormalComments"],
-                             ex._SYMBOL_COMMENT_FILTER_TYPES,
-                             FakeNoNone()) == 1
+    assert (
+        ex._enum_by_names(
+            "SymbolCommentFilterType",
+            ["none"],
+            ex._SYMBOL_COMMENT_FILTER_TYPES,
+            FakeNoNone(),
+        )
+        == 0
+    )
+    assert (
+        ex._enum_by_names(
+            "SymbolCommentFilterType",
+            ["NormalComments"],
+            ex._SYMBOL_COMMENT_FILTER_TYPES,
+            FakeNoNone(),
+        )
+        == 1
+    )
     with pytest.raises(RuntimeError, match="unknown PromptHandling"):
-        ex._enum_by_names("PromptHandling flag", ["Nope"],
-                          ex._PROMPT_HANDLING_FLAGS, None)
+        ex._enum_by_names(
+            "PromptHandling flag", ["Nope"], ex._PROMPT_HANDLING_FLAGS, None
+        )
 
 
 def test_system_info_and_write_message(sysobj):
@@ -495,8 +524,7 @@ def test_system_info_and_write_message(sysobj):
     assert out["prompt_answer_keys"] == []
     assert out["commands"] == []
 
-    out = ex.cmd_system({"op": "write_message", "text": "hello",
-                         "severity": "Warning"})
+    out = ex.cmd_system({"op": "write_message", "text": "hello", "severity": "Warning"})
     assert out["written"] is True
     # stand-in Severity (None) -> stub int 4 (Warning)
     assert sysobj.calls == [("write_message", 4, "hello")]
@@ -507,31 +535,32 @@ def test_system_info_and_write_message(sysobj):
 
 def test_system_set_prompt_handling_gate_and_combo(sysobj):
     # a dialog-free combination needs no confirm
-    out = ex.cmd_system({"op": "set_prompt_handling",
-                         "value": "LogSimplePrompts+LogMessageKeys"})
+    out = ex.cmd_system(
+        {"op": "set_prompt_handling", "value": "LogSimplePrompts+LogMessageKeys"}
+    )
     assert sysobj.prompt_handling == 18
     assert out["effective"] == ["LogSimplePrompts", "LogMessageKeys"]
 
     with pytest.raises(RuntimeError, match="REFUSED"):
-        ex.cmd_system({"op": "set_prompt_handling",
-                       "value": "ForwardSimplePrompts"})
-    ex.cmd_system({"op": "set_prompt_handling",
-                   "value": "ForwardSimplePrompts", "confirm": True})
+        ex.cmd_system({"op": "set_prompt_handling", "value": "ForwardSimplePrompts"})
+    ex.cmd_system(
+        {"op": "set_prompt_handling", "value": "ForwardSimplePrompts", "confirm": True}
+    )
     assert sysobj.prompt_handling == 1
 
     ex.cmd_system({"op": "set_prompt_handling", "value": "NONE"})
     assert sysobj.prompt_handling == 0
 
     with pytest.raises(RuntimeError, match="NONE cannot be combined"):
-        ex.cmd_system({"op": "set_prompt_handling",
-                       "value": "NONE+LogSimplePrompts"})
+        ex.cmd_system({"op": "set_prompt_handling", "value": "NONE+LogSimplePrompts"})
     with pytest.raises(RuntimeError, match="unknown PromptHandling"):
         ex.cmd_system({"op": "set_prompt_handling", "value": "Wat"})
 
 
 def test_system_prompt_answers_persist(sysobj):
-    out = ex.cmd_system({"op": "set_prompt_answer",
-                         "key": "OverWriteFiles", "result": "Yes"})
+    out = ex.cmd_system(
+        {"op": "set_prompt_answer", "key": "OverWriteFiles", "result": "Yes"}
+    )
     assert sysobj.prompt_answers["OverWriteFiles"] == 2  # stub int fallback
     assert out["result"] == "Yes"
 
@@ -542,8 +571,10 @@ def test_system_prompt_answers_persist(sysobj):
     assert out["cleared"] == 1
     assert sysobj.prompt_answers == {}
 
-    for missing in ({"op": "set_prompt_answer", "key": "k"},
-                    {"op": "set_prompt_answer", "result": "Yes"}):
+    for missing in (
+        {"op": "set_prompt_answer", "key": "k"},
+        {"op": "set_prompt_answer", "result": "Yes"},
+    ):
         with pytest.raises(RuntimeError, match="args.key"):
             ex.cmd_system(missing)
 
@@ -557,14 +588,24 @@ def test_system_set_flags_and_progress(sysobj):
     with pytest.raises(RuntimeError, match="at least one"):
         ex.cmd_system({"op": "set_flags"})
 
-    ex.cmd_system({"op": "progress", "action": "start", "description": "x",
-                   "items": 3, "unit": "objects"})
-    ex.cmd_system({"op": "progress", "action": "step", "item": "a",
-                   "completed": 2})
-    ex.cmd_system({"op": "progress", "action": "absolute", "item": "a",
-                   "absolute_progress": 2})
-    assert [c[0] for c in sysobj.calls] == \
-        ["progress_start", "progress_step", "progress_absolute"]
+    ex.cmd_system(
+        {
+            "op": "progress",
+            "action": "start",
+            "description": "x",
+            "items": 3,
+            "unit": "objects",
+        }
+    )
+    ex.cmd_system({"op": "progress", "action": "step", "item": "a", "completed": 2})
+    ex.cmd_system(
+        {"op": "progress", "action": "absolute", "item": "a", "absolute_progress": 2}
+    )
+    assert [c[0] for c in sysobj.calls] == [
+        "progress_start",
+        "progress_step",
+        "progress_absolute",
+    ]
     assert sysobj.calls[0] == ("progress_start", "x", 3, "objects")
 
     with pytest.raises(RuntimeError, match="start\\|step\\|absolute"):
@@ -577,9 +618,16 @@ def test_system_ui_gate_methods_and_secret_masking(sysobj):
     with pytest.raises(RuntimeError, match="REFUSED"):
         ex.cmd_system({"op": "exit"})
 
-    out = ex.cmd_system({"op": "ui", "method": "prompt", "message": "Overwrite?",
-                         "choice": "YesNo", "default_result": "No",
-                         "confirm": True})
+    out = ex.cmd_system(
+        {
+            "op": "ui",
+            "method": "prompt",
+            "message": "Overwrite?",
+            "choice": "YesNo",
+            "default_result": "No",
+            "confirm": True,
+        }
+    )
     assert out["result"] is None  # FakeUI returns None -> reported as None
     assert sysobj.ui.calls[0][0] == "prompt"
     # stand-in enums -> stub ints: YesNo=2, No=3
@@ -587,8 +635,9 @@ def test_system_ui_gate_methods_and_secret_masking(sysobj):
 
     # sensitive results are returned but never logged
     sysobj.ui.results = ["s3cret"]
-    out = ex.cmd_system({"op": "ui", "method": "query_password",
-                         "message": "pw", "confirm": True})
+    out = ex.cmd_system(
+        {"op": "ui", "method": "query_password", "message": "pw", "confirm": True}
+    )
     assert out["result"] == "s3cret"
     assert all("s3cret" not in ln for ln in ex._lines)
 
@@ -607,8 +656,7 @@ def test_system_exit_gate_and_call(sysobj):
 def test_system_command_reaches_dispatch(sysobj):
     # dispatch branch (system-level, no get_project) + headless hardening
     # run against the fake without breaking
-    out = ex.run_command({"id": "t-sys", "cmd": "system",
-                          "args": {"op": "info"}})
+    out = ex.run_command({"id": "t-sys", "cmd": "system", "args": {"op": "info"}})
     assert out["ok"] is True
     assert out["value"]["ui_present"] is True
 
@@ -683,8 +731,7 @@ def devobj(monkeypatch):
 
 def test_device_info_identification_and_simulation(devobj):
     out = ex.cmd_device_info(None, {"op": "identification"})
-    assert out["device_id"] == {"type": "20", "id": "0x1130dd01",
-                                "version": "3.10.4.0"}
+    assert out["device_id"] == {"type": "20", "id": "0x1130dd01", "version": "3.10.4.0"}
     assert out["module_id"] == "mod-1"
 
     out = ex.cmd_device_info(None, {"op": "simulation"})
@@ -692,8 +739,9 @@ def test_device_info_identification_and_simulation(devobj):
 
     with pytest.raises(RuntimeError, match="REFUSED"):
         ex.cmd_device_info(None, {"op": "simulation_set", "enabled": True})
-    out = ex.cmd_device_info(None, {"op": "simulation_set",
-                                    "enabled": True, "confirm": True})
+    out = ex.cmd_device_info(
+        None, {"op": "simulation_set", "enabled": True, "confirm": True}
+    )
     assert devobj.simulation is True
     assert out["simulation"] is True
 
@@ -706,25 +754,28 @@ def test_device_info_driver_info_read_and_set(devobj):
     assert di["always_update_variables"] == "OnlyIfUnused"
 
     with pytest.raises(RuntimeError, match="REFUSED"):
-        ex.cmd_device_info(None, {"op": "driver_info_set",
-                                  "bus_cycle_task": "PlcTask"})
+        ex.cmd_device_info(None, {"op": "driver_info_set", "bus_cycle_task": "PlcTask"})
     with pytest.raises(RuntimeError, match="at least one"):
-        ex.cmd_device_info(None, {"op": "driver_info_set",
-                                  "confirm": True})
+        ex.cmd_device_info(None, {"op": "driver_info_set", "confirm": True})
 
-    out = ex.cmd_device_info(FakeFindProject(), {
-        "op": "driver_info_set", "confirm": True,
-        "bus_cycle_task": "PlcTask", "io_application": "Application",
-        "behaviour_for_outputs_on_stop": "SetToDefault",
-        "always_update_variables": "AlwaysInBusCycle",
-        "enable_diagnosis": False})
+    out = ex.cmd_device_info(
+        FakeFindProject(),
+        {
+            "op": "driver_info_set",
+            "confirm": True,
+            "bus_cycle_task": "PlcTask",
+            "io_application": "Application",
+            "behaviour_for_outputs_on_stop": "SetToDefault",
+            "always_update_variables": "AlwaysInBusCycle",
+            "enable_diagnosis": False,
+        },
+    )
     assert devobj.driver_info.bus_cycle_task_by_name == "PlcTask"
     assert devobj.driver_info.behaviour_for_outputs_on_stop == 1
     assert devobj.driver_info.always_update_variables == 3
     assert devobj.driver_info.enable_diagnosis is False
     assert out["applied"]["io_application"] == "Application"
-    io_calls = [c for c in devobj.driver_info.calls
-                if c[0] == "set_io_application"]
+    io_calls = [c for c in devobj.driver_info.calls if c[0] == "set_io_application"]
     assert len(io_calls) == 1 and isinstance(io_calls[0][1], FakeAppMarker)
     assert out["driver_info"]["bus_cycle_task_by_name"] == "PlcTask"
 
@@ -733,8 +784,7 @@ class FakeIoMapping(object):
     """ScriptIoMapping per the stub: setting manual_iec_address to an
     address flips automatic off; None flips it back on."""
 
-    def __init__(self, variable="", default_variable="",
-                 auto=True, manual=None):
+    def __init__(self, variable="", default_variable="", auto=True, manual=None):
         self.Id = 1
         self.variable = variable
         self.default_variable = default_variable
@@ -799,9 +849,11 @@ class FakeParamSet(object):
         return iter(self._params)
 
     def __getitem__(self, name):
-        raise IndexError("Index was out of range. Must be non-negative "
-                         "and less than the size of the collection. "
-                         "Parameter name: index")
+        raise IndexError(
+            "Index was out of range. Must be non-negative "
+            "and less than the size of the collection. "
+            "Parameter name: index"
+        )
 
 
 class FakeParam(object):
@@ -864,12 +916,24 @@ def iodev(monkeypatch):
     input_map = FakeIoMapping(variable="old_var", auto=True)
     conn_map = FakeIoMapping(variable="c_var", auto=False, manual="%QW0")
     device = FakeIoDevice(
-        FakeParamSet([("IO-Params", [FakeIoElement("plain_param", None),
-                                     FakeIoElement("unmapped_io",
-                                                   None, mappable=True)]),
-                      ("IO-Map", [FakeIoElement("input_io", input_map)])]),
-        [FakeConnector(1, FakeParamSet([
-            ("ConnIo", [FakeIoElement("conn_io", conn_map)])]))])
+        FakeParamSet(
+            [
+                (
+                    "IO-Params",
+                    [
+                        FakeIoElement("plain_param", None),
+                        FakeIoElement("unmapped_io", None, mappable=True),
+                    ],
+                ),
+                ("IO-Map", [FakeIoElement("input_io", input_map)]),
+            ]
+        ),
+        [
+            FakeConnector(
+                1, FakeParamSet([("ConnIo", [FakeIoElement("conn_io", conn_map)])])
+            )
+        ],
+    )
     monkeypatch.setattr(ex, "get_device", lambda project, name="": device)
     device.input_map = input_map
     device.conn_map = conn_map
@@ -881,15 +945,13 @@ def test_device_io_mappings_walk(iodev):
     # (LIVE 2026-10-22: the root-only walk missed the module channels
     # the engine's own CSV export lists)
     sub_map = FakeIoMapping(variable="s_var", auto=False, manual="%IX2.0")
-    sub = FakeIoDevice(
-        FakeParamSet([("ModIo", [FakeIoElement("sub_io", sub_map)])]))
+    sub = FakeIoDevice(FakeParamSet([("ModIo", [FakeIoElement("sub_io", sub_map)])]))
     sub.get_name = lambda: "SubDev"
 
-    out = ex.cmd_device_io(FakeDevicesProject([iodev, sub]),
-                           {"op": "mappings"})
+    out = ex.cmd_device_io(FakeDevicesProject([iodev, sub]), {"op": "mappings"})
     assert out["count"] == 4
     by_id = dict((m["identifier"], m) for m in out["mappings"])
-    assert "plain_param" not in by_id          # not mappable -> skipped
+    assert "plain_param" not in by_id  # not mappable -> skipped
     assert by_id["input_io"]["io_mapping"]["variable"] == "old_var"
     assert by_id["input_io"]["io_mapping"]["automatic_iec_address"] is True
     assert by_id["input_io"]["device"] == "FakeDev"
@@ -905,93 +967,136 @@ def test_device_io_mappings_walk(iodev):
 
 def test_device_io_set_mapping_gates_and_effects(iodev):
     with pytest.raises(RuntimeError, match="REFUSED"):
-        ex.cmd_device_io(None, {"op": "set_mapping", "name": "x",
-                                "variable": "GVL.new"})
+        ex.cmd_device_io(
+            None, {"op": "set_mapping", "name": "x", "variable": "GVL.new"}
+        )
 
-    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "IO-Map",
-                                  "variable": "GVL.new", "confirm": True})
+    out = ex.cmd_device_io(
+        None,
+        {"op": "set_mapping", "name": "IO-Map", "variable": "GVL.new", "confirm": True},
+    )
     assert out["elements"][0]["set"] == {"variable": "GVL.new"}
     assert out["elements"][0]["readback"]["variable"] == "GVL.new"
 
     # automatic=true resets the address (manual -> None -> auto)
-    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "ConnIo",
-                                  "automatic": True, "confirm": True})
+    out = ex.cmd_device_io(
+        None,
+        {"op": "set_mapping", "name": "ConnIo", "automatic": True, "confirm": True},
+    )
     assert iodev.conn_map.manual_iec_address is None
     assert iodev.conn_map.automatic_iec_address is True
     assert out["elements"][0]["set"] == {"manual_iec_address": None}
 
     # manual address flips automatic off
-    ex.cmd_device_io(None, {"op": "set_mapping", "name": "ConnIo",
-                            "manual_iec_address": "%QW7", "confirm": True})
+    ex.cmd_device_io(
+        None,
+        {
+            "op": "set_mapping",
+            "name": "ConnIo",
+            "manual_iec_address": "%QW7",
+            "confirm": True,
+        },
+    )
     assert iodev.conn_map.automatic_iec_address is False
     assert iodev.conn_map.manual_iec_address == "%QW7"
 
     with pytest.raises(RuntimeError, match="no mappable element"):
-        ex.cmd_device_io(None, {"op": "set_mapping", "name": "IO-Params",
-                                "variable": "GVL.x", "confirm": True})
+        ex.cmd_device_io(
+            None,
+            {
+                "op": "set_mapping",
+                "name": "IO-Params",
+                "variable": "GVL.x",
+                "confirm": True,
+            },
+        )
     with pytest.raises(RuntimeError, match="needs args.variable"):
-        ex.cmd_device_io(None, {"op": "set_mapping", "name": "ConnIo",
-                                "confirm": True})
+        ex.cmd_device_io(None, {"op": "set_mapping", "name": "ConnIo", "confirm": True})
 
 
 def test_device_io_set_mapping_multi_element_guard(iodev, monkeypatch):
     # G-21: a multi-channel parameter refuses an unfiltered set
-    two = FakeIoDevice(FakeParamSet([
-        ("Multi", [
-            FakeIoElement("ch1", FakeIoMapping(variable="a",
-                                               auto=False, manual="%IX0")),
-            FakeIoElement("ch2", FakeIoMapping(variable="b",
-                                               auto=False, manual="%IX1")),
-        ])]))
+    two = FakeIoDevice(
+        FakeParamSet(
+            [
+                (
+                    "Multi",
+                    [
+                        FakeIoElement(
+                            "ch1",
+                            FakeIoMapping(variable="a", auto=False, manual="%IX0"),
+                        ),
+                        FakeIoElement(
+                            "ch2",
+                            FakeIoMapping(variable="b", auto=False, manual="%IX1"),
+                        ),
+                    ],
+                )
+            ]
+        )
+    )
     monkeypatch.setattr(ex, "get_device", lambda project, name="": two)
     with pytest.raises(RuntimeError, match="REFUSED.*mappable elements"):
-        ex.cmd_device_io(None, {"op": "set_mapping", "name": "Multi",
-                                "variable": "c", "confirm": True})
+        ex.cmd_device_io(
+            None,
+            {"op": "set_mapping", "name": "Multi", "variable": "c", "confirm": True},
+        )
 
     # element= targets exactly one channel
-    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "Multi",
-                                  "element": "ch2", "variable": "c",
-                                  "confirm": True})
+    out = ex.cmd_device_io(
+        None,
+        {
+            "op": "set_mapping",
+            "name": "Multi",
+            "element": "ch2",
+            "variable": "c",
+            "confirm": True,
+        },
+    )
     assert len(out["elements"]) == 1
     assert out["elements"][0]["identifier"] == "ch2"
     assert out["elements"][0]["readback"]["variable"] == "c"
 
     # all_elements=true is the explicit escape hatch
-    out = ex.cmd_device_io(None, {"op": "set_mapping", "name": "Multi",
-                                  "variable": "d", "all_elements": True,
-                                  "confirm": True})
+    out = ex.cmd_device_io(
+        None,
+        {
+            "op": "set_mapping",
+            "name": "Multi",
+            "variable": "d",
+            "all_elements": True,
+            "confirm": True,
+        },
+    )
     assert len(out["elements"]) == 2
-    assert all(r["readback"]["variable"] == "d"
-               for r in out["elements"])
+    assert all(r["readback"]["variable"] == "d" for r in out["elements"])
 
 
 def test_device_io_csv_round_trip(iodev, tmp_path, monkeypatch):
-    out = ex.cmd_device_io(None, {"op": "export_csv",
-                                  "file": str(tmp_path / "m.csv")})
+    out = ex.cmd_device_io(None, {"op": "export_csv", "file": str(tmp_path / "m.csv")})
     assert out["bytes"] == 8
     assert iodev.exported == os.path.abspath(str(tmp_path / "m.csv"))
 
     # default location derives from PROJECT_ROOT + sanitized device name
     monkeypatch.setattr(ex, "PROJECT_ROOT", str(tmp_path))
     out = ex.cmd_device_io(None, {"op": "export_csv"})
-    expected = os.path.join(str(tmp_path), "io-mappings",
-                            "FakeDev_io_mappings.csv")
+    expected = os.path.join(str(tmp_path), "io-mappings", "FakeDev_io_mappings.csv")
     assert os.path.isfile(expected)
     assert out["file"] == os.path.abspath(expected)
 
     with pytest.raises(RuntimeError, match="REFUSED"):
-        ex.cmd_device_io(None, {"op": "import_csv",
-                                "file": str(tmp_path / "m.csv")})
-    out = ex.cmd_device_io(None, {"op": "import_csv",
-                                  "file": str(tmp_path / "m.csv"),
-                                  "confirm": True})
+        ex.cmd_device_io(None, {"op": "import_csv", "file": str(tmp_path / "m.csv")})
+    out = ex.cmd_device_io(
+        None, {"op": "import_csv", "file": str(tmp_path / "m.csv"), "confirm": True}
+    )
     assert out["imported"] is True
     assert iodev.imported == os.path.abspath(str(tmp_path / "m.csv"))
 
     with pytest.raises(RuntimeError, match="existing CSV"):
-        ex.cmd_device_io(None, {"op": "import_csv",
-                                "file": str(tmp_path / "gone.csv"),
-                                "confirm": True})
+        ex.cmd_device_io(
+            None,
+            {"op": "import_csv", "file": str(tmp_path / "gone.csv"), "confirm": True},
+        )
 
 
 class FakeSym(object):
@@ -1000,7 +1105,7 @@ class FakeSym(object):
     is_symbol_config = True
 
     def __init__(self):
-        self.content_feature_flags = 3          # SupportOPCUA|IncludeComments
+        self.content_feature_flags = 3  # SupportOPCUA|IncludeComments
         self.effective_content_feature_flags = 3
         self.symbol_attribute_filter_type = 0
         self.effective_symbol_attribute_filter_type = 0
@@ -1035,21 +1140,26 @@ def symapp(monkeypatch):
 def test_symbol_config_options_read_and_set(symapp):
     out = ex.cmd_symbol_config(None, {"op": "config"})
     cfg = out["config"]
-    assert cfg["content_feature_flags"] == ["SupportOPCUA",
-                                            "IncludeComments"]
+    assert cfg["content_feature_flags"] == ["SupportOPCUA", "IncludeComments"]
     assert cfg["symbol_attribute_filter_type"] == "none"
     assert cfg["direct_io_obstacles"] == "none"
 
     with pytest.raises(RuntimeError, match="REFUSED"):
-        ex.cmd_symbol_config(None, {"op": "config_set",
-                                    "content_feature_flags": "SupportOPCUA"})
+        ex.cmd_symbol_config(
+            None, {"op": "config_set", "content_feature_flags": "SupportOPCUA"}
+        )
 
-    out = ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
-                                      "content_feature_flags":
-                                      "SupportOPCUA+IncludeAttributes",
-                                      "attribute_filter_type": "Prefix",
-                                      "attribute_filter_data": "GVL_",
-                                      "comment_filter_type": "Both"})
+    out = ex.cmd_symbol_config(
+        None,
+        {
+            "op": "config_set",
+            "confirm": True,
+            "content_feature_flags": "SupportOPCUA+IncludeAttributes",
+            "attribute_filter_type": "Prefix",
+            "attribute_filter_data": "GVL_",
+            "comment_filter_type": "Both",
+        },
+    )
     sym = symapp.sym
     assert sym.content_feature_flags == 1 | 4
     assert sym.symbol_attribute_filter_type == 3
@@ -1059,19 +1169,21 @@ def test_symbol_config_options_read_and_set(symapp):
     assert out["config"]["symbol_attribute_filter_type"] == "Prefix"
 
     # standalone filter data update + none reset
-    ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
-                                "attribute_filter_data": "PB_"})
+    ex.cmd_symbol_config(
+        None, {"op": "config_set", "confirm": True, "attribute_filter_data": "PB_"}
+    )
     assert sym.symbol_attribute_filter_data == "PB_"
-    ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
-                                "content_feature_flags": "none"})
+    ex.cmd_symbol_config(
+        None, {"op": "config_set", "confirm": True, "content_feature_flags": "none"}
+    )
     assert sym.content_feature_flags == 0
 
     with pytest.raises(RuntimeError, match="at least one"):
         ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True})
-    with pytest.raises(RuntimeError, match="unknown "
-                                            "SymbolConfigContentFeature"):
-        ex.cmd_symbol_config(None, {"op": "config_set", "confirm": True,
-                                    "content_feature_flags": "Nope"})
+    with pytest.raises(RuntimeError, match="unknown SymbolConfigContentFeature"):
+        ex.cmd_symbol_config(
+            None, {"op": "config_set", "confirm": True, "content_feature_flags": "Nope"}
+        )
 
 
 def test_symbol_config_create_ladder(monkeypatch):
@@ -1082,8 +1194,7 @@ def test_symbol_config_create_ladder(monkeypatch):
         def get_children(self, recursive):
             return []
 
-        def create_symbol_config(self, export_comments, support_opc_ua,
-                                 calc=None):
+        def create_symbol_config(self, export_comments, support_opc_ua, calc=None):
             calls.append(calc)
             if calc is False or calc is None:
                 # live: the calculator parameter is a Guid
@@ -1093,13 +1204,11 @@ def test_symbol_config_create_ladder(monkeypatch):
     monkeypatch.setattr(ex, "get_application", lambda project: AppNoSym())
     out = ex.cmd_symbol_config(None, {"op": "create", "confirm": True})
     assert out["created"] is True
-    assert calls == [False, None,
-                     "00000000-0000-0000-0000-000000000000"]
+    assert calls == [False, None, "00000000-0000-0000-0000-000000000000"]
 
 
 def test_symbol_config_xsd_write(symapp, tmp_path):
-    out = ex.cmd_symbol_config(None, {"op": "xsd",
-                                      "file": str(tmp_path / "s.xsd")})
+    out = ex.cmd_symbol_config(None, {"op": "xsd", "file": str(tmp_path / "s.xsd")})
     assert out["bytes"] == 5
     assert out["preview"].startswith("<?xml")
     with open(str(tmp_path / "s.xsd"), "rb") as fh:
@@ -1112,8 +1221,9 @@ def test_symbol_config_xsd_write(symapp, tmp_path):
         out = ex.cmd_symbol_config(None, {"op": "xsd"})
     finally:
         ex.PROJECT_ROOT = old_root
-    expected = os.path.join(str(tmp_path), "plcopensrc-export",
-                            "Symbolconfiguration.xsd")
+    expected = os.path.join(
+        str(tmp_path), "plcopensrc-export", "Symbolconfiguration.xsd"
+    )
     assert os.path.isfile(expected)
     assert out["file"] == os.path.abspath(expected)
 
@@ -1164,8 +1274,8 @@ def test_online_login_keep_only_never_escalates(monkeypatch):
     dev = FakeConnectDevice()
     with pytest.raises(RuntimeError, match="G-26"):
         ex._online_login(app, dev, prefer_keep=True)
-    assert app.logins == ["Keep"]   # Keep ONLY - no Try/Force/Never
-    assert dev.connected is False   # and never the implicit-download connect
+    assert app.logins == ["Keep"]  # Keep ONLY - no Try/Force/Never
+    assert dev.connected is False  # and never the implicit-download connect
 
 
 def test_online_login_deploy_ladder_still_escalates(monkeypatch):
@@ -1187,7 +1297,7 @@ def test_online_login_deploy_ladder_still_escalates(monkeypatch):
     with pytest.raises(RuntimeError, match="all login forms failed"):
         ex._online_login(app, dev, prefer_keep=False)
     assert app.logins == ["Try", "Force", "Never"]
-    assert dev.connected is True    # deploy ladder intentionally reaches connect
+    assert dev.connected is True  # deploy ladder intentionally reaches connect
 
 
 class FakeGapOnlineApp(object):
@@ -1203,8 +1313,8 @@ class FakeGapOnlineApp(object):
         self.logins.append(str(option))
         if len(self.logins) <= self.fail_times:
             raise RuntimeError(
-                "OnlineChange failed, no task gap within 10000 ms: "
-                "[Application]")
+                "OnlineChange failed, no task gap within 10000 ms: [Application]"
+            )
 
 
 def test_login_gap_timeout_change_applied_no_escalation(monkeypatch):
@@ -1227,8 +1337,8 @@ def test_login_gap_timeout_change_applied_no_escalation(monkeypatch):
     got = ex._online_login(online, dev, engapp=EngApp())
     assert got.startswith("login(OnlineChangeOption.Try)")
     assert "applied" in got
-    assert online.logins == ["Try"]          # no Force/Never escalation
-    assert dev.connected is False            # and no implicit download
+    assert online.logins == ["Try"]  # no Force/Never escalation
+    assert dev.connected is False  # and no implicit download
 
 
 def test_login_gap_timeout_retry_second_attempt_clean(monkeypatch):
@@ -1248,7 +1358,7 @@ def test_login_gap_timeout_retry_second_attempt_clean(monkeypatch):
     got = ex._online_login(online, dev, engapp=EngApp())
     assert got.startswith("login(OnlineChangeOption.Try)")
     assert "retry" in got
-    assert online.logins == ["Try", "Try"]   # same form retried ONCE
+    assert online.logins == ["Try", "Try"]  # same form retried ONCE
     assert dev.connected is False
 
 
@@ -1273,8 +1383,7 @@ def test_login_gap_timeout_still_escalates_when_retry_fails(monkeypatch):
     dev = RaisingConnectDevice()
     with pytest.raises(RuntimeError, match="all login forms failed"):
         ex._online_login(online, dev, engapp=EngApp())
-    assert online.logins == ["Try", "Try", "Force", "Force",
-                             "Never", "Never"]
+    assert online.logins == ["Try", "Try", "Force", "Force", "Never", "Never"]
     assert dev.connected is True
 
 
@@ -1361,9 +1470,10 @@ def test_object_create_container_falls_back_to_application(monkeypatch):
             return [app]
 
     monkeypatch.setattr(ex, "get_application", lambda project: app)
-    out = ex.cmd_object_create(RootProject(), {
-        "kind": "special_pou", "special_type": "check_bounds",
-        "confirm": True})
+    out = ex.cmd_object_create(
+        RootProject(),
+        {"kind": "special_pou", "special_type": "check_bounds", "confirm": True},
+    )
     assert app.calls and out["created"] == "check_bounds"
 
 
@@ -1376,27 +1486,29 @@ def test_object_create_special_pou(monkeypatch):
     container = FakeSpecialContainer()
 
     with pytest.raises(RuntimeError, match="REFUSED"):
-        ex.cmd_object_create(container, {"kind": "special_pou",
-                                         "special_type": "check_bounds"})
+        ex.cmd_object_create(
+            container, {"kind": "special_pou", "special_type": "check_bounds"}
+        )
 
-    out = ex.cmd_object_create(container, {"kind": "special_pou",
-                                           "special_type": "check_bounds",
-                                           "confirm": True})
-    assert container.calls == [((2,), {})]   # positional SpecialPouType
+    out = ex.cmd_object_create(
+        container,
+        {"kind": "special_pou", "special_type": "check_bounds", "confirm": True},
+    )
+    assert container.calls == [((2,), {})]  # positional SpecialPouType
     assert out["created"] == "check_bounds"
     assert "full recompile" in out["warning"]
 
     with pytest.raises(RuntimeError, match="special_type"):
-        ex.cmd_object_create(container, {"kind": "special_pou",
-                                         "confirm": True})
+        ex.cmd_object_create(container, {"kind": "special_pou", "confirm": True})
     with pytest.raises(RuntimeError, match="unknown SpecialPouType"):
-        ex.cmd_object_create(container, {"kind": "special_pou",
-                                         "special_type": "wat",
-                                         "confirm": True})
+        ex.cmd_object_create(
+            container, {"kind": "special_pou", "special_type": "wat", "confirm": True}
+        )
 
     # no stand-in (None) -> same unknown-member error, not a crash
     monkeypatch.setattr(ex, "SpecialPouType", None)
     with pytest.raises(RuntimeError, match="unknown SpecialPouType"):
-        ex.cmd_object_create(container, {"kind": "special_pou",
-                                         "special_type": "check_bounds",
-                                         "confirm": True})
+        ex.cmd_object_create(
+            container,
+            {"kind": "special_pou", "special_type": "check_bounds", "confirm": True},
+        )

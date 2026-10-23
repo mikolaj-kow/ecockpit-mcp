@@ -29,6 +29,15 @@ dependencies = [
     "mcp>=2.3",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.17",
+    "mypy>=1.14",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "pre-commit>=4",
+]
+
 [project.urls]
 Homepage = "https://github.com/mikolaj-kow/ecockpit-mcp"
 Issues = "https://github.com/mikolaj-kow/ecockpit-mcp/issues"
@@ -45,3 +54,58 @@ version = { attr = "ecockpit_mcp.__version__" }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "--cov=ecockpit_mcp --cov-report=term-missing"
+
+[tool.ruff]
+# The CPython half of the repo. executor.py and relay.py run INSIDE
+# e!COCKPIT's IronPython engine (py2-compatible style, no f-strings) -
+# they stay out of ruff's lint+format scope; CI keeps a bare syntax
+# check (ruff --select E9, explicit paths bypass the exclude) over them.
+line-length = 88
+target-version = "py310"
+extend-exclude = [
+    "src/ecockpit_mcp/executor.py",
+    "src/ecockpit_mcp/relay.py",
+]
+
+[tool.ruff.lint]
+select = [
+    "E4",   # pycodestyle imports/indentation/line-length
+    "E7",   # pycodestyle statements (bare except, comparisons...)
+    "E9",   # pycodestyle runtime (syntax error, name error)
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort (import order)
+    "B",    # flake8-bugbear (real-bug patterns)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test fakes exercise the ScriptEngine's guarded stand-in pattern
+# (broad excepts are the point) and call asserts through json blobs.
+"tests/*" = ["B017", "B904"]
+
+[tool.mypy]
+# Type gate for the CPython half only - executor.py/relay.py are
+# IronPython scripts whose engine globals exist only inside e!COCKPIT.
+python_version = "3.10"
+files = ["src/ecockpit_mcp/server.py", "src/ecockpit_mcp/__init__.py"]
+exclude = ["executor.py", "relay.py"]
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.coverage.run]
+# Coverage gate on the host half: executor.py/relay.py execute only
+# inside e!COCKPIT's IronPython engine; their offline-checked command
+# logic is covered by the fake-based tests but the scripts' engine-glue
+# lines (guarded stand-ins, poll loop) cannot run under CPython.
+source = ["ecockpit_mcp"]
+omit = ["*/executor.py", "*/relay.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

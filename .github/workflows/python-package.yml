@@ -1,5 +1,8 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+# CI gates: ruff (lint + format), mypy on the CPython half,
+# coverage-gated offline tests, sdist/wheel build + entry-point smoke,
+# strict mkdocs build. executor.py / relay.py are IronPython scripts
+# (they run inside e!COCKPIT) - ruff/mypy skip them; a bare syntax check
+# keeps accidental py3-only syntax out of the IronPython pair.
 
 name: Python package
 
@@ -10,8 +13,41 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.13"
+    - name: Install ruff
+      run: python -m pip install ruff
+    - name: Lint (ruff check)
+      run: ruff check .
+    - name: Format (ruff format --check)
+      run: ruff format --check .
+    - name: IronPython pair syntax check (E9 only)
+      run: |
+        ruff check --select E9 --no-cache \
+          src/ecockpit_mcp/executor.py src/ecockpit_mcp/relay.py
 
+  type:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.13"
+    - name: Install mypy + package deps
+      run: |
+        python -m pip install mypy
+        python -m pip install mcp
+    - name: Type-check the CPython half (mypy)
+      run: mypy
+
+  build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -27,17 +63,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install flake8 pytest mcp
+        python -m pip install pytest pytest-cov mcp
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-    - name: Lint with flake8
+    - name: Test with pytest (coverage gate on the host half)
       run: |
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Test with pytest
-      run: |
-        pytest
+        pytest --cov-fail-under=55
     - name: Build sdist and wheel
       run: |
         python -m pip install build

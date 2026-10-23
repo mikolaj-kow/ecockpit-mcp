@@ -130,6 +130,11 @@ unless the relay is armed):
 
 ## Tools
 
+Security model — bearer token (mandatory off-loopback), loopback
+default, confirm-gated destructive operations, the
+online-commands-can-deploy caution, and credential handling — is
+documented in [docs/security.md](docs/security.md).
+
 Build & project:
 
 | Tool | Notes |
