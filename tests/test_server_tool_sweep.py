@@ -86,8 +86,13 @@ def _minimal_args(tool):
     return args
 
 
+_CTX = object()  # sentinel passed as ctx to every async tool call
+
+
 async def _call(fn, args):
     if inspect.iscoroutinefunction(fn):
+        if "ctx" in inspect.signature(fn).parameters:
+            args = {**args, "ctx": _CTX}
         return await fn(**args)
     return fn(**args)
 
@@ -110,12 +115,27 @@ def stub_engine(monkeypatch):
         return {"ok": True, "cmd": cmd}
 
     async def fake_run_async(cmd, args=None, timeout_s=None, ctx=None, **kw):
+        # LIVE 2026-10-23: ecockpit_snapshot passed ctx positionally into
+        # the timeout_s slot - the command still reached the engine but
+        # the wrapper died on time.time() + Context. Pin the call shape
+        # for every async tool so arg-order slips fail here.
+        assert timeout_s is None or isinstance(timeout_s, (int, float)), (
+            cmd + ": timeout_s must stay numeric/None"
+        )
+        assert ctx is None or ctx is _CTX, cmd + ": ctx must bind to ctx"
         calls.append(("async", cmd, args))
         return {"ok": True, "cmd": cmd}
 
     monkeypatch.setattr(srv, "_run", fake_run)
     monkeypatch.setattr(srv, "_run_async", fake_run_async)
     return rec
+
+
+@pytest.fixture(autouse=True)
+def isolated_work_dir(monkeypatch, tmp_path):
+    # server_status reads the work dir (result file, PLC sidecar, live
+    # TCP probe): keep the sweep hermetic, never touch the live tmp/
+    monkeypatch.setattr(srv.CFG, "work_dir", str(tmp_path))
 
 
 def test_every_tool_returns_json_and_is_reached(stub_engine):

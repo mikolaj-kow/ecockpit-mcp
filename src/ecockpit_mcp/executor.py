@@ -97,6 +97,7 @@ import sys
 import glob
 import json
 import re
+import time
 import traceback
 import datetime
 import xml.etree.ElementTree as ET
@@ -323,6 +324,25 @@ DEFAULT_BOOT   = os.path.join(WORK_DIR, "bootapp.app")
 PROBE_OUT      = os.path.join(LOG_DIR, "ecockpit_api_probe.txt")
 MSGS_DUMP_PATH = os.path.join(LOG_DIR, "ecockpit_messages_dump.txt")
 
+# PLC connection sidecar: rewritten by _note_plc on every REAL connection
+# attempt (the _online_connect login ladder; pre-login refusals like G-27
+# never touch the PLC and must not record here). The MCP server's
+# ecockpit_server_status reads it for the "plc" section.
+PLC_STATE_FILE = os.path.join(WORK_DIR, "ecockpit_plc_state.json")
+
+# Appended to every escalated login failure. Worded conditionally on
+# purpose: "all forms failed" also fires when the PLC is simply powered
+# off - the attempt lines above the hint tell the reader which case holds.
+LOGIN_FAIL_HINT = (
+    "HINT: if the attempts above show 'Login failed' (not timeouts or "
+    "unreachable), this is the known build limitation: online change is "
+    "not possible on this PFC200 build - the s4 fLog logging funnel "
+    "starves online change of a task gap (G-27/G-31 era findings, "
+    "final 2026-10-22..24). Deploy with ecockpit_download (full "
+    "download: reliable, carries edits) or quiesce logging first "
+    "(GVLLogging.eGlobalLogLevel := LOG_EMERG) then retry option=try. "
+    "Current PLC reachability: ecockpit_server_status, 'plc' section.")
+
 SNAPSHOTS_DIR  = _cfg("ECP_SNAPSHOTS_DIR", "") \
     or (os.path.join(PROJECT_ROOT, "snapshots") if PROJECT_ROOT else "")
 PROJECTS_DIR   = _cfg("ECP_PROJECTS_DIR", "") or PROJECT_ROOT
@@ -456,8 +476,16 @@ def resolve_config():
                     or _cfg("ECP_SKIP_IMPORT", "0") == "1",
     }
     if not cfg["project"]:
-        log("WARN", "no --project given and no .ecp auto-discovered; "
-            "will fall back to the already-open primary project")
+        if globals().get("RELAY_DISPATCH"):
+            # the relay FORCES PROJECT_FILE="" (it wants the GUI-open
+            # primary project) - this fallback is the design, not a
+            # misconfiguration, so it must not spam the message window
+            # as a warning on every command
+            log("INFO", "no --project given; relay dispatch uses the "
+                        "already-open primary project")
+        else:
+            log("WARN", "no --project given and no .ecp auto-discovered; "
+                "will fall back to the already-open primary project")
     return cfg
 
 
@@ -2167,7 +2195,38 @@ def _online_login(onlineapp, device, prefer_keep=False, engapp=None):
             "project to the PLC (G-26). Attempts:\n  " +
             "\n  ".join(attempts))
     raise RuntimeError("all login forms failed:\n  " +
-                       "\n  ".join(attempts))
+                       "\n  ".join(attempts) +
+                       "\n" + LOGIN_FAIL_HINT)
+
+
+def _note_plc(ok, detail, device=None):
+    """Record a REAL connection attempt in the PLC-state sidecar.
+
+    Called from _online_connect around the login ladder only: pre-login
+    refusals (G-27 uptodate check, confirm gates, missing creds) raise
+    BEFORE any login and must not mark the PLC offline - the device was
+    never touched. Read by the MCP server's ecockpit_server_status for
+    its "plc" section. Best effort: a sidecar failure is logged, never
+    raised - it must not mask the command's own result.
+    """
+    entry = {"online": bool(ok), "ts": time.time(),
+             "detail": str(detail)[:200]}
+    if device is not None:
+        try:
+            entry["ip"] = str(device.ip_address)
+        except Exception:
+            pass
+    try:
+        tmp = PLC_STATE_FILE + ".tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(json.dumps(entry).encode("utf-8", "replace"))
+        try:
+            os.remove(PLC_STATE_FILE)
+        except OSError:
+            pass
+        os.rename(tmp, PLC_STATE_FILE)
+    except Exception as exc:
+        log("INFO", "plc-state sidecar write failed: {e}".format(e=exc))
 
 
 def _online_connect(project, args, prefer_keep=False):
@@ -2208,7 +2267,14 @@ def _online_connect(project, args, prefer_keep=False):
         u=user[0] + "***" if len(user) > 1 else "***"))
     online.set_default_credentials(user, pw)
     onlineapp = online.create_online_application(app)
-    _online_login(onlineapp, device, prefer_keep=prefer_keep, engapp=app)
+    try:
+        via = _online_login(onlineapp, device, prefer_keep=prefer_keep,
+                            engapp=app)
+    except Exception as exc:
+        _note_plc(False, "{c}: {m}".format(
+            c=type(exc).__name__, m=str(exc)[:160]), device)
+        raise
+    _note_plc(True, "logged in via {v}".format(v=via), device)
     return device, onlineapp
 
 
@@ -2217,16 +2283,21 @@ def _online_disconnect(device):
     when FORCED variables exist ("delete all currently forced variables
     before logging out?") and wedges the relay. forced_disconnect()
     (IScriptOnlineDevice2) cannot hang and keeps the runtime running -
-    it is tried FIRST now; plain disconnect stays as the fallback."""
-    try:
-        device.forced_disconnect()
-        log("INFO", "forced_disconnect done (modal-free logout)")
-        return
-    except AttributeError:
-        log("WARN", "forced_disconnect not available - plain disconnect")
-    except Exception as exc:
-        log("WARN", "forced_disconnect raised ({e}) - plain disconnect"
-            .format(e=exc))
+    it is tried FIRST now; plain disconnect stays as the fallback.
+    LIVE 2026-10-24: the fallback is INFO, not WARN - the project-tree
+    device NEVER carries forced_disconnect (that is an online-device
+    method), so the old WARN fired on every login/logout command."""
+    if hasattr(device, "forced_disconnect"):
+        try:
+            device.forced_disconnect()
+            log("INFO", "forced_disconnect done (modal-free logout)")
+            return
+        except Exception as exc:
+            log("WARN", "forced_disconnect raised ({e}) - plain disconnect"
+                .format(e=exc))
+    else:
+        log("INFO", "plain disconnect (forced_disconnect not available "
+                    "on this device object)")
     try:
         device.disconnect()
         log("INFO", "disconnected from PLC")
@@ -2299,6 +2370,21 @@ def cmd_read(project, args):
         value = onlineapp.read_value(path)
         log("OK", "read {p} = {v}".format(p=path, v=value))
         return str(value)
+    except Exception as exc:  # StandardError on the IronPython relay
+        # LIVE 2026-10-24: the engine raises 'Invalid pointer size.'
+        # during symbol resolution for POINTER/REFERENCE TO paths
+        # (e.g. stLightEntity.pAutomationCfg) - name the path, or the
+        # failure is undiagnosable once the per-command log rotates.
+        msg = str(exc)
+        hint = ""
+        if "Invalid pointer size" in msg:
+            hint = (" - pointer/REFERENCE-typed symbols cannot be "
+                    "returned by read_value; read the pointee variable "
+                    "or a value-typed member instead")
+        log("ERROR", "read_value failed for '{p}': {m}{h}".format(
+            p=path, m=msg, h=hint))
+        raise RuntimeError("read_value failed for '{p}': {m}{h}".format(
+            p=path, m=msg, h=hint))
     finally:
         _online_disconnect(device)
 
@@ -2412,7 +2498,8 @@ def cmd_login(project, args):
         raise RuntimeError(
             "login({o}) failed: {c}: {m}".format(
                 o=members[option], c=type(exc).__name__,
-                m=str(exc)[:200]))
+                m=str(exc)[:200]) +
+            "\n" + LOGIN_FAIL_HINT)
     log("OK", "login complete (OnlineChangeOption.{m}) - session stays "
         "open; logout with ecockpit_disconnect".format(m=members[option]))
     return {"logged_in": True, "via": members[option],
@@ -3281,6 +3368,15 @@ def _version_from_filename(path):
     return m.group(1) if m else ""
 
 
+def _strip_trailing_version(base):
+    """Drop a trailing version token from a project name so it is not
+    duplicated in snapshot files: the project FILE often carries the
+    version (s4-v3.10.0.ecp) and cmd_snapshot appends _<version> again.
+    s4-v3.10.0 / s4-v3.10.0-pre / MyApp_1.2.3 -> s4 / s4 / MyApp.
+    Requires a separator (or the whole name) so 'chapter2.5' survives."""
+    return re.sub(r"(?:^|[-_ ])v?\d+(?:\.\d+)+(?:-[0-9A-Za-z.]+)*$", "", base)
+
+
 def _snapshot_prefix(project):
     """Filename-safe SHORT project name for snapshot files.
 
@@ -3289,13 +3385,17 @@ def _snapshot_prefix(project):
     LIVE 2026-10-22: EScriptProject exposes neither get_name() nor
     .name/.Name (unlike device objects), and the GUI autosave path is a
     GUID blob - so a non-autosave project.path wins, everything else
-    falls through."""
+    falls through.
+    LIVE 2026-10-23: a trailing version on the project file is stripped
+    (s4-v3.10.0.ecp -> prefix 's4') so the snapshot reads s4_3.10.0.ecp
+    instead of s4-v3.10.0_3.10.0.ecp."""
     try:
         p = project.path
         p = str(p) if p else ""
         if p and os.path.isfile(p) and "Autosave" not in p                 and not p.endswith(".autosave"):
             base = os.path.splitext(os.path.basename(p))[0]
-            safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", base).strip("_")
+            safe = re.sub(r"[^A-Za-z0-9_.-]+", "_",
+                          _strip_trailing_version(base)).strip("_")
             if safe:
                 return safe
     except Exception:
@@ -3304,7 +3404,8 @@ def _snapshot_prefix(project):
         name = _display_name(project)
     except Exception:
         name = ""
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name or "").strip("_")
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_",
+                  _strip_trailing_version(name or "")).strip("_")
     return safe or "project"
 
 

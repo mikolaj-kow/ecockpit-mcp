@@ -220,6 +220,10 @@ def _dispatch(request, counter):
     try:
         # Re-exec the executor so live edits apply without re-arming.
         os.environ["ECP_NO_RUN"] = "1"
+        # Tell the executor BEFORE the exec (resolve_config runs at the
+        # executor's module level) that the open-primary fallback is
+        # deliberate - INFO instead of a warning on every command.
+        globals()["RELAY_DISPATCH"] = True
         with open(EXEC_SCRIPT, "r") as _bf:
             exec(_bf.read(), globals())
         # Reuse THIS already-open primary project, never a discovered .ecp.

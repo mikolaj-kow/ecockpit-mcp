@@ -9,7 +9,9 @@ signatures is injected into the module globals, so the command logic
 without e!COCKPIT.
 """
 
+import json
 import os
+import types
 
 import pytest
 
@@ -1300,6 +1302,130 @@ def test_online_login_deploy_ladder_still_escalates(monkeypatch):
     assert dev.connected is True  # deploy ladder intentionally reaches connect
 
 
+def test_cmd_read_names_path_on_pointer_failure(monkeypatch):
+    # LIVE 2026-10-24: read_value on a POINTER/REFERENCE path raised
+    # 'Invalid pointer size.' without naming the path - undiagnosable
+    # once the per-command log rotated. The error must carry the path
+    # and the pointee hint.
+    class FakeDev(object):
+        def __init__(self):
+            self.disconnects = 0
+
+        def disconnect(self):
+            self.disconnects += 1
+
+    class FakeApp(object):
+        def read_value(self, path):
+            raise Exception("Invalid pointer size.")
+
+    dev, app = FakeDev(), FakeApp()
+    monkeypatch.setattr(ex, "_online_connect",
+                        lambda project, args, prefer_keep=False: (dev, app))
+    with pytest.raises(RuntimeError) as ei:
+        ex.cmd_read(
+            None, {"path": "GVLEntities.astEntitiesLight[22].pAutomationCfg"})
+    assert "pAutomationCfg" in str(ei.value)
+    assert "Invalid pointer size" in str(ei.value)
+    assert "pointee" in str(ei.value)
+    assert dev.disconnects == 1  # finally still tears the session down
+
+
+def test_cmd_read_non_pointer_failure_keeps_engine_message(monkeypatch):
+    class FakeDev(object):
+        def disconnect(self):
+            pass
+
+    class FakeApp(object):
+        def read_value(self, path):
+            raise Exception("symbol not found")
+
+    monkeypatch.setattr(ex, "_online_connect",
+                        lambda project, args, prefer_keep=False:
+                            (FakeDev(), FakeApp()))
+    with pytest.raises(RuntimeError) as ei:
+        ex.cmd_read(None, {"path": "GVL.DoesNotExist"})
+    assert "symbol not found" in str(ei.value)
+    assert "pointee" not in str(ei.value)  # hint only for pointer errors
+
+
+def test_cmd_read_returns_value(monkeypatch):
+    class FakeDev(object):
+        def disconnect(self):
+            pass
+
+    class FakeApp(object):
+        def read_value(self, path):
+            return "eLightEffect.none"
+
+    monkeypatch.setattr(ex, "_online_connect",
+                        lambda project, args, prefer_keep=False:
+                            (FakeDev(), FakeApp()))
+    assert ex.cmd_read(None, {"path": "GVLEntities.astEntitiesLight[0]"
+                                       ".stState.eEffectVirt"}) == \
+        "eLightEffect.none"
+
+
+def test_online_disconnect_plain_fallback_is_info(monkeypatch):
+    # LIVE 2026-10-24: the tree device NEVER has forced_disconnect, so
+    # the old WARN fired on every login/logout command. The fallback
+    # must be INFO; only a real forced_disconnect failure stays WARN.
+    class PlainDev(object):
+        def __init__(self):
+            self.disconnected = False
+
+        def disconnect(self):
+            self.disconnected = True
+
+    dev = PlainDev()
+    before = len(ex._lines)
+    ex._online_disconnect(dev)
+    new = ex._lines[before:]
+    assert dev.disconnected is True
+    assert any("[INFO]" in ln and "plain disconnect" in ln for ln in new)
+    assert not any("[WARN]" in ln and "forced_disconnect" in ln
+                   for ln in new)
+
+
+def test_online_disconnect_forced_path(monkeypatch):
+    class ForcedDev(object):
+        def __init__(self):
+            self.forced = 0
+            self.plain = 0
+
+        def forced_disconnect(self):
+            self.forced += 1
+
+        def disconnect(self):
+            self.plain += 1
+
+    dev = ForcedDev()
+    ex._online_disconnect(dev)
+    assert dev.forced == 1
+    assert dev.plain == 0  # forced succeeded - plain disconnect skipped
+
+
+def test_resolve_config_no_project_severity(monkeypatch):
+    # Under the relay the open-primary fallback is deliberate (relay.py
+    # forces PROJECT_FILE="") - INFO there, WARN for standalone runs.
+    monkeypatch.setattr(ex, "parse_args", lambda: {})
+    monkeypatch.setattr(ex, "discover_project_file", lambda: "")
+    monkeypatch.setattr(ex, "_cfg", lambda name, default="": "")
+
+    before = len(ex._lines)
+    monkeypatch.setattr(ex, "RELAY_DISPATCH", True, raising=False)
+    ex.resolve_config()
+    assert "[INFO]" in ex._lines[-1]
+    assert "primary project" in ex._lines[-1]
+
+    monkeypatch.setattr(ex, "parse_args", lambda: {})
+    before = len(ex._lines)
+    if hasattr(ex, "RELAY_DISPATCH"):
+        monkeypatch.delattr(ex, "RELAY_DISPATCH")
+    ex.resolve_config()
+    assert "[WARN]" in ex._lines[-1]
+    assert "primary project" in ex._lines[-1]
+
+
 class FakeGapOnlineApp(object):
     """login raises the CmpApp task-gap timeout (VL-verified shape:
     the EXCEPTION is logged mid-operation, the change completes
@@ -1456,6 +1582,23 @@ def test_display_name_direct_access_not_getattr():
     assert ex._snapshot_prefix(OnlyRepr()) == "Name_FromRepr"
 
 
+def test_snapshot_prefix_strips_trailing_version(tmp_path):
+    # LIVE 2026-10-23: the project FILE carries the version
+    # (s4-v3.10.0.ecp) and cmd_snapshot appends _<version> itself, so
+    # the prefix must drop it - snapshots came out
+    # s4-v3.10.0_3.10.0.ecp instead of s4_3.10.0.ecp.
+    for name, want in (
+        ("s4-v3.10.0.ecp", "s4"),
+        ("s4-v3.10.0-pre.ecp", "s4"),
+        ("MyApp_1.2.3.ecp", "MyApp"),
+        ("myline.ecp", "myline"),  # no version - keep the full base
+        ("chapter2.5.ecp", "chapter2.5"),  # no separator - not a version
+    ):
+        (tmp_path / name).write_bytes(b"")
+        proj = type("P", (), {"path": str(tmp_path / name)})()
+        assert ex._snapshot_prefix(proj) == want, name
+
+
 def test_object_create_container_falls_back_to_application(monkeypatch):
     # G-22: EScriptProject has no create_pou live - the no-parent
     # default container is the APPLICATION
@@ -1512,3 +1655,128 @@ def test_object_create_special_pou(monkeypatch):
             container,
             {"kind": "special_pou", "special_type": "check_bounds", "confirm": True},
         )
+
+
+# ---------------------------------------------------------------------------
+# PLC connection sidecar (_note_plc + the _online_connect hook)
+# ---------------------------------------------------------------------------
+
+
+class _FakeDevice(object):
+    ip_address = "192.0.2.10"  # TEST-NET-1, never a real PLC
+
+
+class _FakeOnlineApp(object):
+    pass
+
+
+def _stub_login_ladder(monkeypatch, device, app, login):
+    """Stub everything _online_connect touches around the login ladder."""
+    monkeypatch.setattr(ex, "_require_creds", lambda: ("user", "pw"))
+    monkeypatch.setattr(ex, "get_device", lambda project, name="": device)
+    monkeypatch.setattr(ex, "get_application", lambda project: app)
+    monkeypatch.setattr(ex, "_online_login", login)
+    monkeypatch.setattr(
+        ex,
+        "online",
+        types.SimpleNamespace(
+            set_default_credentials=lambda u, p: None,
+            create_online_application=lambda application: _FakeOnlineApp(),
+        ),
+        raising=False,
+    )
+
+
+def test_note_plc_success_sidecar(monkeypatch, tmp_path):
+    sidecar = tmp_path / "plc_state.json"
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(sidecar))
+
+    ex._note_plc(True, "logged in via login(OnlineChangeOption.Keep)", _FakeDevice())
+
+    entry = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert entry["online"] is True
+    assert entry["ip"] == "192.0.2.10"
+    assert "Keep" in entry["detail"]
+    assert isinstance(entry["ts"], float)
+
+
+def test_note_plc_truncates_detail_and_omits_ip_without_device(
+    monkeypatch, tmp_path
+):
+    sidecar = tmp_path / "plc_state.json"
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(sidecar))
+
+    ex._note_plc(False, "x" * 500)
+
+    entry = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert entry["online"] is False
+    assert len(entry["detail"]) == 200
+    assert "ip" not in entry
+
+
+def test_note_plc_never_raises_on_unwritable_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        ex, "PLC_STATE_FILE", str(tmp_path / "missing-dir" / "x.json")
+    )
+    ex._note_plc(False, "boom")  # swallowed (logged), not raised
+
+
+def test_online_connect_notes_success(monkeypatch, tmp_path):
+    sidecar = tmp_path / "plc_state.json"
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(sidecar))
+    device = _FakeDevice()
+    _stub_login_ladder(
+        monkeypatch,
+        device,
+        types.SimpleNamespace(),
+        lambda oa, dev, prefer_keep=False, engapp=None: "login(OnlineChangeOption.Try)",
+    )
+
+    got_device, onlineapp = ex._online_connect(
+        types.SimpleNamespace(active_application=None), {}
+    )
+
+    assert got_device is device
+    entry = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert entry["online"] is True
+    assert "Try" in entry["detail"]
+
+
+def test_online_connect_notes_failure_and_reraises(monkeypatch, tmp_path):
+    sidecar = tmp_path / "plc_state.json"
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(sidecar))
+
+    def boom(oa, dev, prefer_keep=False, engapp=None):
+        raise RuntimeError(
+            "login via login(OnlineChangeOption.Try) failed: "
+            "Exception: Login failed"
+        )
+
+    _stub_login_ladder(
+        monkeypatch, _FakeDevice(), types.SimpleNamespace(), boom
+    )
+
+    with pytest.raises(RuntimeError, match="Login failed"):
+        ex._online_connect(types.SimpleNamespace(active_application=None), {})
+
+    entry = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert entry["online"] is False
+    assert "Login failed" in entry["detail"]
+
+
+def test_g27_refusal_never_touches_the_sidecar(monkeypatch, tmp_path):
+    # the G-27 uptodate check raises BEFORE the login ladder - the PLC was
+    # never contacted, so the sidecar must stay absent (no false "offline")
+    sidecar = tmp_path / "plc_state.json"
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(sidecar))
+    _stub_login_ladder(
+        monkeypatch,
+        _FakeDevice(),
+        types.SimpleNamespace(is_uptodate=False),
+        lambda *a, **k: pytest.fail("login must not run past a G-27 refusal"),
+    )
+
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex._online_connect(types.SimpleNamespace(), {}, prefer_keep=True)
+
+    assert not sidecar.exists()

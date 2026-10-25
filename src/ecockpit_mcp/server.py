@@ -40,6 +40,7 @@ import io
 import json
 import os
 import random
+import socket
 import threading
 import time
 
@@ -100,6 +101,9 @@ class Config(object):
     port = int(_cfg("ECP_MCP_PORT", "9777"))
     token = _cfg("ECP_MCP_TOKEN", "")
     transport = "http"
+    # CODESYS V3 runtime port probed by ecockpit_server_status's live
+    # reachability check (host-side socket only, never touches the engine).
+    plc_probe_port = int(_cfg("ECP_PLC_PROBE_PORT", "") or "2455")
 
     @property
     def tmp_dir(self):
@@ -118,6 +122,12 @@ class Config(object):
     @property
     def heartbeat_file(self):
         return os.path.join(self.tmp_dir, "ecockpit_watch.heartbeat")
+
+    @property
+    def plc_state_file(self):
+        # Connection sidecar written by executor._note_plc on every real
+        # login-ladder attempt (same work dir as the rest of the protocol).
+        return os.path.join(self.tmp_dir, "ecockpit_plc_state.json")
 
 
 CFG = Config()
@@ -193,6 +203,50 @@ def _heartbeat_age():
         return time.time() - os.path.getmtime(CFG.heartbeat_file)
     except OSError:
         return 1e9
+
+
+def _plc_last_attempt():
+    """Last REAL PLC connection attempt, from the executor's sidecar.
+
+    Written by executor._note_plc around the login ladder only - pre-login
+    refusals (confirm gates, G-27) never appear here because they never
+    touched the PLC.
+    """
+    try:
+        with open(CFG.plc_state_file, "r", encoding="utf-8") as fh:
+            entry = json.load(fh)
+        if isinstance(entry, dict) and "online" in entry:
+            try:
+                entry["age_s"] = round(
+                    time.time() - float(entry.get("ts", 0)), 1)
+            except (TypeError, ValueError):
+                pass
+            return entry
+    except Exception:
+        pass
+    return None
+
+
+def _plc_probe(ip):
+    """Live TCP reachability of the PLC's CODESYS runtime port.
+
+    Host-side socket connect ONLY - it never touches e!COCKPIT or the
+    relay, so unlike ecockpit_state it cannot wedge on an engine dialog.
+    Reachable port proves the device answers on the network; it does not
+    prove a login would succeed (see the build's online-change limitation).
+    """
+    port = CFG.plc_probe_port
+    target = "{i}:{p}".format(i=ip, p=port)
+    start = time.time()
+    try:
+        conn = socket.create_connection((ip, port), timeout=1.0)
+        conn.close()
+    except Exception as exc:
+        return {"online": False, "target": target,
+                "error": "{c}: {m}".format(
+                    c=type(exc).__name__, m=str(exc)[:120])}
+    return {"online": True, "target": target,
+            "ms": round((time.time() - start) * 1000.0)}
 
 
 def _require_heartbeat(max_wait=45.0, fresh=12.0):
@@ -386,8 +440,12 @@ mcp = MCPServer(
 
 
 @mcp.tool(
+    structured_output=False,
     description="Check whether the in-instance e!COCKPIT command relay is "
-    "armed (heartbeat freshness) and show the last command result."
+    "armed (heartbeat freshness), show the last command result, and "
+    "report PLC connection status: 'plc.last_attempt' (executor's last "
+    "login-ladder outcome) and 'plc.probe' (live host-side TCP probe of "
+    "the CODESYS runtime port - cannot wedge the engine)."
 )
 def ecockpit_server_status() -> str:
     age = _heartbeat_age()
@@ -402,10 +460,16 @@ def ecockpit_server_status() -> str:
             info["last_result"] = json.load(fh)
     except Exception:
         info["last_result"] = None
+    last = _plc_last_attempt()
+    plc = {"last_attempt": last, "probe": None}
+    if last and last.get("ip"):
+        plc["probe"] = _plc_probe(str(last["ip"]))
+    info["plc"] = plc
     return json.dumps(info, indent=2)
 
 
 @mcp.tool(
+    structured_output=False,
     description="Build the PLC project inside the open e!COCKPIT: "
     "re-import all Application.*.xml from the automation "
     "project's plcopensrc/ tree, delete stale POUs "
@@ -441,6 +505,7 @@ async def ecockpit_build(
 
 
 @mcp.tool(
+    structured_output=False,
     description="Re-import every Application.*.xml into the open e!COCKPIT "
     "project and delete stale POUs - no compile. Takes ~15-30 s."
 )
@@ -449,6 +514,7 @@ async def ecockpit_import(timeout_s: int = 600, ctx: Context | None = None) -> s
 
 
 @mcp.tool(
+    structured_output=False,
     description="Export the application objects of the open project back "
     "to PLCopen XML (reverse of import; IExportReporter "
     "captures export errors). dir defaults to "
@@ -464,6 +530,7 @@ async def ecockpit_export(
 
 
 @mcp.tool(
+    structured_output=False,
     description="Compile only (no XML re-import). Same diagnostics and "
     "IGNORE_CODES filtering as build (all_messages=true "
     "bypasses). harvest_lines (default 60) raises how many "
@@ -487,6 +554,7 @@ async def ecockpit_compile(
 
 
 @mcp.tool(
+    structured_output=False,
     description="FULL rebuild (app.rebuild() - scripted Build -> Clean): "
     "compile from scratch without XML re-import. Fixes grown "
     "GVL arrays failing incremental builds with C0106 'out of "
@@ -513,6 +581,7 @@ async def ecockpit_rebuild(
 
 
 @mcp.tool(
+    structured_output=False,
     description="Project/application/device info of the open e!COCKPIT "
     "project (names, ip, simulated flag). No PLC login."
 )
@@ -521,6 +590,7 @@ def ecockpit_status() -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     description="Read one variable ONLINE from the live PLC (logs in with "
     ".env PLC credentials, then disconnects). Path is the "
     "application-relative symbol, e.g. GVLName.Variable."
@@ -542,6 +612,7 @@ def _iec_literal(value):
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -587,6 +658,7 @@ def ecockpit_write(
 
 
 @mcp.tool(
+    structured_output=False,
     description="Release ALL forced values on the PLC (unforce_all_values). "
     "Safe direction: restores normal variable writes."
 )
@@ -596,6 +668,7 @@ def ecockpit_unforce_all(device: str = "") -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     description="Online state readout of the PLC (logs in briefly, then "
     "disconnects): login state, application_state, "
     "operation_state, device connection. CAUTION: if the PLC "
@@ -609,6 +682,7 @@ def ecockpit_state(device: str = "") -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     description="Dump the message-store category map (scripting API "
     "debugging aid) and the active IGNORE_CODES filter list."
 )
@@ -617,6 +691,7 @@ def ecockpit_messages() -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     description="Clear the e!COCKPIT scripting message store. Call before "
     "a build/compile to guarantee the harvest contains ONLY "
     "that run's diagnostics (no stale messages from earlier "
@@ -627,6 +702,7 @@ def ecockpit_clear_messages() -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=False, open_world_hint=True
     ),
@@ -743,6 +819,7 @@ def ecockpit_system(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -868,6 +945,7 @@ async def ecockpit_system_ui(
 
 
 @mcp.tool(
+    structured_output=False,
     description="Save the open project in place and copy it to the "
     "snapshots dir as <project>_<version>.ecp "
     "(ECP_SNAPSHOTS_DIR, default <project root>/snapshots). "
@@ -877,10 +955,11 @@ async def ecockpit_system_ui(
 )
 async def ecockpit_snapshot(version: str = "", ctx: Context | None = None) -> str:
     args: dict[str, object] = {"version": version} if version else {}
-    return json.dumps(await _run_async("snapshot", args, ctx), indent=2)
+    return json.dumps(await _run_async("snapshot", args, ctx=ctx), indent=2)
 
 
 @mcp.tool(
+    structured_output=False,
     description="Log out of the PLC (releases the login that blocks XML "
     "imports). force=true uses forced_disconnect when a plain "
     "logout hangs."
@@ -890,6 +969,7 @@ def ecockpit_disconnect(force: bool = False) -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -917,6 +997,7 @@ def ecockpit_stop(confirm: bool = False, device: str = "", timeout_s: int = 120)
 
 
 @mcp.tool(
+    structured_output=False,
     description="List a directory on the PLC file system (logs in, lists, "
     "disconnects). Entries carry name, is_directory, size, "
     "last_modification_time. Works via the ScriptOnlineDevice "
@@ -936,6 +1017,7 @@ async def ecockpit_plc_ls(
 
 
 @mcp.tool(
+    structured_output=False,
     description="Download a file FROM the PLC to this machine (read-only "
     "on the PLC). remote is the PLC path, local the host "
     "destination (overwrites)."
@@ -956,6 +1038,7 @@ async def ecockpit_plc_get(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -999,6 +1082,7 @@ async def ecockpit_plc_put(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1033,6 +1117,7 @@ async def ecockpit_plc_rm(
 
 
 @mcp.tool(
+    structured_output=False,
     description="Read the source project archive back from the PLC "
     "(upload_source on the ScriptOnlineDevice; useful to "
     "recover what is actually running). path defaults to "
@@ -1059,6 +1144,7 @@ async def ecockpit_upload_source(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1087,6 +1173,7 @@ async def ecockpit_download(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1132,6 +1219,7 @@ def ecockpit_login(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1162,6 +1250,7 @@ async def ecockpit_source_download(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=True, open_world_hint=True
     ),
@@ -1189,6 +1278,7 @@ def ecockpit_prepared_values(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=True, open_world_hint=True
     ),
@@ -1236,6 +1326,7 @@ def ecockpit_tree(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1314,6 +1405,7 @@ async def ecockpit_object_create(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=True, open_world_hint=True
     ),
@@ -1331,6 +1423,7 @@ def ecockpit_textual_read(name: str, part: str = "", timeout_s: int = 120) -> st
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1374,6 +1467,7 @@ def ecockpit_textual_write(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=True, open_world_hint=True
     ),
@@ -1389,6 +1483,7 @@ def ecockpit_task_config(application: str = "", timeout_s: int = 120) -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1450,6 +1545,7 @@ def ecockpit_task_create(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=True, open_world_hint=True
     ),
@@ -1473,6 +1569,7 @@ async def ecockpit_symbol_config_variables(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1507,6 +1604,7 @@ def ecockpit_symbol_config_create(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1591,6 +1689,7 @@ async def ecockpit_symbol_config_options(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=True, open_world_hint=True
     ),
@@ -1624,6 +1723,7 @@ async def ecockpit_device_scan(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1673,6 +1773,7 @@ def ecockpit_device_comm(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1766,6 +1867,7 @@ def ecockpit_device_info(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1854,6 +1956,7 @@ async def ecockpit_device_io(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1921,6 +2024,7 @@ def ecockpit_device_params(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=True, open_world_hint=True
     ),
@@ -1936,6 +2040,7 @@ def ecockpit_app_status(application: str = "", timeout_s: int = 120) -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -1986,6 +2091,7 @@ async def ecockpit_app_control(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -2070,6 +2176,7 @@ async def ecockpit_project_control(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -2301,6 +2408,7 @@ def _run_http():
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=True, open_world_hint=True
     ),
@@ -2339,6 +2447,7 @@ def ecockpit_libs(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=True, open_world_hint=True
     ),
@@ -2365,6 +2474,7 @@ def ecockpit_lib_find(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=False, open_world_hint=True
     ),
@@ -2405,6 +2515,7 @@ def ecockpit_lib_install(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -2439,6 +2550,7 @@ def ecockpit_lib_uninstall(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=False, read_only_hint=True, open_world_hint=True
     ),
@@ -2452,6 +2564,7 @@ def ecockpit_repos(timeout_s: int = 120) -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -2498,6 +2611,7 @@ def ecockpit_repo_add(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -2536,6 +2650,7 @@ def ecockpit_repo_remove(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
@@ -2586,6 +2701,7 @@ def ecockpit_repo_update(
 
 
 @mcp.tool(
+    structured_output=False,
     description="Reorder the library repository search order (first "
     "repository wins when a library name resolves to several "
     "ones). index is the new position, -1 moves the "

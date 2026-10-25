@@ -154,3 +154,22 @@ def test_long_tools_are_async_with_progress_param():
         assert not inspect.iscoroutinefunction(getattr(srv, name)), (
             name + " should stay sync (short op)"
         )
+
+
+def test_snapshot_tool_binds_ctx_not_timeout(fake_work_dir):
+    # LIVE 2026-10-23 regression: ecockpit_snapshot called
+    # _run_async("snapshot", args, ctx) positionally, so the Context
+    # landed in timeout_s. The command still reached the engine (the
+    # dispatch precedes the deadline math) but the wrapper raised
+    # TypeError float + Context - the MCP caller saw an exception while
+    # the snapshot actually ran engine-side. Offline tests missed it
+    # because ctx=None silently falls back to the default timeout.
+    engine = FakeEngine(fake_work_dir, delay_s=0.0)
+    engine.start()
+    ctx = RecordingCtx()
+    try:
+        result = json.loads(asyncio.run(srv.ecockpit_snapshot(ctx=ctx)))
+    finally:
+        engine.join()
+    assert result["ok"] is True
+    assert result["cmd"] == "snapshot"
