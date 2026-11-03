@@ -36,6 +36,7 @@ Run as a long-lived daemon for http:
 """
 
 import argparse
+import asyncio
 import io
 import json
 import os
@@ -118,6 +119,13 @@ class Config(object):
     @property
     def result_file(self):
         return os.path.join(self.tmp_dir, "ecockpit_cmd_result.json")
+
+    @property
+    def current_file(self):
+        # In-flight marker written by relay._dispatch while a command
+        # executes, removed when it finishes - the only way for a client
+        # that timed out / reconnected to see what the engine is doing.
+        return os.path.join(self.tmp_dir, "ecockpit_current.json")
 
     @property
     def heartbeat_file(self):
@@ -249,6 +257,41 @@ def _plc_probe(ip):
             "ms": round((time.time() - start) * 1000.0)}
 
 
+def _queued_command():
+    """Command file present but not yet picked up by the relay (or the
+    relay is dead) - read straight from the protocol file."""
+    try:
+        with open(CFG.cmd_file, "r", encoding="utf-8") as fh:
+            request = json.load(fh)
+        if isinstance(request, dict) and request.get("cmd"):
+            return {"id": request.get("id"), "cmd": request.get("cmd")}
+    except Exception:
+        pass
+    return None
+
+
+def _in_flight_command():
+    """Command the relay is executing right now, from the marker file
+    relay._dispatch writes at start and removes at end. Survives a
+    client timeout/reconnect: this is how a reconnecting client sees
+    the command its predecessor gave up waiting for. A stale entry
+    (relay killed mid-command) is reported as-is - age_s tells the
+    client whether to trust it."""
+    try:
+        with open(CFG.current_file, "r", encoding="utf-8") as fh:
+            current = json.load(fh)
+        if isinstance(current, dict) and current.get("cmd"):
+            try:
+                current["age_s"] = round(
+                    time.time() - float(current.get("ts", 0)), 1)
+            except (TypeError, ValueError):
+                pass
+            return current
+    except Exception:
+        pass
+    return None
+
+
 def _require_heartbeat(max_wait=45.0, fresh=12.0):
     """Fail fast when the in-instance server is dead; tolerate a command
     in flight (the heartbeat stalls while a command runs)."""
@@ -294,10 +337,17 @@ def _send_command(cmd, args, timeout_s):
                 except (ValueError, OSError):
                     pass  # partial/unrelated - keep waiting
             time.sleep(0.25)
-        raise TimeoutError(
+        exc = TimeoutError(
             "no result for command '{}' (id {}) after {} s - the server may "
             "be busy with a long command".format(cmd, rid, timeout_s)
         )
+        # Structured context for the wrapper's timeout-as-data payload
+        # (the engine may still be running this command - the id is how a
+        # reconnecting client matches it in last_result / in_flight).
+        exc.cmd_id = rid
+        exc.cmd = cmd
+        exc.timeout_s = timeout_s
+        raise exc
 
 
 def _log_tail(path, lines=30):
@@ -308,11 +358,60 @@ def _log_tail(path, lines=30):
         return ["<log tail unavailable: {}>".format(exc)]
 
 
+_TIMEOUT_HINT = (
+    "the engine may STILL be executing this command - a client timeout is "
+    "not an abort. Poll ecockpit_server_status: 'in_flight' shows what the "
+    "engine is doing now and 'last_result' carries the eventual result "
+    "(match by id). Do not retry the command."
+)
+
+
+def _not_armed_result(cmd):
+    """Structured stand-in for a NotArmedError the tool wrappers must
+    never let escape: the SDK would hide the message behind
+    'Error executing tool <name>' and log a traceback. Same state that
+    ecockpit_server_status reports as armed:false, as refusal-style
+    data (isError stays false) so agents can read it."""
+    age = _heartbeat_age()
+    return {
+        "ok": False,
+        "error": "not_armed",
+        "cmd": cmd,
+        "heartbeat_age_s": round(age, 1) if age < 1e8 else None,
+        "hint": REARM_HINT,
+        "summary_line": "{} -> NOT ARMED".format(cmd),
+    }
+
+
+def _timeout_result(exc):
+    """Structured stand-in for a _send_command timeout. Carries the
+    command id so a client that gave up waiting can still find the
+    eventual result via ecockpit_server_status (see _TIMEOUT_HINT)."""
+    return {
+        "ok": False,
+        "error": "timeout",
+        "cmd": getattr(exc, "cmd", None),
+        "cmd_id": getattr(exc, "cmd_id", None),
+        "timeout_s": getattr(exc, "timeout_s", None),
+        "hint": _TIMEOUT_HINT,
+        "summary_line": "{} -> TIMEOUT".format(getattr(exc, "cmd", "command")),
+    }
+
+
 def _run(cmd, args=None, timeout_s=None):
-    """Send a command and return a JSON-ready dict (tool result)."""
+    """Send a command and return a JSON-ready dict (tool result).
+
+    Relay-availability failures come back as ok:false data instead of
+    exceptions: a raised NotArmedError/TimeoutError reaches the client
+    as an opaque SDK crash wrapper (see _not_armed_result)."""
     args = args or {}
     timeout_s = timeout_s or _TIMEOUTS.get(cmd, _DEFAULT_TIMEOUT)
-    result = _send_command(cmd, args, timeout_s)
+    try:
+        result = _send_command(cmd, args, timeout_s)
+    except NotArmedError:
+        return _not_armed_result(cmd)
+    except TimeoutError as exc:
+        return _timeout_result(exc)
     if not result.get("summary_line"):
         result["summary_line"] = "{c} -> {o}".format(
             c=cmd, o="OK" if result.get("ok") else "FAILED"
@@ -382,10 +481,14 @@ async def _send_command_async(
                     pass  # partial/unrelated - keep waiting
             remaining = deadline - time.time()
             if remaining <= 0:
-                raise TimeoutError(
+                exc = TimeoutError(
                     "no result for command '{}' (id {}) after {} s - the server "
                     "may be busy with a long command".format(cmd, rid, timeout_s)
                 )
+                exc.cmd_id = rid
+                exc.cmd = cmd
+                exc.timeout_s = timeout_s
+                raise exc
             now = time.time()
             if ctx is not None and now - last_report >= progress_every_s:
                 await _report_progress(ctx, timeout_s - remaining, timeout_s, cmd)
@@ -398,10 +501,17 @@ async def _send_command_async(
 async def _run_async(cmd, args=None, timeout_s=None, ctx=None, **poll_kwargs):
     """Async twin of _run for the long-running tools (default timeout
     >= 300 s): emits MCP progress notifications while waiting (see
-    _send_command_async) instead of leaving the client blind."""
+    _send_command_async) instead of leaving the client blind. Same
+    error contract as _run: not-armed/timeout come back as ok:false
+    data, never as exceptions."""
     args = args or {}
     timeout_s = timeout_s or _TIMEOUTS.get(cmd, _DEFAULT_TIMEOUT)
-    result = await _send_command_async(cmd, args, timeout_s, ctx, **poll_kwargs)
+    try:
+        result = await _send_command_async(cmd, args, timeout_s, ctx, **poll_kwargs)
+    except NotArmedError:
+        return _not_armed_result(cmd)
+    except TimeoutError as exc:
+        return _timeout_result(exc)
     if not result.get("summary_line"):
         result["summary_line"] = "{c} -> {o}".format(
             c=cmd, o="OK" if result.get("ok") else "FAILED"
@@ -442,8 +552,10 @@ mcp = MCPServer(
 @mcp.tool(
     structured_output=False,
     description="Check whether the in-instance e!COCKPIT command relay is "
-    "armed (heartbeat freshness), show the last command result, and "
-    "report PLC connection status: 'plc.last_attempt' (executor's last "
+    "armed (heartbeat freshness), show the last command result and what "
+    "the engine is doing right now ('queued' = command file not yet "
+    "picked up, 'in_flight' = executing since ts / age_s), and report "
+    "PLC connection status: 'plc.last_attempt' (executor's last "
     "login-ladder outcome) and 'plc.probe' (live host-side TCP probe of "
     "the CODESYS runtime port - cannot wedge the engine)."
 )
@@ -454,6 +566,8 @@ def ecockpit_server_status() -> str:
         "armed": armed,
         "heartbeat_age_s": round(age, 1) if age < 1e8 else None,
         "rearm_hint": None if armed else REARM_HINT,
+        "queued": _queued_command(),
+        "in_flight": _in_flight_command(),
     }
     try:
         with open(CFG.result_file, "r", encoding="utf-8") as fh:
@@ -2232,10 +2346,11 @@ async def ecockpit_plc_fs_ops(
 # MCP resources + prompts (protocol surface beyond tools)
 # --------------------------------------------------------------------------
 async def _resource_payload(cmd, args):
-    """Run one read-only command for a resource read. Never raises: an
-    unarmed relay or a dead engine reads back an ok:false payload with
-    the rearm hint instead of a protocol error, so agents can discover
-    state without exception handling."""
+    """Run one read-only command for a resource read. Never raises: the
+    wrappers already turn an unarmed relay or a dead engine into
+    ok:false payloads; these excepts remain as belt-and-braces (and for
+    OSError from the work-dir files), so agents can discover state
+    without exception handling."""
     try:
         result = await _run_async(cmd, args)
     except NotArmedError:
@@ -2343,6 +2458,43 @@ def diagnose_failed_build(build_result: str = "") -> list:
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
+def _quiet_peer_reset(loop, context):
+    """Loop exception handler for the http daemon (Windows Proactor):
+    when a client aborts a connection (timeout, hard close), asyncio's
+    pipe transport raises ConnectionResetError inside
+    _call_connection_lost and the default handler logs a full traceback
+    for each one. That is benign teardown noise (observed 2026-11-03:
+    a 300 s download abort plus an inspector poke sprayed the console)
+    that masks real failures - one short line instead, everything else
+    keeps the default handling."""
+    exc = context.get("exception")
+    if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+        print("[ecockpit-mcp] peer dropped a connection (reset) - benign",
+              flush=True)
+        return
+    loop.default_exception_handler(context)
+
+
+class _QuietPeerResetMiddleware(object):
+    """Installs _quiet_peer_reset on the first ASGI scope (the lifespan
+    handshake, before any request) and then passes everything through.
+    A scope-independent wrapper is the only reliable hook: uvicorn
+    creates its own Proactor loop and never exposes it before serve."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.installed = False
+
+    async def __call__(self, scope, receive, send):
+        if not self.installed:
+            self.installed = True
+            try:
+                asyncio.get_running_loop().set_exception_handler(_quiet_peer_reset)
+            except RuntimeError:
+                pass  # no running loop (embedded callers) - keep defaults
+        await self.inner(scope, receive, send)
+
+
 def _run_http():
     host = CFG.host
     token = CFG.token
@@ -2398,7 +2550,10 @@ def _run_http():
         flush=True,
     )
     uvicorn.run(
-        BearerTokenMiddleware(app), host=host, port=CFG.port, log_level="warning"
+        _QuietPeerResetMiddleware(BearerTokenMiddleware(app)),
+        host=host,
+        port=CFG.port,
+        log_level="warning",
     )
 
 

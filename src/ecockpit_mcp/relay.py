@@ -84,6 +84,7 @@ WORK_DIR = os.environ.get("ECP_WORK_DIR", "") \
 
 CMD_FILE        = os.path.join(WORK_DIR, "ecockpit_cmd.json")
 RESULT_FILE     = os.path.join(WORK_DIR, "ecockpit_cmd_result.json")
+CURRENT_FILE    = os.path.join(WORK_DIR, "ecockpit_current.json")
 LEGACY_TRIGGER  = os.path.join(WORK_DIR, "build_trigger")
 OLD_WATCH_STOP  = os.path.join(WORK_DIR, "build_watch.stop")
 STOP_FILE       = os.path.join(WORK_DIR, "ecockpit_server.stop")
@@ -215,6 +216,14 @@ def _dispatch(request, counter):
     request["id"] = rid
     cmd = request.get("cmd", "build")
     _say("command #{n}: {c} (id {i})".format(n=counter, c=cmd, i=rid))
+    # In-flight marker for ecockpit_server_status: a client whose
+    # timeout expired (or that reconnected) must still see what the
+    # engine is doing - last_result alone only appears at the end.
+    try:
+        _atomic_write_json(CURRENT_FILE, {"id": rid, "cmd": cmd,
+                                          "ts": time.time()})
+    except Exception as exc:
+        _say("writing in-flight marker failed: {e}".format(e=exc))
     result = None
     log_file = None
     try:
@@ -254,6 +263,7 @@ def _dispatch(request, counter):
             _atomic_write_json(RESULT_FILE, result)
         except Exception as exc:
             _say("writing result file failed: {e}".format(e=exc))
+        _rm(CURRENT_FILE)  # command no longer in flight
     _say("command #{n} done: {c} -> {r}".format(
         n=counter, c=cmd, r=("OK" if result.get("ok") else "FAILED")))
 
@@ -299,6 +309,10 @@ def main_relay():
     _say("stop file   : {s}".format(s=STOP_FILE))
     _say("legacy trigger accepted: {t}".format(t=LEGACY_TRIGGER))
     _say("executor    : {e} (re-executed per command)".format(e=EXEC_SCRIPT))
+
+    # A stale in-flight marker means a previous relay died mid-command;
+    # a fresh relay starts with nothing running.
+    _rm(CURRENT_FILE)
 
     counter = 0
     start = time.time()

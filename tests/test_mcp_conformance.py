@@ -141,6 +141,30 @@ async def test_prompts_list_and_get():
         assert "ecockpit_rebuild" in text  # checklist step 3
 
 
+async def test_unarmed_relay_reads_as_data_not_crash(
+    monkeypatch, tmp_path, fast_not_armed
+):
+    # HANDOFF 2026-11-03 repro: with the relay disarmed, a relay tool
+    # used to raise NotArmedError - the SDK wraps that into
+    # UnexpectedToolError, the client saw only "Error executing tool
+    # <name>" and the server console got a traceback. Every relay tool
+    # must read the state as ok:false data (isError stays false) with
+    # the rearm hint, exactly like the resources already did.
+    monkeypatch.setattr(srv.CFG, "work_dir", str(tmp_path))
+    async with conformance_session() as session:
+        await session.initialize()
+        for name in ("ecockpit_status", "ecockpit_build"):
+            result = await session.call_tool(name, {})
+            assert result.is_error is False, name
+            payload = json.loads(result.content[0].text)
+            assert payload["ok"] is False, name
+            assert payload["error"] == "not_armed", name
+            assert "relay.py" in payload["hint"], name
+            assert payload["cmd"] == (
+                "status" if name == "ecockpit_status" else "build"
+            ), name
+
+
 async def test_call_tool_offline_status_and_refusal_shapes(monkeypatch, tmp_path):
     # isolate from the live relay: this test pins the OFFLINE shapes, so
     # point CFG at an empty work dir (no heartbeat -> armed false) even

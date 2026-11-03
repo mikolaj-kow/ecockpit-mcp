@@ -106,18 +106,32 @@ CLI flags `--work-dir/--host/--port/--token` override the `.env`.
   "mcpServers": {
     "ecockpit": {
       "url": "http://127.0.0.1:9777/mcp",
-      "headers": { "Authorization": "Bearer <token>" }
+      "headers": { "Authorization": "Bearer <token>" },
+      "timeoutMs": 1200000
     }
   }
 }
 ```
 
+`timeoutMs` raises the client's per-call cap (default 30000 ms), which
+otherwise kills long commands (build with a full XML re-import runs
+60-120 s; rebuild up to 20 min) while the daemon keeps executing them.
+Keep it at or above the largest `timeout_s` you will pass — daemon-side
+per-command defaults top out at `rebuild` 1200 s. If a call does time
+out client-side anyway, do NOT retry the command: it is still running
+on the daemon. The timed-out tool result carries the command `id`, and
+`ecockpit_server_status` shows what the engine is doing right now
+(`in_flight` — id, cmd, age_s; or `queued` for a submitted-but-not-yet-
+picked-up command) and the eventual result in `last_result` — poll
+those and match by id instead of retrying.
+
 **4. Arm the relay** — with your project open in e!COCKPIT, run once per
 session: FILE -> Scripting -> Execute script file ->
 `src\ecockpit_mcp\relay.py`. It then polls for commands until stopped
 (e!COCKPIT's "Stop script", or create `tmp\ecockpit_server.stop`). Until it
-is armed, tools fail with a structured `server_not_armed` error carrying
-this same instruction.
+is armed, every relay tool returns an `ok:false` payload with
+`"error": "not_armed"` and the re-arm hint as its `hint` field — data you
+can read, not a protocol error.
 
 **5. Verify** — call the `ecockpit_server_status` tool from your editor, or
 run the dev smoke client from the checkout (it talks real MCP: initialize,

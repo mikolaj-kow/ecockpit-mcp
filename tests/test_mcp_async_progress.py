@@ -37,7 +37,11 @@ class FakeEngine(threading.Thread):
         self.delay_s = delay_s
 
     def run(self):
-        deadline = time.time() + 5
+        # Discovery deadline must outlive every test's waiter timeout
+        # (max 10 s): under host load the 0.02 s poll loop can starve,
+        # and an engine that gives up early turns a green test into a
+        # spurious TimeoutError (observed 2026-11-03).
+        deadline = time.time() + 12
         while time.time() < deadline:
             if os.path.isfile(self.cfg.cmd_file):
                 break
