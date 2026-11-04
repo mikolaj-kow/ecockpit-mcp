@@ -1777,3 +1777,322 @@ def test_g27_refusal_never_touches_the_sidecar(monkeypatch, tmp_path):
         ex._online_connect(types.SimpleNamespace(), {}, prefer_keep=True)
 
     assert not sidecar.exists()
+
+
+# ---------------------------------------------------------------------------
+# Active-project sidecar (project_control op=use / use_clear): the sequential
+# project/worktree switch. The sidecar overrides the .env's
+# ECP_PROJECT_ROOT/ECP_XML_DIR at executor module init (relay re-execs the
+# executor per command, so a switch lands on the next command). Tests isolate
+# WORK_DIR via tmp_path and touch module globals only through monkeypatch -
+# never the live relay files (19f1507 rule).
+# ---------------------------------------------------------------------------
+
+
+class FakeProjectsRoot(object):
+    """IScriptProjects stand-in: records open() calls, hands back a stub
+    primary project (only .path is consumed by op=use)."""
+
+    def __init__(self):
+        self.opened = []
+
+    def open(self, path, update_flags=True):
+        self.opened.append(str(path))
+        return types.SimpleNamespace(path=str(path))
+
+
+def make_project_root(base, name="wt", ecps=("proj.ecp",), xml=True):
+    """Minimal automation-project layout: plcopensrc/<dev>/Application.*.xml
+    plus .ecp file(s) at the top level."""
+    root = base / name
+    xml_dir = root / "plcopensrc" / "PFC200"
+    xml_dir.mkdir(parents=True)
+    if xml:
+        (xml_dir / "Application.POU.xml").write_text("<project/>", encoding="utf-8")
+    for ecp in ecps:
+        (root / ecp).write_text("stub", encoding="utf-8")
+    return root
+
+
+@pytest.fixture()
+def switch_workdir(tmp_path, monkeypatch):
+    """Isolated WORK_DIR: sidecar reads/writes land in tmp_path, and no
+    stale sidecar/early-warn state leaks between tests."""
+    monkeypatch.setattr(
+        ex, "ACTIVE_PROJECT_FILE", str(tmp_path / "ecockpit_active_project.json")
+    )
+    monkeypatch.setattr(ex, "ACTIVE_PROJECT", None)
+    monkeypatch.setattr(ex, "_EARLY_WARNS", [])
+    return tmp_path / "ecockpit_active_project.json"
+
+
+def test_active_project_missing_corrupt_valid(switch_workdir):
+    # absent -> None, no warn
+    assert ex._active_project() is None
+    assert ex._EARLY_WARNS == []
+
+    # corrupt -> None + deferred WARN (fallback to .env must be loud)
+    switch_workdir.write_text("{not json", encoding="utf-8")
+    assert ex._active_project() is None
+    assert len(ex._EARLY_WARNS) == 1
+    assert "unreadable" in ex._EARLY_WARNS[0]
+
+    # the first log() call drains the deferred warns into the normal channel
+    del ex._lines[:]
+    ex.log("INFO", "probe")
+    assert ex._EARLY_WARNS == []
+    assert any("unreadable" in ln for ln in ex._lines)
+
+    # valid -> dict
+    switch_workdir.write_text(
+        json.dumps({"project_root": "D:/wt", "xml_dir": "D:/wt/plcopensrc"}),
+        encoding="utf-8",
+    )
+    data = ex._active_project()
+    assert data["project_root"] == "D:/wt"
+
+
+def test_apply_active_project_overrides_root(monkeypatch):
+    monkeypatch.setattr(ex, "PROJECT_ROOT", r"D:\env-root")
+    ex._apply_active_project({"project_root": r"D:\wt-root"})
+    assert ex.PROJECT_ROOT == r"D:\wt-root"
+
+    # no sidecar / sidecar without a root -> .env root untouched
+    monkeypatch.setattr(ex, "PROJECT_ROOT", r"D:\env-root")
+    ex._apply_active_project(None)
+    assert ex.PROJECT_ROOT == r"D:\env-root"
+    ex._apply_active_project({"xml_dir": "only"})
+    assert ex.PROJECT_ROOT == r"D:\env-root"
+
+
+def test_resolve_config_precedence(switch_workdir, monkeypatch, tmp_path):
+    root_a = make_project_root(tmp_path, name="a")
+    sidecar_xml = str(root_a / "plcopensrc" / "PFC200")
+    sidecar_ecp = str(root_a / "proj.ecp")
+    monkeypatch.setattr(
+        ex,
+        "ACTIVE_PROJECT",
+        {"project_root": str(root_a), "xml_dir": sidecar_xml, "ecp": sidecar_ecp},
+    )
+    monkeypatch.setattr(ex, "PROJECT_ROOT", str(root_a))
+    monkeypatch.setattr(ex, "DEFAULT_XML", str(root_a / "plcopensrc"))
+    monkeypatch.setattr(
+        ex,
+        "_cfg",
+        lambda name, default="": {"ECP_PROJECT": "B.ecp", "ECP_XML_DIR": "B-xml"}.get(
+            name, default
+        ),
+    )
+    monkeypatch.setattr(ex, "parse_args", lambda: {})
+
+    # sidecar > .env
+    cfg = ex.resolve_config()
+    assert cfg["project"] == sidecar_ecp
+    assert cfg["xml_dir"] == sidecar_xml
+
+    # scriptargs > sidecar
+    monkeypatch.setattr(
+        ex, "parse_args", lambda: {"project": "CLI.ecp", "xml-dir": "CLI-xml"}
+    )
+    cfg = ex.resolve_config()
+    assert cfg["project"] == "CLI.ecp"
+    assert cfg["xml_dir"] == "CLI-xml"
+
+    # sidecar absent -> .env (the corrupt-sidecar fallback path)
+    monkeypatch.setattr(ex, "ACTIVE_PROJECT", None)
+    monkeypatch.setattr(ex, "parse_args", lambda: {})
+    cfg = ex.resolve_config()
+    assert cfg["project"] == "B.ecp"
+    assert cfg["xml_dir"] == "B-xml"
+
+
+def test_use_refusals(switch_workdir, tmp_path):
+    # confirm gate first
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_project_control(None, {"op": "use", "root": str(tmp_path)})
+
+    with pytest.raises(RuntimeError, match="needs args.root"):
+        ex.cmd_project_control(None, {"op": "use", "root": "", "confirm": True})
+
+    # missing root: refused with a hint, NOTHING written
+    with pytest.raises(RuntimeError, match="does not exist"):
+        ex.cmd_project_control(
+            None, {"op": "use", "root": str(tmp_path / "gone"), "confirm": True}
+        )
+    assert not switch_workdir.exists()
+
+    # root without Application.*.xml under plcopensrc/
+    bare = make_project_root(tmp_path, name="bare", xml=False)
+    with pytest.raises(RuntimeError, match=r"Application\.\*\.xml"):
+        ex.cmd_project_control(None, {"op": "use", "root": str(bare), "confirm": True})
+
+    # several .ecp -> refuse with the candidate list, args.ecp disambiguates
+    multi = make_project_root(tmp_path, name="multi", ecps=("a.ecp", "b.ecp"))
+    with pytest.raises(RuntimeError, match="multiple .ecp candidates"):
+        ex.cmd_project_control(None, {"op": "use", "root": str(multi), "confirm": True})
+    assert not switch_workdir.exists()
+
+
+def test_use_happy_path_writes_sidecar(switch_workdir, monkeypatch, tmp_path):
+    root = make_project_root(tmp_path, name="wt")
+    fake = FakeProjectsRoot()
+    monkeypatch.setattr(ex, "e_projects", fake)
+
+    out = ex.cmd_project_control(
+        None, {"op": "use", "root": str(root), "confirm": True}
+    )
+    assert out["project_root"] == os.path.abspath(str(root))
+    assert out["xml_dir"] == os.path.abspath(str(root / "plcopensrc" / "PFC200"))
+    assert out["ecp"] == os.path.abspath(str(root / "proj.ecp"))
+    assert out["opened"] == out["ecp"]
+    assert fake.opened == [out["ecp"]]
+
+    entry = json.loads(switch_workdir.read_text(encoding="utf-8"))
+    assert entry["project_root"] == out["project_root"]
+    assert entry["xml_dir"] == out["xml_dir"]
+    assert entry["ecp"] == out["ecp"]
+    assert entry["source"] == "op=use"
+    assert entry["set_at"]
+
+    # open=false skips the GUI open but still persists the switch
+    fake.opened = []
+    out = ex.cmd_project_control(
+        None, {"op": "use", "root": str(root), "open": False, "confirm": True}
+    )
+    assert out["opened"] is None
+    assert fake.opened == []
+    assert json.loads(switch_workdir.read_text(encoding="utf-8"))["ecp"] == out["ecp"]
+
+    # args.ecp resolves the multi-.ecp ambiguity (relative to root)
+    multi = make_project_root(tmp_path, name="multi", ecps=("a.ecp", "b.ecp"))
+    out = ex.cmd_project_control(
+        None,
+        {
+            "op": "use",
+            "root": str(multi),
+            "ecp": "b.ecp",
+            "open": False,
+            "confirm": True,
+        },
+    )
+    assert out["ecp"] == os.path.abspath(str(multi / "b.ecp"))
+
+
+def test_use_clear_removes_sidecar(switch_workdir):
+    with pytest.raises(RuntimeError, match="REFUSED"):
+        ex.cmd_project_control(None, {"op": "use_clear"})
+
+    switch_workdir.write_text(json.dumps({"project_root": "x"}), encoding="utf-8")
+    out = ex.cmd_project_control(None, {"op": "use_clear", "confirm": True})
+    assert out["cleared"] is True
+    assert not switch_workdir.exists()
+
+    # clearing again reports absence instead of failing
+    out = ex.cmd_project_control(None, {"op": "use_clear", "confirm": True})
+    assert out["cleared"] is False
+
+
+def test_build_log_header_carries_triplet(monkeypatch, tmp_path):
+    root = tmp_path / "wt"
+    xml_dir = root / "plcopensrc" / "PFC200"
+    monkeypatch.setattr(ex, "LOG_FILE", str(tmp_path / "build.log"))
+    monkeypatch.setattr(ex, "BOOT_APP_FILE", str(tmp_path / "boot.app"))
+    monkeypatch.setattr(ex, "PROJECT_ROOT", str(root))
+    monkeypatch.setattr(ex, "XML_DIR", str(xml_dir))
+    monkeypatch.setattr(ex, "PROJECT_FILE", str(root / "proj.ecp"))
+    monkeypatch.setattr(ex, "ACTIVE_PROJECT", {"project_root": str(root)})
+
+    ex.flush_log(
+        "t1",
+        "build",
+        {"ok": True, "errors": 0, "warnings": 0, "imported": 0, "skipped": 0},
+    )
+    text = (tmp_path / "build.log").read_text(encoding="utf-8")
+    assert "root      : {} (source: sidecar)".format(root) in text
+    assert "project   : {}".format(root / "proj.ecp") in text
+    assert "xml_dir   : {}".format(xml_dir) in text
+    assert "RESULT=OK" in text
+
+    # without the sidecar the source reads .env
+    monkeypatch.setattr(ex, "ACTIVE_PROJECT", None)
+    ex.flush_log(
+        "t2",
+        "build",
+        {"ok": True, "errors": 0, "warnings": 0, "imported": 0, "skipped": 0},
+    )
+    text = (tmp_path / "build.log").read_text(encoding="utf-8")
+    assert "(source: .env)" in text
+
+
+def test_status_reports_project_sources(monkeypatch):
+    root = r"D:\wt"
+    monkeypatch.setattr(ex, "PROJECT_ROOT", root)
+    monkeypatch.setattr(ex, "XML_DIR", root + r"\plcopensrc\PFC200")
+    monkeypatch.setattr(ex, "PROJECT_FILE", root + r"\proj.ecp")
+    monkeypatch.setattr(
+        ex, "ACTIVE_PROJECT", {"project_root": root, "ecp": root + r"\proj.ecp"}
+    )
+    project = types.SimpleNamespace(path=root + r"\proj.ecp")
+
+    info = ex.cmd_status(project)
+    ps = info["project_sources"]
+    assert ps["project_root"] == root
+    assert ps["source"] == "sidecar"
+    assert ps["ecp_discovered"] == root + r"\proj.ecp"
+    assert ps["open_primary"] == root + r"\proj.ecp"
+
+
+def test_warn_primary_mismatch(monkeypatch):
+    monkeypatch.setattr(
+        ex, "ACTIVE_PROJECT", {"project_root": r"D:\wt", "ecp": r"D:\wt\proj.ecp"}
+    )
+
+    del ex._lines[:]
+    other = types.SimpleNamespace(path=r"D:\other\other.ecp")
+    ex._warn_primary_mismatch(other)
+    assert any("primary project mismatch" in ln for ln in ex._lines)
+
+    # matching basenames (path drift) stay quiet
+    del ex._lines[:]
+    same = types.SimpleNamespace(path=r"D:\elsewhere\proj.ecp")
+    ex._warn_primary_mismatch(same)
+    assert ex._lines == []
+
+    # no sidecar -> nothing to compare
+    monkeypatch.setattr(ex, "ACTIVE_PROJECT", None)
+    ex._warn_primary_mismatch(other)
+    assert ex._lines == []
+
+
+def test_use_clear_reflected_in_resolve_config(switch_workdir, monkeypatch, tmp_path):
+    """End-to-end-ish: use writes the sidecar, resolve_config follows it,
+    use_clear drops back to the .env values."""
+    root = make_project_root(tmp_path, name="wt", ecps=("proj.ecp",))
+    monkeypatch.setattr(ex, "e_projects", FakeProjectsRoot())
+    monkeypatch.setattr(ex, "parse_args", lambda: {})
+    monkeypatch.setattr(
+        ex,
+        "_cfg",
+        lambda name, default="": {
+            "ECP_PROJECT": "env.ecp",
+            "ECP_XML_DIR": "env-xml",
+        }.get(name, default),
+    )
+    monkeypatch.setattr(ex, "PROJECT_ROOT", str(root))
+    monkeypatch.setattr(ex, "DEFAULT_XML", str(root / "plcopensrc"))
+    monkeypatch.setattr(ex, "ACTIVE_PROJECT", None)
+
+    ex.cmd_project_control(None, {"op": "use", "root": str(root), "confirm": True})
+    # simulate the next executor exec: module init re-reads the sidecar
+    monkeypatch.setattr(ex, "ACTIVE_PROJECT", ex._active_project())
+    ex._apply_active_project(ex.ACTIVE_PROJECT)
+    cfg = ex.resolve_config()
+    assert cfg["xml_dir"] == os.path.abspath(str(root / "plcopensrc" / "PFC200"))
+    assert cfg["project"] == os.path.abspath(str(root / "proj.ecp"))
+
+    ex.cmd_project_control(None, {"op": "use_clear", "confirm": True})
+    monkeypatch.setattr(ex, "ACTIVE_PROJECT", ex._active_project())
+    ex._apply_active_project(ex.ACTIVE_PROJECT)
+    cfg = ex.resolve_config()
+    assert cfg["project"] == "env.ecp"
+    assert cfg["xml_dir"] == "env-xml"

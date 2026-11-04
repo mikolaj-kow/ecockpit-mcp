@@ -708,7 +708,10 @@ async def ecockpit_rebuild(
 @mcp.tool(
     structured_output=False,
     description="Project/application/device info of the open e!COCKPIT "
-    "project (names, ip, simulated flag). No PLC login.",
+    "project (names, ip, simulated flag) + project_sources: "
+    "the active config triplet (project_root, xml_dir, .ecp) "
+    "and where it came from (op=use sidecar or .env) - a "
+    "drift vs the open primary is visible here. No PLC login.",
 )
 def ecockpit_status() -> str:
     return json.dumps(_run("status", {}), indent=2)
@@ -2225,12 +2228,23 @@ async def ecockpit_app_control(
     "confirm: op=create (NEW project, becomes primary), "
     "op=open (opens a project as primary), op=open_archive "
     "(restore a .projectarchive), op=close (DISCARDS "
-    "unsaved changes), op=info_set (project metadata). "
-    "These swap or mutate the GUI's project session.",
+    "unsaved changes), op=info_set (project metadata), "
+    "op=use (switch the executor's active project/worktree: "
+    "root=path, validates root + plcopensrc XML + .ecp "
+    "(args.ecp picks when several), open=false skips "
+    "opening the .ecp as primary, persists the override to "
+    "the active-project sidecar - later builds import from "
+    "that root until op=use_clear; sequential only, one "
+    "e!COCKPIT instance = one active project), op=use_clear "
+    "(revert to the .env config). "
+    "These swap or mutate the GUI's project session or the "
+    "executor's active-project config.",
 )
 async def ecockpit_project_control(
     op: str,
     path: str = "",
+    root: str = "",
+    open: bool = True,
     archive: str = "",
     project_path: str = "",
     overwrite: bool = False,
@@ -2251,16 +2265,29 @@ async def ecockpit_project_control(
         "open",
         "open_archive",
         "close",
+        "use",
+        "use_clear",
     ):
-        raise ToolError("op must be info|info_set|save|create|open|open_archive|close")
-    gated = op in ("info_set", "create", "open", "open_archive", "close")
+        raise ToolError(
+            "op must be info|info_set|save|create|open|open_archive|close|use|use_clear"
+        )
+    gated = op in (
+        "info_set",
+        "create",
+        "open",
+        "open_archive",
+        "close",
+        "use",
+        "use_clear",
+    )
     if gated and not confirm:
         return json.dumps(
             {
                 "ok": False,
                 "refused": True,
                 "error": "project {o} refused - it mutates the GUI project "
-                "session or project metadata; call again with "
+                "session, project metadata or the executor's "
+                "active-project config; call again with "
                 "confirm=true only on an explicit owner "
                 "request".format(o=op),
             },
@@ -2273,6 +2300,11 @@ async def ecockpit_project_control(
         if not path:
             raise ToolError("path required for op=" + op)
         args["path"] = path
+    if op == "use":
+        if not root:
+            raise ToolError("root (project/worktree path) required for op=use")
+        args["root"] = root
+        args["open"] = bool(open)
     if op == "open_archive":
         if not archive or not project_path:
             raise ToolError("archive and project_path required for op=open_archive")

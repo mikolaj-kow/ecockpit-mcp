@@ -66,6 +66,13 @@ ECP_WORK_DIR       file-protocol + logs work dir (default: tmp/ here)
 ECP_PROJECT / ECP_LOG / ECP_BOOTAPP / ECP_SKIP_IMPORT / ECP_ENV_FILE
                    per-run overrides
 
+Active-project switch (project_control op=use / use_clear): op=use
+root=<path> validates {root, plcopensrc XML, .ecp}, optionally opens the
+.ecp as primary and persists <ECP_WORK_DIR>/ecockpit_active_project.json,
+which OVERRIDES ECP_PROJECT_ROOT/ECP_XML_DIR until op=use_clear.
+Precedence: scriptargs > sidecar > .env > discovery. ecockpit_status
+reports the active triplet + its source in the project_sources block.
+
 PLC credentials (commands read/download only): ECP_PLC_USER / ECP_PLC_PASS
 env vars win; otherwise the .env keys PLC_USER / PLC_PASS. There is NO
 built-in default - without credentials the command fails with an
@@ -310,15 +317,51 @@ def _cfg(name, default=""):
     return os.environ.get(name, "") or _ENV.get(name, "") or default
 
 
-# Automation project repo: plcopensrc/ XML sources, .ecp discovery, default
-# snapshots dir. NO default is built in on purpose - this executor is
-# project-agnostic.
-PROJECT_ROOT   = _cfg("ECP_PROJECT_ROOT", "")
+# Warnings raised before log() exists (the module-init sidecar read below
+# runs at import time); drained by the first log() call into the normal
+# log channels (message window + command log).
+_EARLY_WARNS = []
+
+
+def _active_project():
+    """Read the op=use active-project sidecar, or None when absent.
+
+    Sidecar schema: {"project_root", "xml_dir", "ecp", "set_at",
+    "source": "op=use"}. Corrupt/incomplete -> None plus a WARN (deferred
+    via _EARLY_WARNS), never a raise - a broken switch must fall back to
+    the .env config, loudly. io.open+json like the PLC-state sidecar;
+    IronPython 2.7 compatible.
+    """
+    if not os.path.isfile(ACTIVE_PROJECT_FILE):
+        return None
+    try:
+        with io.open(ACTIVE_PROJECT_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict) or not data.get("project_root"):
+            raise ValueError("missing project_root")
+        return data
+    except Exception as exc:
+        _EARLY_WARNS.append(
+            "active-project sidecar unreadable - falling back to the .env "
+            "config ({p}): {e}".format(p=ACTIVE_PROJECT_FILE, e=exc))
+        return None
+
+
+def _apply_active_project(active):
+    """Module-init override: the sidecar's project_root replaces the .env
+    root. Called right after PROJECT_ROOT = _cfg(...) and BEFORE the
+    derived constants (DEFAULT_XML, snapshots/projects fallbacks) are
+    computed, so they follow the override automatically."""
+    global PROJECT_ROOT
+    if active and active.get("project_root"):
+        PROJECT_ROOT = str(active["project_root"])
+
 
 # File-protocol + logs work dir (shared with the other ecockpit-mcp parts).
+# Must be resolved BEFORE the project root: the active-project sidecar
+# below lives here.
 WORK_DIR       = _cfg("ECP_WORK_DIR", "") or os.path.join(_this_dir(), "tmp")
 LOG_DIR        = os.path.join(WORK_DIR, "logs")
-DEFAULT_XML    = os.path.join(PROJECT_ROOT, "plcopensrc") if PROJECT_ROOT else ""
 DEFAULT_LOG    = os.path.join(LOG_DIR, "ecockpit_build.log")
 DEFAULT_BOOT   = os.path.join(WORK_DIR, "bootapp.app")
 PROBE_OUT      = os.path.join(LOG_DIR, "ecockpit_api_probe.txt")
@@ -329,6 +372,29 @@ MSGS_DUMP_PATH = os.path.join(LOG_DIR, "ecockpit_messages_dump.txt")
 # never touch the PLC and must not record here). The MCP server's
 # ecockpit_server_status reads it for the "plc" section.
 PLC_STATE_FILE = os.path.join(WORK_DIR, "ecockpit_plc_state.json")
+
+# Active-project sidecar: written by project_control op=use (cleared by
+# op=use_clear). When present it OVERRIDES the .env's ECP_PROJECT_ROOT /
+# ECP_XML_DIR - the sequential project/worktree switch. The relay re-execs
+# this file per command, so a switch takes effect on the next command
+# without a daemon restart or a re-arm. One sidecar by design: ONE
+# e!COCKPIT instance, ONE primary project - parallel worktrees are an
+# engine limit (single-writer protocol files, one GUI project slot).
+ACTIVE_PROJECT_FILE = os.path.join(WORK_DIR, "ecockpit_active_project.json")
+
+# Automation project repo: plcopensrc/ XML sources, .ecp discovery, default
+# snapshots dir. NO default is built in on purpose - this executor is
+# project-agnostic.
+PROJECT_ROOT   = _cfg("ECP_PROJECT_ROOT", "")
+
+# op=use override (sequential project/worktree switch): the sidecar's root
+# replaces the .env root BEFORE the derived defaults below are computed, so
+# they follow the override automatically. Explicit ECP_SNAPSHOTS_DIR /
+# ECP_PROJECTS_DIR keys stay as configured - only root + xml_dir switch.
+ACTIVE_PROJECT = _active_project()
+_apply_active_project(ACTIVE_PROJECT)
+
+DEFAULT_XML    = os.path.join(PROJECT_ROOT, "plcopensrc") if PROJECT_ROOT else ""
 
 # Appended to every escalated login failure. Worded conditionally on
 # purpose: "all forms failed" also fires when the PLC is simply powered
@@ -431,13 +497,24 @@ def parse_args():
     return out
 
 
-def discover_project_file():
-    """Find a single .ecp under PROJECT_ROOT (one level deep). None if ambiguous."""
-    if not os.path.isdir(PROJECT_ROOT):
+def _ecp_candidates(root):
+    """All .ecp files under root (top level + one level deep), minus the
+    series_750 demo projects."""
+    hits = list(glob.glob(os.path.join(root, "*.ecp"))) + \
+           list(glob.glob(os.path.join(root, "*", "*.ecp")))
+    return [h for h in hits
+            if not os.path.basename(h).lower().startswith("series_750")]
+
+
+def discover_project_file(root=None):
+    """Find a single .ecp under the project root (one level deep). Empty
+    when ambiguous or none. root defaults to PROJECT_ROOT (the op=use
+    switch passes an explicit root)."""
+    if root is None:
+        root = PROJECT_ROOT
+    if not os.path.isdir(root):
         return ""
-    hits = list(glob.glob(os.path.join(PROJECT_ROOT, "*.ecp"))) + \
-           list(glob.glob(os.path.join(PROJECT_ROOT, "*", "*.ecp")))
-    hits = [h for h in hits if not os.path.basename(h).lower().startswith("series_750")]
+    hits = _ecp_candidates(root)
     if len(hits) == 1:
         return hits[0]
     if len(hits) > 1:
@@ -446,13 +523,15 @@ def discover_project_file():
     return ""
 
 
-def discover_xml_dir():
+def discover_xml_dir(root=None):
     """Locate the dir holding Application.*.xml under the project's
     plcopensrc/ - directly or one level deep (e.g. plcopensrc/<device>/).
-    Empty string when not found."""
-    if not PROJECT_ROOT:
+    Empty string when not found. root defaults to PROJECT_ROOT."""
+    if root is None:
+        root = PROJECT_ROOT
+    if not root:
         return ""
-    base = os.path.join(PROJECT_ROOT, "plcopensrc")
+    base = os.path.join(root, "plcopensrc")
     if not os.path.isdir(base):
         return ""
     if glob.glob(os.path.join(base, "Application.*.xml")):
@@ -465,11 +544,15 @@ def discover_xml_dir():
 
 def resolve_config():
     args = parse_args()
+    active = ACTIVE_PROJECT or {}
     cfg = {
-        "project":  args.get("project") or _cfg("ECP_PROJECT", "")
-                    or discover_project_file(),
-        "xml_dir":  args.get("xml-dir") or _cfg("ECP_XML_DIR", "")
-                    or discover_xml_dir() or DEFAULT_XML,
+        # Precedence: scriptargs > active-project sidecar (op=use) >
+        # .env (ECP_*) > discovery > derived default.
+        "project":  args.get("project") or active.get("ecp")
+                    or _cfg("ECP_PROJECT", "") or discover_project_file(),
+        "xml_dir":  args.get("xml-dir") or active.get("xml_dir")
+                    or _cfg("ECP_XML_DIR", "") or discover_xml_dir()
+                    or DEFAULT_XML,
         "log":      args.get("log")     or _cfg("ECP_LOG", DEFAULT_LOG),
         "bootapp":  args.get("bootapp") or _cfg("ECP_BOOTAPP", DEFAULT_BOOT),
         "skip_import": args.get("skip_import", False)
@@ -501,6 +584,10 @@ def _ts():
 
 def log(level, msg):
     """Record a line in-memory and mirror it to the e!COCKPIT message view."""
+    # Config warnings queued before this function existed (module-init
+    # active-project sidecar read) go out first, in order.
+    while _EARLY_WARNS:
+        log("WARN", _EARLY_WARNS.pop(0))
     line = "[{ts}] [{lvl}] {msg}".format(ts=_ts(), lvl=level, msg=msg)
     _lines.append(line)
     # Also push to the e!COCKPIT Messages view so the user sees live progress.
@@ -542,6 +629,50 @@ def _short_name(obj):
     return s
 
 
+def _project_source():
+    """Where the active project root came from: the op=use sidecar or the
+    .env (audit string for the build-log header and cmd_status)."""
+    return "sidecar" if ACTIVE_PROJECT else ".env"
+
+
+def _project_sources():
+    """The active config triplet {project_root, xml_dir, .ecp} + its
+    source, for cmd_status's project_sources block and the build-log
+    header: drift between the .env, the op=use sidecar and the GUI-open
+    primary must stay visible in every command (the 'open project from A
+    + import XML from B' incident class)."""
+    return {
+        "project_root": PROJECT_ROOT or None,
+        "xml_dir": XML_DIR or None,
+        "source": _project_source(),
+        "ecp_discovered": PROJECT_FILE or None,
+    }
+
+
+def _warn_primary_mismatch(project):
+    """Audit guard for the op=use switch: WARN (never refuse) when the
+    GUI-open primary project is NOT the .ecp the active-project sidecar
+    recorded - imports land in whatever the GUI holds as primary, so an
+    'open project from A + XML from B' state must at least be loud.
+    Best effort: any probe failure stays silent."""
+    if not ACTIVE_PROJECT:
+        return
+    sidecar_ecp = str(ACTIVE_PROJECT.get("ecp") or "")
+    if not sidecar_ecp:
+        return
+    try:
+        p = str(project.path or "")
+    except Exception:
+        return
+    if not p:
+        return
+    if os.path.basename(p).lower() != os.path.basename(sidecar_ecp).lower():
+        log("WARN", "primary project mismatch: open '{o}' vs active-project "
+                    "sidecar '{s}' - the import goes into the OPEN project; "
+                    "realign with project_control op=open".format(
+                        o=os.path.basename(p), s=os.path.basename(sidecar_ecp)))
+
+
 def flush_log(request_id, cmd, summary):
     """Persist the collected lines plus a summary block to LOG_FILE."""
     for path in (LOG_FILE, BOOT_APP_FILE):
@@ -555,6 +686,10 @@ def flush_log(request_id, cmd, summary):
     with open(LOG_FILE, "wb") as fh:
         _w(fh, "eCockpit command log - {ts}".format(ts=_ts()))
         _w(fh, "command   : {c} (id {i})".format(c=cmd, i=request_id or "<direct>"))
+        # The active triplet {root, xml_dir, .ecp} + its source: every
+        # command stays self-describing about WHICH project it touches.
+        _w(fh, "root      : {r} (source: {s})".format(
+            r=PROJECT_ROOT or "<unset>", s=_project_source()))
         _w(fh, "project   : {p}".format(p=PROJECT_FILE or "<primary>"))
         _w(fh, "xml_dir   : {d}".format(d=XML_DIR))
         _w(fh, "skip_import: {s}".format(s=SKIP_IMPORT))
@@ -2337,6 +2472,17 @@ def _display_name(obj):
 def cmd_status(project):
     """Collect project/application/device info as a plain dict."""
     info = {"project": _display_name(project)}
+    # project_sources: the active config triplet + its source (sidecar or
+    # .env) + the GUI-open primary - a drift between them is exactly the
+    # 'build imported into the wrong project' incident class, so every
+    # status makes it visible.
+    ps = _project_sources()
+    try:
+        p = project.path
+        ps["open_primary"] = str(p) if p else None
+    except Exception:
+        ps["open_primary"] = None
+    info["project_sources"] = ps
     try:
         aa = project.active_application
         info["active_application"] = _display_name(aa) if aa is not None else None
@@ -5913,6 +6059,20 @@ def _projects_global():
     raise RuntimeError("projects root unavailable outside e!COCKPIT")
 
 
+def _write_active_project(entry):
+    """Atomically persist the op=use sidecar (same tmp+rename pattern as
+    the PLC-state sidecar: a crash mid-write never leaves a half file
+    behind)."""
+    tmp = ACTIVE_PROJECT_FILE + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(json.dumps(entry).encode("utf-8", "replace"))
+    try:
+        os.remove(ACTIVE_PROJECT_FILE)
+    except OSError:
+        pass
+    os.rename(tmp, ACTIVE_PROJECT_FILE)
+
+
 def cmd_project_control(project, args):
     """Project lifecycle + info (ScriptProjects/ScriptProject stubs).
 
@@ -5928,8 +6088,19 @@ def cmd_project_control(project, args):
                 restores a project archive
       close     {confirm} -> DESTRUCTIVE: closes the project, DISCARDS
                 unsaved changes
+      use       {root, open?, ecp?, confirm} -> SEQUENTIAL project/
+                worktree switch: validates the triplet {root exists,
+                Application.*.xml under plcopensrc/, exactly one .ecp
+                (args.ecp picks when several)}, optionally opens the .ecp
+                as primary, persists it to the active-project sidecar.
+                The sidecar OVERRIDES the .env's ECP_PROJECT_ROOT/
+                ECP_XML_DIR for every later command (the relay re-execs
+                the executor per command - no restart, no re-arm).
+      use_clear {confirm} -> removes the sidecar - back to the .env config
     create/open/open_archive/close swap the GUI's primary project -
-    treat them as session-mutating and always confirm-gated.
+    treat them as session-mutating and always confirm-gated. use/use_clear
+    are confirm-gated too: use may open a project AND repoints every
+    later build's import sources.
     """
     op = args.get("op", "info")
 
@@ -6027,9 +6198,90 @@ def cmd_project_control(project, args):
         project.close()
         log("OK", "project closed")
         return {"closed": True}
+
+    if op == "use":
+        if not args.get("confirm"):
+            raise RuntimeError("project use REFUSED - requires "
+                               "args.confirm=true (it switches the "
+                               "executor's active project/worktree: "
+                               "every later build imports from the new "
+                               "root and may open the new .ecp as "
+                               "primary)")
+        root = str(args.get("root", "")).strip()
+        if not root:
+            raise RuntimeError("project use needs args.root")
+        root = os.path.abspath(root)
+        if not os.path.isdir(root):
+            raise RuntimeError(
+                "project use REFUSED - root does not exist: {r}. Create "
+                "the checkout/worktree first, then retry "
+                "(the switch is refused, NOTHING was written or "
+                "opened).".format(r=root))
+        xml_dir = discover_xml_dir(root)
+        if not xml_dir:
+            raise RuntimeError(
+                "project use REFUSED - no Application.*.xml found under "
+                "{r}\\plcopensrc (directly or one level deep); a root "
+                "without exportable XML sources is not a usable "
+                "automation project".format(r=root))
+        ecp_arg = str(args.get("ecp", "")).strip()
+        if ecp_arg:
+            ecp = ecp_arg if os.path.isabs(ecp_arg) \
+                else os.path.join(root, ecp_arg)
+            ecp = os.path.abspath(ecp)
+            if not os.path.isfile(ecp):
+                raise RuntimeError(
+                    "project use REFUSED - args.ecp not found: {e}".format(
+                        e=ecp))
+        else:
+            candidates = _ecp_candidates(root)
+            if len(candidates) > 1:
+                raise RuntimeError(
+                    "project use REFUSED - multiple .ecp candidates "
+                    "under {r}: pass args.ecp with one of: {c}".format(
+                        r=root,
+                        c=", ".join(os.path.basename(h)
+                                    for h in candidates)))
+            ecp = os.path.abspath(candidates[0]) if candidates else ""
+        opened = None
+        if args.get("open", True):
+            if ecp:
+                opened = _projects_global().open(ecp, True)
+                log("OK", "project opened: {p}".format(p=opened.path))
+            else:
+                log("INFO", "no .ecp under the new root - the "
+                            "already-open primary project stays (pass "
+                            "args.ecp to open a specific one)")
+        entry = {"project_root": root, "xml_dir": xml_dir, "ecp": ecp,
+                 "set_at": time.time(), "source": "op=use"}
+        _write_active_project(entry)
+        log("OK", "active project switched (op=use): root={r} xml={x} "
+                  "ecp={e} - overrides .env until use_clear".format(
+                      r=root, x=xml_dir, e=ecp or "<none>"))
+        return {"project_root": root, "xml_dir": xml_dir, "ecp": ecp,
+                "opened": str(opened.path) if opened is not None else None,
+                "sidecar": ACTIVE_PROJECT_FILE}
+
+    if op == "use_clear":
+        if not args.get("confirm"):
+            raise RuntimeError("project use_clear REFUSED - requires "
+                               "args.confirm=true (it reverts the "
+                               "executor to the .env project config)")
+        removed = False
+        try:
+            os.remove(ACTIVE_PROJECT_FILE)
+            removed = True
+        except OSError:
+            pass
+        log("OK", "active-project sidecar cleared ({r}) - back to the "
+                  ".env config".format(
+                      r=ACTIVE_PROJECT_FILE if removed else "was absent"))
+        return {"cleared": removed,
+                "project_root": _cfg("ECP_PROJECT_ROOT", "") or None}
+
     raise RuntimeError('project_control needs args.op of "info", '
                        '"info_set", "save", "create", "open", '
-                       '"open_archive" or "close"')
+                       '"open_archive", "close", "use" or "use_clear"')
 
 
 # --------------------------------------------------------------------------
@@ -6070,6 +6322,7 @@ def run_command(request):
         if cmd in ("build", "import", "compile", "rebuild"):
             project = get_project()
             app = get_application(project)
+            _warn_primary_mismatch(project)
             if cmd in ("build", "import") and not (args.get("skip_import") or SKIP_IMPORT):
                 import_xml_files(app, summary)
                 cleanup_removed_objects(project, summary)

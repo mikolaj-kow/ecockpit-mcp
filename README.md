@@ -63,6 +63,32 @@ expects:
 There is **no built-in default** for `ECP_PROJECT_ROOT` — the server and
 executor are install-agnostic on purpose.
 
+### Git worktrees / switching projects (op=use)
+
+The executor re-reads the `.env` **per command** (the in-instance relay
+re-executes it every time), so editing `ECP_PROJECT_ROOT` /
+`ECP_XML_DIR` is a valid switch. To switch without touching `.env`:
+
+- `ecockpit_project_control op=use root=D:\path\to\worktree
+  confirm=true` validates the triplet — root exists, `Application.*.xml`
+  discovered under `plcopensrc/`, exactly one `.ecp` (pass `ecp=` when
+  there are several) — opens the `.ecp` as the primary project unless
+  `open=false`, and persists it to
+  `<ECP_WORK_DIR>\ecockpit_active_project.json`.
+- The sidecar **overrides `.env`** for every later command (precedence:
+  scriptargs > sidecar > `.env` > discovery). Explicit
+  `ECP_SNAPSHOTS_DIR` / `ECP_PROJECTS_DIR` stay as configured.
+  `op=use_clear confirm=true` removes the sidecar.
+- Every `ecockpit_status` reports a `project_sources` block (active
+  root, xml_dir, `.ecp`, source: `sidecar`/`.env`, open primary) and
+  every build log header carries the same triplet — the silent
+  *open-project-from-A + import-XML-from-B* mismatch cannot happen
+  unnoticed (builds WARN when the open primary disagrees with the
+  sidecar).
+- Switches are **sequential**: one e!COCKPIT instance has one primary
+  project and one set of single-writer protocol files — parallel
+  worktrees are an engine limit, not an MCP one.
+
 ## Quickstart
 
 Prereqs: Windows with e!COCKPIT installed (the relay and executor run
