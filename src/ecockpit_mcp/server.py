@@ -203,6 +203,18 @@ class NotArmedError(RuntimeError):
     pass
 
 
+class CommandTimeoutError(TimeoutError):
+    """TimeoutError carrying the command context for the timeout-as-data
+    payload (_timeout_result): the id is how a client that gave up
+    waiting matches the eventual result in ecockpit_server_status."""
+
+    def __init__(self, message, cmd_id, cmd, timeout_s):
+        super().__init__(message)
+        self.cmd_id = cmd_id
+        self.cmd = cmd
+        self.timeout_s = timeout_s
+
+
 # --------------------------------------------------------------------------
 # File protocol client (local to the e!COCKPIT machine)
 # --------------------------------------------------------------------------
@@ -225,8 +237,7 @@ def _plc_last_attempt():
             entry = json.load(fh)
         if isinstance(entry, dict) and "online" in entry:
             try:
-                entry["age_s"] = round(
-                    time.time() - float(entry.get("ts", 0)), 1)
+                entry["age_s"] = round(time.time() - float(entry.get("ts", 0)), 1)
             except (TypeError, ValueError):
                 pass
             return entry
@@ -250,11 +261,16 @@ def _plc_probe(ip):
         conn = socket.create_connection((ip, port), timeout=1.0)
         conn.close()
     except Exception as exc:
-        return {"online": False, "target": target,
-                "error": "{c}: {m}".format(
-                    c=type(exc).__name__, m=str(exc)[:120])}
-    return {"online": True, "target": target,
-            "ms": round((time.time() - start) * 1000.0)}
+        return {
+            "online": False,
+            "target": target,
+            "error": "{c}: {m}".format(c=type(exc).__name__, m=str(exc)[:120]),
+        }
+    return {
+        "online": True,
+        "target": target,
+        "ms": round((time.time() - start) * 1000.0),
+    }
 
 
 def _queued_command():
@@ -282,8 +298,7 @@ def _in_flight_command():
             current = json.load(fh)
         if isinstance(current, dict) and current.get("cmd"):
             try:
-                current["age_s"] = round(
-                    time.time() - float(current.get("ts", 0)), 1)
+                current["age_s"] = round(time.time() - float(current.get("ts", 0)), 1)
             except (TypeError, ValueError):
                 pass
             return current
@@ -337,16 +352,13 @@ def _send_command(cmd, args, timeout_s):
                 except (ValueError, OSError):
                     pass  # partial/unrelated - keep waiting
             time.sleep(0.25)
-        exc = TimeoutError(
+        exc = CommandTimeoutError(
             "no result for command '{}' (id {}) after {} s - the server may "
-            "be busy with a long command".format(cmd, rid, timeout_s)
+            "be busy with a long command".format(cmd, rid, timeout_s),
+            cmd_id=rid,
+            cmd=cmd,
+            timeout_s=timeout_s,
         )
-        # Structured context for the wrapper's timeout-as-data payload
-        # (the engine may still be running this command - the id is how a
-        # reconnecting client matches it in last_result / in_flight).
-        exc.cmd_id = rid
-        exc.cmd = cmd
-        exc.timeout_s = timeout_s
         raise exc
 
 
@@ -481,14 +493,13 @@ async def _send_command_async(
                     pass  # partial/unrelated - keep waiting
             remaining = deadline - time.time()
             if remaining <= 0:
-                exc = TimeoutError(
+                raise CommandTimeoutError(
                     "no result for command '{}' (id {}) after {} s - the server "
-                    "may be busy with a long command".format(cmd, rid, timeout_s)
+                    "may be busy with a long command".format(cmd, rid, timeout_s),
+                    cmd_id=rid,
+                    cmd=cmd,
+                    timeout_s=timeout_s,
                 )
-                exc.cmd_id = rid
-                exc.cmd = cmd
-                exc.timeout_s = timeout_s
-                raise exc
             now = time.time()
             if ctx is not None and now - last_report >= progress_every_s:
                 await _report_progress(ctx, timeout_s - remaining, timeout_s, cmd)
@@ -557,7 +568,7 @@ mcp = MCPServer(
     "picked up, 'in_flight' = executing since ts / age_s), and report "
     "PLC connection status: 'plc.last_attempt' (executor's last "
     "login-ladder outcome) and 'plc.probe' (live host-side TCP probe of "
-    "the CODESYS runtime port - cannot wedge the engine)."
+    "the CODESYS runtime port - cannot wedge the engine).",
 )
 def ecockpit_server_status() -> str:
     age = _heartbeat_age()
@@ -594,7 +605,7 @@ def ecockpit_server_status() -> str:
     "harvest and counts; set all_messages=true to bypass the "
     "filter for this run. harvest_lines (default 60) raises "
     "how many harvest lines come back inline for big "
-    "failures."
+    "failures.",
 )
 async def ecockpit_build(
     skip_import: bool = False,
@@ -621,7 +632,7 @@ async def ecockpit_build(
 @mcp.tool(
     structured_output=False,
     description="Re-import every Application.*.xml into the open e!COCKPIT "
-    "project and delete stale POUs - no compile. Takes ~15-30 s."
+    "project and delete stale POUs - no compile. Takes ~15-30 s.",
 )
 async def ecockpit_import(timeout_s: int = 600, ctx: Context | None = None) -> str:
     return json.dumps(await _run_async("import", {}, timeout_s, ctx), indent=2)
@@ -634,7 +645,7 @@ async def ecockpit_import(timeout_s: int = 600, ctx: Context | None = None) -> s
     "captures export errors). dir defaults to "
     "<project root>/plcopensrc-export - point it at your "
     "plcopensrc source tree only when you intentionally want "
-    "to update the sources."
+    "to update the sources.",
 )
 async def ecockpit_export(
     dir: str = "", timeout_s: int = 600, ctx: Context | None = None
@@ -648,7 +659,7 @@ async def ecockpit_export(
     description="Compile only (no XML re-import). Same diagnostics and "
     "IGNORE_CODES filtering as build (all_messages=true "
     "bypasses). harvest_lines (default 60) raises how many "
-    "harvest lines come back inline."
+    "harvest lines come back inline.",
 )
 async def ecockpit_compile(
     all_messages: bool = False,
@@ -675,7 +686,7 @@ async def ecockpit_compile(
     "global data memory'. Slower than compile (~1-3 min). Same "
     "diagnostics and IGNORE_CODES filtering as build. "
     "harvest_lines (default 60) raises how many harvest lines "
-    "come back inline."
+    "come back inline.",
 )
 async def ecockpit_rebuild(
     all_messages: bool = False,
@@ -697,7 +708,7 @@ async def ecockpit_rebuild(
 @mcp.tool(
     structured_output=False,
     description="Project/application/device info of the open e!COCKPIT "
-    "project (names, ip, simulated flag). No PLC login."
+    "project (names, ip, simulated flag). No PLC login.",
 )
 def ecockpit_status() -> str:
     return json.dumps(_run("status", {}), indent=2)
@@ -707,7 +718,7 @@ def ecockpit_status() -> str:
     structured_output=False,
     description="Read one variable ONLINE from the live PLC (logs in with "
     ".env PLC credentials, then disconnects). Path is the "
-    "application-relative symbol, e.g. GVLName.Variable."
+    "application-relative symbol, e.g. GVLName.Variable.",
 )
 def ecockpit_read(variable: str, device: str = "") -> str:
     if not variable:
@@ -774,7 +785,7 @@ def ecockpit_write(
 @mcp.tool(
     structured_output=False,
     description="Release ALL forced values on the PLC (unforce_all_values). "
-    "Safe direction: restores normal variable writes."
+    "Safe direction: restores normal variable writes.",
 )
 def ecockpit_unforce_all(device: str = "") -> str:
     args: dict[str, object] = {"device": device} if device else {}
@@ -788,7 +799,7 @@ def ecockpit_unforce_all(device: str = "") -> str:
     "operation_state, device connection. CAUTION: if the PLC "
     "is unreachable this can block the in-instance command "
     "server on a GUI dialog (symptom: heartbeat goes stale, "
-    "tools report not-armed until the dialog is dismissed)."
+    "tools report not-armed until the dialog is dismissed).",
 )
 def ecockpit_state(device: str = "") -> str:
     args: dict[str, object] = {"device": device} if device else {}
@@ -798,7 +809,7 @@ def ecockpit_state(device: str = "") -> str:
 @mcp.tool(
     structured_output=False,
     description="Dump the message-store category map (scripting API "
-    "debugging aid) and the active IGNORE_CODES filter list."
+    "debugging aid) and the active IGNORE_CODES filter list.",
 )
 def ecockpit_messages() -> str:
     return json.dumps(_run("messages", {}), indent=2)
@@ -809,7 +820,7 @@ def ecockpit_messages() -> str:
     description="Clear the e!COCKPIT scripting message store. Call before "
     "a build/compile to guarantee the harvest contains ONLY "
     "that run's diagnostics (no stale messages from earlier "
-    "builds or GUI actions)."
+    "builds or GUI actions).",
 )
 def ecockpit_clear_messages() -> str:
     return json.dumps(_run("clear_messages", {}), indent=2)
@@ -1065,7 +1076,7 @@ async def ecockpit_system_ui(
     "(ECP_SNAPSHOTS_DIR, default <project root>/snapshots). "
     "Version: explicit arg > sAppVersion in the "
     "ECP_VERSION_POU source XML > dotted number in the "
-    "project filename."
+    "project filename.",
 )
 async def ecockpit_snapshot(version: str = "", ctx: Context | None = None) -> str:
     args: dict[str, object] = {"version": version} if version else {}
@@ -1076,7 +1087,7 @@ async def ecockpit_snapshot(version: str = "", ctx: Context | None = None) -> st
     structured_output=False,
     description="Log out of the PLC (releases the login that blocks XML "
     "imports). force=true uses forced_disconnect when a plain "
-    "logout hangs."
+    "logout hangs.",
 )
 def ecockpit_disconnect(force: bool = False) -> str:
     return json.dumps(_run("disconnect", {"force": bool(force)}), indent=2)
@@ -1116,7 +1127,7 @@ def ecockpit_stop(confirm: bool = False, device: str = "", timeout_s: int = 120)
     "disconnects). Entries carry name, is_directory, size, "
     "last_modification_time. Works via the ScriptOnlineDevice "
     "created by online.create_online_device - the "
-    "project-tree device object has no file API."
+    "project-tree device object has no file API.",
 )
 async def ecockpit_plc_ls(
     directory: str = "/",
@@ -1134,7 +1145,7 @@ async def ecockpit_plc_ls(
     structured_output=False,
     description="Download a file FROM the PLC to this machine (read-only "
     "on the PLC). remote is the PLC path, local the host "
-    "destination (overwrites)."
+    "destination (overwrites).",
 )
 async def ecockpit_plc_get(
     remote: str,
@@ -1235,7 +1246,7 @@ async def ecockpit_plc_rm(
     description="Read the source project archive back from the PLC "
     "(upload_source on the ScriptOnlineDevice; useful to "
     "recover what is actually running). path defaults to "
-    "<work dir>/plc_source_upload.projectarchive."
+    "<work dir>/plc_source_upload.projectarchive.",
 )
 async def ecockpit_upload_source(
     path: str = "",
@@ -2469,8 +2480,7 @@ def _quiet_peer_reset(loop, context):
     keeps the default handling."""
     exc = context.get("exception")
     if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
-        print("[ecockpit-mcp] peer dropped a connection (reset) - benign",
-              flush=True)
+        print("[ecockpit-mcp] peer dropped a connection (reset) - benign", flush=True)
         return
     loop.default_exception_handler(context)
 
@@ -2861,7 +2871,7 @@ def ecockpit_repo_update(
     "repository wins when a library name resolves to several "
     "ones). index is the new position, -1 moves the "
     "repository to the end. Reversible settings change - no "
-    "confirm needed."
+    "confirm needed.",
 )
 def ecockpit_repo_move(name: str, index: int, timeout_s: int = 120) -> str:
     if not name:

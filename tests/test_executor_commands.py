@@ -1319,11 +1319,11 @@ def test_cmd_read_names_path_on_pointer_failure(monkeypatch):
             raise Exception("Invalid pointer size.")
 
     dev, app = FakeDev(), FakeApp()
-    monkeypatch.setattr(ex, "_online_connect",
-                        lambda project, args, prefer_keep=False: (dev, app))
+    monkeypatch.setattr(
+        ex, "_online_connect", lambda project, args, prefer_keep=False: (dev, app)
+    )
     with pytest.raises(RuntimeError) as ei:
-        ex.cmd_read(
-            None, {"path": "GVLEntities.astEntitiesLight[22].pAutomationCfg"})
+        ex.cmd_read(None, {"path": "GVLEntities.astEntitiesLight[22].pAutomationCfg"})
     assert "pAutomationCfg" in str(ei.value)
     assert "Invalid pointer size" in str(ei.value)
     assert "pointee" in str(ei.value)
@@ -1339,9 +1339,11 @@ def test_cmd_read_non_pointer_failure_keeps_engine_message(monkeypatch):
         def read_value(self, path):
             raise Exception("symbol not found")
 
-    monkeypatch.setattr(ex, "_online_connect",
-                        lambda project, args, prefer_keep=False:
-                            (FakeDev(), FakeApp()))
+    monkeypatch.setattr(
+        ex,
+        "_online_connect",
+        lambda project, args, prefer_keep=False: (FakeDev(), FakeApp()),
+    )
     with pytest.raises(RuntimeError) as ei:
         ex.cmd_read(None, {"path": "GVL.DoesNotExist"})
     assert "symbol not found" in str(ei.value)
@@ -1357,12 +1359,17 @@ def test_cmd_read_returns_value(monkeypatch):
         def read_value(self, path):
             return "eLightEffect.none"
 
-    monkeypatch.setattr(ex, "_online_connect",
-                        lambda project, args, prefer_keep=False:
-                            (FakeDev(), FakeApp()))
-    assert ex.cmd_read(None, {"path": "GVLEntities.astEntitiesLight[0]"
-                                       ".stState.eEffectVirt"}) == \
-        "eLightEffect.none"
+    monkeypatch.setattr(
+        ex,
+        "_online_connect",
+        lambda project, args, prefer_keep=False: (FakeDev(), FakeApp()),
+    )
+    assert (
+        ex.cmd_read(
+            None, {"path": "GVLEntities.astEntitiesLight[0].stState.eEffectVirt"}
+        )
+        == "eLightEffect.none"
+    )
 
 
 def test_online_disconnect_plain_fallback_is_info(monkeypatch):
@@ -1382,8 +1389,7 @@ def test_online_disconnect_plain_fallback_is_info(monkeypatch):
     new = ex._lines[before:]
     assert dev.disconnected is True
     assert any("[INFO]" in ln and "plain disconnect" in ln for ln in new)
-    assert not any("[WARN]" in ln and "forced_disconnect" in ln
-                   for ln in new)
+    assert not any("[WARN]" in ln and "forced_disconnect" in ln for ln in new)
 
 
 def test_online_disconnect_forced_path(monkeypatch):
@@ -1411,14 +1417,12 @@ def test_resolve_config_no_project_severity(monkeypatch):
     monkeypatch.setattr(ex, "discover_project_file", lambda: "")
     monkeypatch.setattr(ex, "_cfg", lambda name, default="": "")
 
-    before = len(ex._lines)
     monkeypatch.setattr(ex, "RELAY_DISPATCH", True, raising=False)
     ex.resolve_config()
     assert "[INFO]" in ex._lines[-1]
     assert "primary project" in ex._lines[-1]
 
     monkeypatch.setattr(ex, "parse_args", lambda: {})
-    before = len(ex._lines)
     if hasattr(ex, "RELAY_DISPATCH"):
         monkeypatch.delattr(ex, "RELAY_DISPATCH")
     ex.resolve_config()
@@ -1700,9 +1704,7 @@ def test_note_plc_success_sidecar(monkeypatch, tmp_path):
     assert isinstance(entry["ts"], float)
 
 
-def test_note_plc_truncates_detail_and_omits_ip_without_device(
-    monkeypatch, tmp_path
-):
+def test_note_plc_truncates_detail_and_omits_ip_without_device(monkeypatch, tmp_path):
     sidecar = tmp_path / "plc_state.json"
     monkeypatch.setattr(ex, "PLC_STATE_FILE", str(sidecar))
 
@@ -1715,9 +1717,7 @@ def test_note_plc_truncates_detail_and_omits_ip_without_device(
 
 
 def test_note_plc_never_raises_on_unwritable_path(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        ex, "PLC_STATE_FILE", str(tmp_path / "missing-dir" / "x.json")
-    )
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(tmp_path / "missing-dir" / "x.json"))
     ex._note_plc(False, "boom")  # swallowed (logged), not raised
 
 
@@ -1748,13 +1748,10 @@ def test_online_connect_notes_failure_and_reraises(monkeypatch, tmp_path):
 
     def boom(oa, dev, prefer_keep=False, engapp=None):
         raise RuntimeError(
-            "login via login(OnlineChangeOption.Try) failed: "
-            "Exception: Login failed"
+            "login via login(OnlineChangeOption.Try) failed: Exception: Login failed"
         )
 
-    _stub_login_ladder(
-        monkeypatch, _FakeDevice(), types.SimpleNamespace(), boom
-    )
+    _stub_login_ladder(monkeypatch, _FakeDevice(), types.SimpleNamespace(), boom)
 
     with pytest.raises(RuntimeError, match="Login failed"):
         ex._online_connect(types.SimpleNamespace(active_application=None), {})

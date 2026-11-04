@@ -22,7 +22,6 @@ import time
 os.environ["ECP_NO_RUN"] = "1"
 
 import pytest
-
 from mcp.types import TextContent
 
 from ecockpit_mcp import server as srv
@@ -103,8 +102,12 @@ def test_status_probe_online(monkeypatch, tmp_path):
         monkeypatch.setattr(srv.CFG, "plc_probe_port", port)
         _write_sidecar(
             str(tmp_path),
-            {"online": True, "ts": time.time(), "ip": "127.0.0.1",
-             "detail": "logged in"},
+            {
+                "online": True,
+                "ts": time.time(),
+                "ip": "127.0.0.1",
+                "detail": "logged in",
+            },
         )
         payload = json.loads(srv.ecockpit_server_status())
     finally:
@@ -124,8 +127,12 @@ def test_status_probe_offline(monkeypatch, tmp_path):
     monkeypatch.setattr(srv.CFG, "plc_probe_port", port)
     _write_sidecar(
         str(tmp_path),
-        {"online": False, "ts": time.time(), "ip": "127.0.0.1",
-         "detail": "login failed"},
+        {
+            "online": False,
+            "ts": time.time(),
+            "ip": "127.0.0.1",
+            "detail": "login failed",
+        },
     )
     payload = json.loads(srv.ecockpit_server_status())
     probe = payload["plc"]["probe"]

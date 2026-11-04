@@ -31,13 +31,12 @@ def isolated_work_dir(monkeypatch, tmp_path):
 
 
 def _enriched_timeout(cmd="download", rid="20261103-165745-12345"):
-    exc = TimeoutError(
-        "no result for command '{}' (id {}) after 300 s - test".format(cmd, rid)
+    return srv.CommandTimeoutError(
+        "no result for command '{}' (id {}) after 300 s - test".format(cmd, rid),
+        cmd_id=rid,
+        cmd=cmd,
+        timeout_s=300,
     )
-    exc.cmd_id = rid
-    exc.cmd = cmd
-    exc.timeout_s = 300
-    return exc
 
 
 async def _call_tool_body(name):
