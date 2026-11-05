@@ -2638,19 +2638,22 @@ def cmd_download(project, args):
 
 def cmd_disconnect(project, args):
     """Explicit logout from the PLC. Also drops the kept-login cache so
-    the next read does a fresh ladder instead of reusing a dead session."""
+    the next read does a fresh ladder instead of reusing a dead session,
+    and flips the plc state flag to offline - server_status reads it."""
     _LOGIN_CACHE.clear()
     device = get_device(project, args.get("device", ""))
     if args.get("force"):
         try:
             device.forced_disconnect()
             log("OK", "forced disconnect done")
+            _note_plc(False, "logged out via forced disconnect", device)
             return
         except AttributeError:
             log("WARN", "forced_disconnect not available - plain disconnect")
         except Exception as exc:
             log("WARN", "forced_disconnect raised: {e}".format(e=exc))
     _online_disconnect(device)
+    _note_plc(False, "logged out via disconnect", device)
 
 
 def cmd_login(project, args):
