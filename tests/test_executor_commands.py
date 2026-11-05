@@ -1331,7 +1331,7 @@ def test_cmd_read_names_path_on_pointer_failure(monkeypatch):
     assert dev.disconnects == 1  # keep=false: finally tears the session down
 
 
-def test_cmd_read_keep_true_leaves_session_open(monkeypatch):
+def test_cmd_read_keep_true_leaves_session_open(monkeypatch, tmp_path):
     # 2026-11-05: reads KEEP the login open by default (session-scoped
     # cache in _LOGIN_CACHE) - logout happens via cmd_disconnect, or
     # implicitly before the next non-keep online command. keep=false
@@ -1351,6 +1351,8 @@ def test_cmd_read_keep_true_leaves_session_open(monkeypatch):
     monkeypatch.setattr(
         ex, "_online_connect", lambda project, args, prefer_keep=False, forms=None: (dev, app)
     )
+    monkeypatch.setattr(ex, "PLC_STATE_FILE",
+                        str(tmp_path / "sidecar.json"))
     ex._LOGIN_CACHE.clear()
     assert ex.cmd_read(None, {"path": "GVL.X"}) == "42"
     assert dev.disconnects == 0
@@ -1360,6 +1362,234 @@ def test_cmd_read_keep_true_leaves_session_open(monkeypatch):
     ex.cmd_read(None, {"path": "GVL.X", "keep": False})
     assert dev.disconnects == 1
     assert "entry" not in ex._LOGIN_CACHE
+
+
+def test_disconnect_unforces_active_forces_before_logout(
+    monkeypatch, tmp_path
+):
+    # G-29 v2: a logout with ACTIVE FORCES pops the GUI modal ('delete
+    # all currently forced variables?'). cmd_disconnect probes the kept
+    # session (NO fresh login cycle), unfources first, then logs out.
+    class FakeDev(object):
+        # NOTE: no forced_disconnect method - asserts the PLAIN logout
+        def __init__(self):
+            self.disconnects = 0
+
+        def disconnect(self):
+            self.disconnects += 1
+
+    class FakeApp(object):
+        def __init__(self):
+            self.unforces = 0
+
+        def get_forced_expressions(self):
+            return ["GVL.fX"]
+
+        def get_prepared_expressions(self):
+            return []
+
+        def unforce_all_values(self):
+            self.unforces += 1
+
+    dev, app = FakeDev(), FakeApp()
+    ex._LOGIN_CACHE["entry"] = {"key": ("p", ""), "device": dev,
+                                "onlineapp": app}
+    monkeypatch.setattr(ex, "PLC_STATE_FILE",
+                        str(tmp_path / "sidecar.json"))
+    ex.cmd_disconnect(None, {})
+    assert app.unforces == 1          # unforce BEFORE logout
+    assert dev.disconnects == 1       # plain logout after a clean unforce
+    assert "entry" not in ex._LOGIN_CACHE
+
+
+def test_disconnect_force_fallback_when_unforce_fails(
+    monkeypatch, tmp_path
+):
+    # G-29 v2 droga 2: when unforce_all_values fails, forced_disconnect
+    # (modal-free) takes over.
+    class FakeDev(object):
+        # no disconnect method - a plain logout here would FAIL loudly
+        def __init__(self):
+            self.forced_disconnects = 0
+
+        def forced_disconnect(self):
+            self.forced_disconnects += 1
+
+    class FakeApp(object):
+        def get_forced_expressions(self):
+            return ["GVL.fX"]
+
+        def get_prepared_expressions(self):
+            return []
+
+        def unforce_all_values(self):
+            raise Exception("unforce refused")
+
+    dev, app = FakeDev(), FakeApp()
+    ex._LOGIN_CACHE["entry"] = {"key": ("p", ""), "device": dev,
+                                "onlineapp": app}
+    monkeypatch.setattr(ex, "PLC_STATE_FILE",
+                        str(tmp_path / "sidecar.json"))
+    ex.cmd_disconnect(None, {})
+    assert dev.forced_disconnects == 1
+
+
+def test_disconnect_staged_only_is_plain_logout(monkeypatch, tmp_path):
+    # Staged (prepared, not written) values are discarded at logout -
+    # no modal risk, so the plain logout runs without unforce.
+    class FakeDev(object):
+        # NOTE: no forced_disconnect method - asserts the PLAIN logout
+        def __init__(self):
+            self.disconnects = 0
+
+        def disconnect(self):
+            self.disconnects += 1
+
+    class FakeApp(object):
+        def get_forced_expressions(self):
+            return []
+
+        def get_prepared_expressions(self):
+            return ["GVL.staged", "GVL.staged2"]
+
+    dev, app = FakeDev(), FakeApp()
+    ex._LOGIN_CACHE["entry"] = {"key": ("p", ""), "device": dev,
+                                "onlineapp": app}
+    monkeypatch.setattr(ex, "PLC_STATE_FILE",
+                        str(tmp_path / "sidecar.json"))
+    ex.cmd_disconnect(None, {})
+    assert dev.disconnects == 1
+
+
+def test_cmd_write_keeps_session_open(monkeypatch, tmp_path):
+    # Logout with active forces pops the G-29 modal -> write (default
+    # keep=True) leaves the session OPEN and caches it.
+    class FakeDev(object):
+        def __init__(self):
+            self.disconnects = 0
+
+        def disconnect(self):
+            self.disconnects += 1
+
+    class FakeApp(object):
+        def set_prepared_value(self, expr, val):
+            pass
+
+        def write_prepared_values(self):
+            pass
+
+        def read_value(self, expr):
+            return "TRUE"
+
+    dev, app = FakeDev(), FakeApp()
+    monkeypatch.setattr(
+        ex, "_online_connect", lambda project, args, prefer_keep=False, forms=None: (dev, app)
+    )
+    monkeypatch.setattr(ex, "PLC_STATE_FILE",
+                        str(tmp_path / "sidecar.json"))
+    ex._LOGIN_CACHE.clear()
+    out = ex.cmd_write(None, {"values": {"GVL.b": "TRUE"}, "confirm": True})
+    assert out == {"GVL.b": "TRUE"}
+    assert dev.disconnects == 0
+    assert ex._LOGIN_CACHE["entry"]["onlineapp"] is app
+
+
+def _stub_download_ladder(monkeypatch, via):
+    """Stub _online_connect so the fresh-ladder path records `via`."""
+    class FakeDev(object):
+        def __init__(self):
+            self.starts = 0
+            self.disconnects = 0
+
+        def start(self):
+            self.starts += 1
+
+        def disconnect(self):
+            self.disconnects += 1
+
+    class FakeApp(object):
+        def __init__(self):
+            self.boots = 0
+
+        def create_boot_application(self):
+            self.boots += 1
+
+    dev, app = FakeDev(), FakeApp()
+
+    def fake_connect(project, args, prefer_keep=False, forms=None):
+        ex._LOGIN_CACHE["last_via"] = via
+        return dev, app
+
+    monkeypatch.setattr(ex, "_online_connect", fake_connect)
+    return dev, app
+
+
+def test_download_online_reuses_session_no_start_no_ladder(
+    monkeypatch, tmp_path
+):
+    # download_online on a KEPT session: no fresh ladder, no start (an
+    # online change leaves the application running), session stays.
+    class FakeDev(object):
+        def __init__(self):
+            self.starts = 0
+            self.disconnects = 0
+
+        def start(self):
+            self.starts += 1
+
+        def disconnect(self):
+            self.disconnects += 1
+
+    class FakeApp(object):
+        def __init__(self):
+            self.boots = 0
+            self.ladder_connects = []
+
+        def create_boot_application(self):
+            self.boots += 1
+
+    dev, app = FakeDev(), FakeApp()
+    ex._LOGIN_CACHE["entry"] = {"key": ex._login_key(None, {}),
+                                "device": dev, "onlineapp": app}
+    monkeypatch.setattr(ex, "PLC_STATE_FILE",
+                        str(tmp_path / "sidecar.json"))
+    out = ex.cmd_download(None, {"mode": "online", "confirm": True})
+    assert out["via"] == "kept session"
+    assert out["started"] is False
+    assert dev.starts == 0
+    assert app.boots == 0          # boot=false default
+    assert dev.disconnects == 0    # session stays open
+    assert ex._LOGIN_CACHE["entry"]["onlineapp"] is app
+
+
+def test_download_full_fresh_ladder_starts_and_logs_out(monkeypatch):
+    # mode=full: always the fresh ladder (Never form), start runs, the
+    # session is logged out, boot skipped unless boot=true.
+    dev, app = _stub_download_ladder(
+        monkeypatch, "login(OnlineChangeOption.Never)")
+    ex._LOGIN_CACHE.clear()
+    out = ex.cmd_download(None, {"mode": "full", "confirm": True})
+    assert out["started"] is True
+    assert out["boot"] is False
+    assert app.boots == 0
+    assert dev.starts == 1
+    assert dev.disconnects == 1
+    assert "entry" not in ex._LOGIN_CACHE
+
+
+def test_download_auto_starts_only_on_full_form(monkeypatch):
+    # auto over a fresh ladder: start runs ONLY when the deploy went
+    # through Never / device.connect (Try = online change = running app).
+    dev, _ = _stub_download_ladder(
+        monkeypatch, "login(OnlineChangeOption.Try)")
+    out = ex.cmd_download(None, {"mode": "auto", "confirm": True})
+    assert out["started"] is False
+    assert dev.starts == 0
+    ex._LOGIN_CACHE.clear()
+    dev2, _ = _stub_download_ladder(monkeypatch, "device.connect()")
+    out2 = ex.cmd_download(None, {"mode": "auto", "confirm": True})
+    assert out2["started"] is True
+    assert dev2.starts == 1
 
 
 def test_cmd_read_non_pointer_failure_keeps_engine_message(monkeypatch):
