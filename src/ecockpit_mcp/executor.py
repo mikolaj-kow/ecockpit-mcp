@@ -2277,7 +2277,8 @@ def _login_gap_timeout_recovery(onlineapp, device, engapp, option, label,
     return "retry-ok"
 
 
-def _online_login(onlineapp, device, prefer_keep=False, engapp=None):
+def _online_login(onlineapp, device, prefer_keep=False, engapp=None,
+                  forms=None):
     """Explicit login ladder - online change control.
 
     device.connect() performed an IMPLICIT login-with-download (live
@@ -2291,10 +2292,13 @@ def _online_login(onlineapp, device, prefer_keep=False, engapp=None):
     safe login for read-only commands - enabled with prefer_keep.
     Default order: Try, Force, Never, then the legacy device.connect()
     fallback. Returns the form used; raises when every form fails.
+    forms: explicit whitelist of form names (e.g. ["Force"] for the
+    download-online strict ladder) - overrides the prefer_keep order.
     """
     options = []
+    names = list(forms) if forms else (["Keep"] if prefer_keep
+                                       else ["Try", "Force", "Never"])
     if OnlineChangeOption is not None:
-        names = ["Keep"] if prefer_keep else ["Try", "Force", "Never"]
         for name in names:
             try:
                 if name == "Try":
@@ -2312,7 +2316,7 @@ def _online_login(onlineapp, device, prefer_keep=False, engapp=None):
             except Exception as exc:
                 log("INFO", "OnlineChangeOption.{n} unavailable: "
                     "{e}".format(n=name, e=exc))
-    if not prefer_keep:
+    if not prefer_keep and forms is None:
         options.append(("device.connect()", None))
     attempts = []
     for label, option in options:
@@ -2322,6 +2326,9 @@ def _online_login(onlineapp, device, prefer_keep=False, engapp=None):
             else:
                 onlineapp.login(option, False)
             log("OK", "logged in via {l}".format(l=label))
+            # Download mode routing reads this (start only after a FULL
+            # form; online change leaves the application running).
+            _LOGIN_CACHE["last_via"] = label
             return label
         except Exception as exc:
             attempts.append("{l}: {c}: {m}".format(
@@ -2637,11 +2644,75 @@ def cmd_download(project, args):
 
 
 def cmd_disconnect(project, args):
-    """Explicit logout from the PLC. Also drops the kept-login cache so
-    the next read does a fresh ladder instead of reusing a dead session,
-    and flips the plc state flag to offline - server_status reads it."""
+    """Explicit logout from the PLC - G-29 v2 logout ladder.
+
+    Teardown order per active W/F state (probed on the KEPT session,
+    no fresh login cycle):
+    - FORCED values active: unforce_all_values() first, then a plain
+      logout (droga 1); if the unforce fails, forced_disconnect()
+      (modal-free, droga 2). A logout with active forces pops the GUI
+      modal 'delete all currently forced variables?' otherwise.
+    - staged/written values only (regular write): plain logout is safe
+      - prepared values are discarded at logout, written ones are kept
+      until the logic overwrites them.
+    - args.force=true still means 'use forced_disconnect' (manual
+      override of the probe result).
+
+    Also drops the kept-login cache so the next read does a fresh
+    ladder, and flips the plc state flag offline (server_status)."""
+    entry = _LOGIN_CACHE.get("entry")
     _LOGIN_CACHE.clear()
-    device = get_device(project, args.get("device", ""))
+    device = entry["device"] if entry is not None \
+        else get_device(project, args.get("device", ""))
+    onlineapp = entry.get("onlineapp") if entry is not None else None
+    forced = []
+    staged = -1
+    if onlineapp is not None:
+        try:
+            forced = [str(e) for e in onlineapp.get_forced_expressions()]
+        except Exception as exc:
+            log("INFO", "get_forced_expressions probe failed: {e}".format(
+                e=exc))
+        try:
+            staged = len(list(onlineapp.get_prepared_expressions()))
+        except Exception:
+            pass
+    detail = "logged out via disconnect"
+    if forced:
+        log("INFO", "{n} forced value(s) active - unforce before logout "
+            "(G-29 v2)".format(n=len(forced)))
+        unforced = False
+        try:
+            onlineapp.unforce_all_values()
+            unforced = True
+            log("OK", "unforced {n} value(s) before logout".format(
+                n=len(forced)))
+        except Exception as exc:
+            log("WARN", "unforce_all_values failed: {e} - falling back "
+                "to forced_disconnect".format(e=exc))
+        if unforced and not args.get("force"):
+            _online_disconnect(device)
+            detail = ("logged out after unforce ({n} forced)".format(
+                n=len(forced)))
+            _note_plc(False, detail, device)
+            return
+        try:
+            device.forced_disconnect()
+            log("OK", "forced_disconnect done (modal-free logout with "
+                "forces)")
+            _note_plc(False, "logged out via forced_disconnect ({n} "
+                            "forced)".format(n=len(forced)), device)
+            return
+        except AttributeError:
+            log("WARN", "forced_disconnect not available - plain "
+                "disconnect")
+        except Exception as exc:
+            log("WARN", "forced_disconnect raised: {e}".format(e=exc))
+    elif staged > 0:
+        log("INFO", "{n} staged value(s) discarded at logout (no "
+            "forces - plain logout is safe)".format(n=staged))
+        detail = "logged out ({n} staged values discarded)".format(
+            n=staged)
     if args.get("force"):
         try:
             device.forced_disconnect()
@@ -2653,7 +2724,7 @@ def cmd_disconnect(project, args):
         except Exception as exc:
             log("WARN", "forced_disconnect raised: {e}".format(e=exc))
     _online_disconnect(device)
-    _note_plc(False, "logged out via disconnect", device)
+    _note_plc(False, detail, device)
 
 
 def cmd_login(project, args):
@@ -2673,6 +2744,9 @@ def cmd_login(project, args):
     option = str(args.get("option", "auto")).lower()
     delete_foreign_apps = bool(args.get("delete_foreign_apps"))
     user, pw = _require_creds()
+    # A fresh explicit ladder invalidates any kept session - drop the
+    # cache BEFORE logging in (stale reuse would logout a dead session).
+    _LOGIN_CACHE.clear()
     device = get_device(project, args.get("device", ""))
     try:
         aa = project.active_application
@@ -2687,7 +2761,11 @@ def cmd_login(project, args):
     onlineapp = online.create_online_application(app)
 
     if option == "auto":
-        _online_login(onlineapp, device, engapp=app)
+        via = _online_login(onlineapp, device, engapp=app)
+        _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
+                                 "device": device, "onlineapp": onlineapp}
+        _note_plc(True, "logged in via {v}; session registered for "
+                        "keep-login reuse".format(v=via), device)
         log("OK", "login complete (auto ladder) - session stays open; "
             "logout with ecockpit_disconnect")
         return {"logged_in": True, "via": "auto", "stays_connected": True}
@@ -2717,6 +2795,9 @@ def cmd_login(project, args):
             "login(OnlineChangeOption.{m})".format(m=members[option]),
             exc, delete_foreign_apps=delete_foreign_apps)
         if recovered == "applied":
+            _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
+                                     "device": device,
+                                     "onlineapp": onlineapp}
             log("OK", "login complete ({o}) - the change was applied "
                 "despite the task-gap timeout; session stays open"
                 .format(o=option))
@@ -2724,6 +2805,9 @@ def cmd_login(project, args):
                     "stays_connected": True,
                     "note": "task-gap timeout; runtime applied the change"}
         if recovered == "retry-ok":
+            _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
+                                     "device": device,
+                                     "onlineapp": onlineapp}
             log("OK", "login complete ({o}) on the retry after the "
                 "task-gap timeout; session stays open".format(o=option))
             return {"logged_in": True, "via": option,
@@ -2734,6 +2818,11 @@ def cmd_login(project, args):
                 o=members[option], c=type(exc).__name__,
                 m=str(exc)[:200]) +
             "\n" + LOGIN_FAIL_HINT)
+    _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
+                             "device": device, "onlineapp": onlineapp}
+    _note_plc(True, "logged in via OnlineChangeOption.{m}; session "
+                    "registered for keep-login reuse".format(
+                        m=members[option]), device)
     log("OK", "login complete (OnlineChangeOption.{m}) - session stays "
         "open; logout with ecockpit_disconnect".format(m=members[option]))
     return {"logged_in": True, "via": members[option],
@@ -2860,9 +2949,14 @@ def cmd_prepared_values(project, args):
             log("WARN", "get_forced_expressions failed: {e}".format(e=exc))
         log("OK", "prepared values: {s} staged, {f} forced".format(
             s=len(staged), f=len(forced)))
+        if bool(args.get("keep", True)):
+            _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
+                                     "device": device,
+                                     "onlineapp": onlineapp}
         return {"staged": staged, "forced": forced}
     finally:
-        _online_disconnect(device)
+        if not bool(args.get("keep", True)):
+            _online_disconnect(device)
 
 
 def cmd_write(project, args):
@@ -2881,7 +2975,8 @@ def cmd_write(project, args):
     if not isinstance(values, dict) or not values:
         raise RuntimeError('write needs args.values, e.g. '
                            '{"values": {"GVLName.bFlag": "TRUE"}}')
-    device, onlineapp = _online_connect(project, args)
+    keep = bool(args.get("keep", True))
+    device, onlineapp = _online_connect(project, args, prefer_keep=True)
     try:
         for expr in sorted(values):
             onlineapp.set_prepared_value(expr, str(values[expr]))
@@ -2900,28 +2995,54 @@ def cmd_write(project, args):
                 readback[expr] = str(onlineapp.read_value(expr))
             except Exception:
                 readback[expr] = "<read back failed>"
+        if keep:
+            # Logout with ACTIVE FORCES pops the G-29 GUI modal - the
+            # session STAYS OPEN (logout = ecockpit_disconnect, which
+            # unfources first). Staged/written-only values are safe.
+            _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
+                                     "device": device,
+                                     "onlineapp": onlineapp}
+            _note_plc(True, "{k} applied; session kept open "
+                            "(logout via disconnect)".format(
+                                k="forces" if args.get("force")
+                                else "writes"), device)
         return readback
     finally:
-        _online_disconnect(device)
+        if not keep:
+            _online_disconnect(device)
 
 
 def cmd_unforce(project, args):
-    """Release all forced values on the PLC."""
-    device, onlineapp = _online_connect(project, args)
+    """Release all forced values on the PLC. Reuses the kept login
+    session; the session stays open afterwards (keep=false restores the
+    old login+logout ladder)."""
+    keep = bool(args.get("keep", True))
+    device, onlineapp = _online_connect(project, args, prefer_keep=True)
     try:
         onlineapp.unforce_all_values()
         log("OK", "unforced all values")
+        if keep:
+            _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
+                                     "device": device,
+                                     "onlineapp": onlineapp}
+            _note_plc(True, "unforced all; session kept open", device)
         return "unforced all"
     finally:
-        _online_disconnect(device)
+        if not keep:
+            _online_disconnect(device)
 
 
 def cmd_stop(project, args):
-    """Stop the running application on the PLC. Requires confirm."""
+    """Stop the running application on the PLC. Requires confirm.
+
+    Reuses the kept login session when one exists (no fresh ladder);
+    keeps the session open afterwards (keep=false restores login+
+    logout). Stop leaves no W/F, so a later logout is modal-free."""
     if not args.get("confirm"):
         raise RuntimeError("stop REFUSED - requires args.confirm=true. It "
                            "STOPS the running PLC application.")
-    device, onlineapp = _online_connect(project, args)
+    keep = bool(args.get("keep", True))
+    device, onlineapp = _online_connect(project, args, prefer_keep=True)
     try:
         stopped_via = ""
         try:
@@ -2937,9 +3058,16 @@ def cmd_stop(project, args):
         except Exception:
             pass
         state["stopped_via"] = stopped_via
+        if keep:
+            _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
+                                     "device": device,
+                                     "onlineapp": onlineapp}
+            _note_plc(True, "application stopped; session kept open",
+                      device)
         return state
     finally:
-        _online_disconnect(device)
+        if not keep:
+            _online_disconnect(device)
 
 
 def cmd_state(project, args):
@@ -2947,7 +3075,10 @@ def cmd_state(project, args):
 
     Direct-syntax attribute access throughout - getattr() fails on these
     .NET interop objects even for members that work via direct access.
+    Reuses the kept login session and keeps it open (keep=false restores
+    the old login+logout ladder) - the poller pays no ladder per call.
     """
+    keep = bool(args.get("keep", True))
     device, onlineapp = _online_connect(project, args, prefer_keep=True)
     try:
         info = {}
@@ -2972,9 +3103,14 @@ def cmd_state(project, args):
         except Exception:
             pass
         log("OK", "state: {j}".format(j=json.dumps(info)))
+        if keep:
+            _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
+                                     "device": device,
+                                     "onlineapp": onlineapp}
         return info
     finally:
-        _online_disconnect(device)
+        if not keep:
+            _online_disconnect(device)
 
 
 def _export_target_path(out_dir, app_name):
