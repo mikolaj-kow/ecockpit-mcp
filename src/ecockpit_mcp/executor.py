@@ -2393,7 +2393,7 @@ def _login_key(project, args):
     return (root, args.get("device", ""))
 
 
-def _online_connect(project, args, prefer_keep=False):
+def _online_connect(project, args, prefer_keep=False, forms=None):
     """Connect to the PLC (login) and return (device, onlineapp).
 
     Requires PLC_USER/PLC_PASS (.env or env vars). Caller disconnects.
@@ -2404,9 +2404,11 @@ def _online_connect(project, args, prefer_keep=False):
     changes or downloading. WARNING: even a Try login applies online
     changes (code deltas) when the open project differs from the PLC -
     treat deploying commands as potentially deploying.
+    forms: whitelist passed to _online_login (e.g. ["Force"] for the
+    download-online strict ladder - no fallback, no device.connect()).
 
-    Keep-login protocol (args.keep): a read that logs in leaves the
-    session OPEN and caches it in _LOGIN_CACHE; the next keep-read
+    Keep-login protocol (args.keep): a command that logs in leaves the
+    session OPEN and caches it in _LOGIN_CACHE; the next keep-command
     reuses it (no ladder at all). Any non-keep online command logs the
     kept session out first so a fresh ladder never collides with a
     live login. Logout: ecockpit_disconnect (clears the cache too).
@@ -2454,7 +2456,7 @@ def _online_connect(project, args, prefer_keep=False):
     onlineapp = online.create_online_application(app)
     try:
         via = _online_login(onlineapp, device, prefer_keep=prefer_keep,
-                            engapp=app)
+                            engapp=app, forms=forms)
     except Exception as exc:
         _note_plc(False, "{c}: {m}".format(
             c=type(exc).__name__, m=str(exc)[:160]), device)
@@ -2626,21 +2628,91 @@ def cmd_read(project, args):
 
 
 def cmd_download(project, args):
-    """Login, create the boot application ON the PLC (download), start it."""
+    """Deploy the open project to the PLC. CONFIRM-GATED.
+
+    args: {"mode": "auto"|"online"|"full" (default "auto"),
+           "boot": bool (default false - create_boot_application only
+                   when asked; writing the boot image on every deploy
+                   is wasted flash cycles),
+           "confirm": true, "device": ""}.
+
+    mode="online" - PARTIAL deploy (online change) strict: reuses the
+    kept login session (no fresh ladder); when no session exists,
+    login(OnlineChangeOption.Force) ONLY - online change or refusal,
+    never a silent full download. NO device.start() - an online change
+    does not stop the application. The session stays OPEN.
+    mode="auto" - reuse the kept session like online; when no session
+    exists, the classic ladder Try -> Force -> Never -> device.connect().
+    device.start() runs ONLY when the deploy went through a FULL form
+    (Never / device.connect) - after an online change the application
+    is still running. The session stays OPEN.
+    mode="full" - always a fresh ladder with login(Never) (+ legacy
+    device.connect fallback), replaces the running application
+    entirely, then device.start() and logout (today's behavior).
+
+    Returns {"via": <form/session>, "boot": bool, "started": bool,
+    "mode": mode}."""
     if not args.get("confirm"):
-        raise RuntimeError("download REFUSED - requires args.confirm=true "
-                           "(CLI: -Download -Confirm). It replaces the "
-                           "running application on the PLC.")
-    device, onlineapp = _online_connect(project, args)
+        raise RuntimeError("download REFUSED - requires args.confirm=true. "
+                           "It deploys the open project to the PLC "
+                           "(online change or full download per mode).")
+    mode = str(args.get("mode", "auto")).lower()
+    if mode not in ("auto", "online", "full"):
+        raise RuntimeError('download needs args.mode of "auto", "online" '
+                           'or "full" (got {m!r})'.format(m=mode))
+    boot = bool(args.get("boot"))
+    reuse = mode in ("online", "auto")
+    key = _login_key(project, args)
+    entry = _LOGIN_CACHE.get("entry") if reuse else None
+    if entry is not None and entry.get("key") == key:
+        device = entry["device"]
+        onlineapp = entry["onlineapp"]
+        via = "kept session"
+        log("INFO", "download on the KEPT session (no ladder)")
+    else:
+        # Fresh ladder: full uses Never (+ legacy fallback); online
+        # uses Force strictly; auto uses the classic Try -> Force ->
+        # Never -> connect order. keep=False logs a stale kept session
+        # out first (inside _online_connect).
+        dargs = dict(args)
+        dargs["keep"] = False
+        device, onlineapp = _online_connect(
+            project, dargs,
+            forms=["Force"] if mode == "online" else None)
+        via = str(_LOGIN_CACHE.get("last_via", ""))
     try:
-        log("INFO", "creating boot application ON DEVICE (this downloads the "
-                    "application and replaces the running one)")
-        onlineapp.create_boot_application()
-        log("INFO", "starting application on device")
-        device.start()
-        log("OK", "download complete, application started")
+        if boot:
+            log("INFO", "creating boot application ON DEVICE (updates the "
+                "boot image)")
+            onlineapp.create_boot_application()
+        else:
+            log("INFO", "boot skipped (args.boot false) - boot image NOT "
+                "updated")
+        full_form = ("Never" in via) or ("device.connect()" in via)
+        started = False
+        if mode == "full" or full_form:
+            log("INFO", "starting application on device")
+            device.start()
+            started = True
+        else:
+            log("INFO", "start skipped (online change leaves the "
+                "application running)")
+        log("OK", "download complete via {v} (boot={b}, started={s})"
+            .format(v=via, b=boot, s=started))
+        if mode != "full":
+            # online/auto: the session is synced now - register it for
+            # keep-login reuse by reads.
+            _LOGIN_CACHE["entry"] = {"key": key, "device": device,
+                                     "onlineapp": onlineapp}
+            _note_plc(True, "download ({m}) via {v}; session kept open "
+                            "(synced)".format(m=mode, v=via), device)
+        return {"via": via, "boot": boot, "started": started,
+                "mode": mode}
     finally:
-        _online_disconnect(device)
+        _LOGIN_CACHE.pop("last_via", None)
+        if mode == "full":
+            _online_disconnect(device)
+            _note_plc(False, "logged out after full download", device)
 
 
 def cmd_disconnect(project, args):

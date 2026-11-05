@@ -1320,7 +1320,7 @@ def test_cmd_read_names_path_on_pointer_failure(monkeypatch):
 
     dev, app = FakeDev(), FakeApp()
     monkeypatch.setattr(
-        ex, "_online_connect", lambda project, args, prefer_keep=False: (dev, app)
+        ex, "_online_connect", lambda project, args, prefer_keep=False, forms=None: (dev, app)
     )
     with pytest.raises(RuntimeError) as ei:
         ex.cmd_read(None, {"path": "GVLEntities.astEntitiesLight[22].pAutomationCfg",
@@ -1349,7 +1349,7 @@ def test_cmd_read_keep_true_leaves_session_open(monkeypatch):
 
     dev, app = FakeDev(), FakeApp()
     monkeypatch.setattr(
-        ex, "_online_connect", lambda project, args, prefer_keep=False: (dev, app)
+        ex, "_online_connect", lambda project, args, prefer_keep=False, forms=None: (dev, app)
     )
     ex._LOGIN_CACHE.clear()
     assert ex.cmd_read(None, {"path": "GVL.X"}) == "42"
@@ -1374,7 +1374,7 @@ def test_cmd_read_non_pointer_failure_keeps_engine_message(monkeypatch):
     monkeypatch.setattr(
         ex,
         "_online_connect",
-        lambda project, args, prefer_keep=False: (FakeDev(), FakeApp()),
+        lambda project, args, prefer_keep=False, forms=None: (FakeDev(), FakeApp()),
     )
     with pytest.raises(RuntimeError) as ei:
         ex.cmd_read(None, {"path": "GVL.DoesNotExist"})
@@ -1394,7 +1394,7 @@ def test_cmd_read_returns_value(monkeypatch):
     monkeypatch.setattr(
         ex,
         "_online_connect",
-        lambda project, args, prefer_keep=False: (FakeDev(), FakeApp()),
+        lambda project, args, prefer_keep=False, forms=None: (FakeDev(), FakeApp()),
     )
     assert (
         ex.cmd_read(
@@ -1761,7 +1761,7 @@ def test_online_connect_notes_success(monkeypatch, tmp_path):
         monkeypatch,
         device,
         types.SimpleNamespace(),
-        lambda oa, dev, prefer_keep=False, engapp=None: "login(OnlineChangeOption.Try)",
+        lambda oa, dev, prefer_keep=False, engapp=None, forms=None: "login(OnlineChangeOption.Try)",
     )
 
     got_device, onlineapp = ex._online_connect(
@@ -1778,7 +1778,7 @@ def test_online_connect_notes_failure_and_reraises(monkeypatch, tmp_path):
     sidecar = tmp_path / "plc_state.json"
     monkeypatch.setattr(ex, "PLC_STATE_FILE", str(sidecar))
 
-    def boom(oa, dev, prefer_keep=False, engapp=None):
+    def boom(oa, dev, prefer_keep=False, engapp=None, forms=None):
         raise RuntimeError(
             "login via login(OnlineChangeOption.Try) failed: Exception: Login failed"
         )

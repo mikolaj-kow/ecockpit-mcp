@@ -800,13 +800,14 @@ def _iec_literal(value):
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
     description="DESTRUCTIVE - requires explicit owner request. Write "
-    "values to variables on the RUNNING PLC (logs in, "
-    "prepares values, writes, reads back, disconnects). "
-    "values maps application-relative paths to IEC literals: "
-    "booleans as true/false, numbers as-is, strings passed "
-    "through verbatim (quote STRING values yourself, e.g. "
-    "\"'hello'\"). force=true forces the values (they stay "
-    "forced until ecockpit_unforce_all). Pass confirm=true, "
+    "values to variables on the RUNNING PLC (reuses the kept login "
+    "session; values maps application-relative paths to IEC "
+    "literals: booleans as true/false, numbers as-is, strings "
+    "passed through verbatim (quote STRING values yourself, e.g. "
+    "\"'hello'\")). force=true FORCES the values (they stay forced "
+    "until ecockpit_unforce_all - and the session then STAYS OPEN: "
+    "a logout with active forces pops a GUI modal, so "
+    "ecockpit_disconnect unfources first). Pass confirm=true, "
     "never without an explicit owner instruction.",
 )
 def ecockpit_write(
@@ -842,8 +843,10 @@ def ecockpit_write(
 
 @mcp.tool(
     structured_output=False,
-    description="Release ALL forced values on the PLC (unforce_all_values). "
-    "Safe direction: restores normal variable writes.",
+    description="Release ALL forced values on the PLC (unforce_all_values, "
+    "reuses the kept login session). Safe direction: restores normal "
+    "variable writes; run this before ecockpit_disconnect when forces "
+    "are active.",
 )
 def ecockpit_unforce_all(device: str = "") -> str:
     args: dict[str, object] = {"device": device} if device else {}
@@ -852,8 +855,8 @@ def ecockpit_unforce_all(device: str = "") -> str:
 
 @mcp.tool(
     structured_output=False,
-    description="Online state readout of the PLC (logs in briefly, then "
-    "disconnects): login state, application_state, "
+    description="Online state readout of the PLC (reuses the kept login "
+    "session): login state, application_state, "
     "operation_state, device connection. CAUTION: if the PLC "
     "is unreachable this can block the in-instance command "
     "server on a GUI dialog (symptom: heartbeat goes stale, "
@@ -1158,9 +1161,10 @@ def ecockpit_disconnect(force: bool = False) -> str:
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
     description="DESTRUCTIVE - requires explicit owner request. STOP the "
-    "running application on the live PLC and report the "
-    "resulting operation state. Pass confirm=true, never "
-    "without an explicit owner instruction.",
+    "running application on the live PLC (reuses the kept login "
+    "session) and report the resulting operation state. Stop "
+    "leaves no W/F, so a later logout is modal-free. Pass "
+    "confirm=true, never without an explicit owner instruction.",
 )
 def ecockpit_stop(confirm: bool = False, device: str = "", timeout_s: int = 120) -> str:
     if not confirm:
@@ -1338,21 +1342,112 @@ async def ecockpit_upload_source(
     "without an explicit owner instruction.",
 )
 async def ecockpit_download(
-    confirm: bool = False, timeout_s: int = 600, ctx: Context | None = None
+    mode: str = "auto",
+    boot: bool = False,
+    confirm: bool = False,
+    timeout_s: int = 600,
+    ctx: Context | None = None,
 ) -> str:
     if not confirm:
         return json.dumps(
             {
                 "ok": False,
                 "refused": True,
-                "error": "download refused - it REPLACES the running PLC "
-                "application; call again with confirm=true only on "
-                "an explicit owner request",
+                "error": "download refused - it deploys the open project "
+                "to the PLC (online change or full download per "
+                "mode); call again with confirm=true only on an "
+                "explicit owner request",
             },
             indent=2,
         )
     return json.dumps(
-        await _run_async("download", {"confirm": True}, timeout_s, ctx), indent=2
+        await _run_async(
+            "download", {"mode": mode, "boot": bool(boot), "confirm": True},
+            timeout_s, ctx,
+        ),
+        indent=2,
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
+    description="DESTRUCTIVE - requires explicit owner request. PARTIAL "
+    "deploy (online change, strict): applies code deltas to the "
+    "RUNNING application - reuses the kept login session (no fresh "
+    "ladder); without a session it logs in with "
+    "OnlineChangeOption.Force ONLY and REFUSES when deltas cannot be "
+    "applied (never a silent full download). No device.start() - an "
+    "online change leaves the application running. boot=true also "
+    "updates the boot image (default: skipped). Session stays open; "
+    "logout with ecockpit_disconnect. Pass confirm=true, never "
+    "without an explicit owner instruction.",
+)
+async def ecockpit_download_online(
+    boot: bool = False,
+    confirm: bool = False,
+    timeout_s: int = 600,
+    ctx: Context | None = None,
+) -> str:
+    if not confirm:
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "download_online refused - it applies code deltas "
+                "to the RUNNING PLC application; call again with "
+                "confirm=true only on an explicit owner request",
+            },
+            indent=2,
+        )
+    return json.dumps(
+        await _run_async(
+            "download", {"mode": "online", "boot": bool(boot),
+                         "confirm": True},
+            timeout_s, ctx,
+        ),
+        indent=2,
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        destructive_hint=True, read_only_hint=False, open_world_hint=True
+    ),
+    description="DESTRUCTIVE - requires explicit owner request. FULL "
+    "deploy: login(OnlineChangeOption.Never) (full download forced), "
+    "replaces the running application entirely, starts it afterwards "
+    "(device.start), then logs out. boot=true also updates the boot "
+    "image (default: skipped). Always a fresh login ladder. Pass "
+    "confirm=true, never without an explicit owner instruction.",
+)
+async def ecockpit_download_full(
+    boot: bool = False,
+    confirm: bool = False,
+    timeout_s: int = 600,
+    ctx: Context | None = None,
+) -> str:
+    if not confirm:
+        return json.dumps(
+            {
+                "ok": False,
+                "refused": True,
+                "error": "download_full refused - it REPLACES the running "
+                "PLC application (full download + start); call again "
+                "with confirm=true only on an explicit owner request",
+            },
+            indent=2,
+        )
+    return json.dumps(
+        await _run_async(
+            "download", {"mode": "full", "boot": bool(boot),
+                         "confirm": True},
+            timeout_s, ctx,
+        ),
+        indent=2,
     )
 
 

@@ -2,7 +2,7 @@
 """Wrapper sweep: every registered MCP tool is called offline with
 minimal schema-derived arguments, against a stubbed engine client.
 
-This pins, for all 55 tools at once:
+This pins, for all 57 tools at once:
 - the confirm-gate refusals return refused JSON (never raise, never
   touch the engine),
 - the arg-assembly bodies produce the documented command/args shapes
@@ -27,6 +27,8 @@ from ecockpit_mcp import server as srv
 GATED_ON_MINIMAL_CALL = (
     "ecockpit_write",
     "ecockpit_download",
+    "ecockpit_download_online",
+    "ecockpit_download_full",
     "ecockpit_login",
     "ecockpit_source_download",
     "ecockpit_stop",
@@ -140,7 +142,7 @@ def isolated_work_dir(monkeypatch, tmp_path):
 
 def test_every_tool_returns_json_and_is_reached(stub_engine):
     tools = srv.mcp._tool_manager._tools
-    assert len(tools) == 55
+    assert len(tools) == 57
     refused, assembled = [], []
     for name, tool in sorted(tools.items()):
         args = _minimal_args(tool)
