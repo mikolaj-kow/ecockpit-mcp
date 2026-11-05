@@ -132,6 +132,14 @@ class Config(object):
         return os.path.join(self.tmp_dir, "ecockpit_watch.heartbeat")
 
     @property
+    def event_log_file(self):
+        # Server-side command history: one line per MCP tool call. The
+        # executor has its own build/engine log; until now the server
+        # itself logged NOTHING, so relay refusals / timeouts were only
+        # visible in the tool response of the (possibly gone) client.
+        return os.path.join(self.tmp_dir, "logs", "ecockpit_server.log")
+
+    @property
     def plc_state_file(self):
         # Connection sidecar written by executor._note_plc on every real
         # login-ladder attempt (same work dir as the rest of the protocol).
@@ -370,6 +378,20 @@ def _log_tail(path, lines=30):
         return ["<log tail unavailable: {}>".format(exc)]
 
 
+def _log_event(cmd, outcome, detail=""):
+    """Append one line per MCP tool call to logs/ecockpit_server.log.
+    Best-effort: a logging failure must never fail the command itself."""
+    line = "{ts} {c} -> {o}{d}\n".format(
+        ts=time.strftime("%Y-%m-%d %H:%M:%S"),
+        c=cmd, o=outcome, d=" | " + detail if detail else "")
+    try:
+        os.makedirs(os.path.dirname(CFG.event_log_file), exist_ok=True)
+        with open(CFG.event_log_file, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except Exception:
+        pass
+
+
 _TIMEOUT_HINT = (
     "the engine may STILL be executing this command - a client timeout is "
     "not an abort. Poll ecockpit_server_status: 'in_flight' shows what the "
@@ -421,8 +443,10 @@ def _run(cmd, args=None, timeout_s=None):
     try:
         result = _send_command(cmd, args, timeout_s)
     except NotArmedError:
+        _log_event(cmd, "NOT_ARMED")
         return _not_armed_result(cmd)
     except TimeoutError as exc:
+        _log_event(cmd, "TIMEOUT", "after {} s".format(timeout_s))
         return _timeout_result(exc)
     if not result.get("summary_line"):
         result["summary_line"] = "{c} -> {o}".format(
@@ -430,6 +454,8 @@ def _run(cmd, args=None, timeout_s=None):
         )
     if not result.get("ok"):
         result["log_tail"] = _log_tail(result.get("log", ""), 30)
+    _log_event(cmd, "OK" if result.get("ok") else "FAILED",
+               result.get("error", "") or result.get("summary_line", ""))
     return result
 
 
@@ -520,8 +546,10 @@ async def _run_async(cmd, args=None, timeout_s=None, ctx=None, **poll_kwargs):
     try:
         result = await _send_command_async(cmd, args, timeout_s, ctx, **poll_kwargs)
     except NotArmedError:
+        _log_event(cmd, "NOT_ARMED")
         return _not_armed_result(cmd)
     except TimeoutError as exc:
+        _log_event(cmd, "TIMEOUT", "after {} s".format(timeout_s))
         return _timeout_result(exc)
     if not result.get("summary_line"):
         result["summary_line"] = "{c} -> {o}".format(
@@ -529,6 +557,8 @@ async def _run_async(cmd, args=None, timeout_s=None, ctx=None, **poll_kwargs):
         )
     if not result.get("ok"):
         result["log_tail"] = _log_tail(result.get("log", ""), 30)
+    _log_event(cmd, "OK" if result.get("ok") else "FAILED",
+               result.get("error", "") or result.get("summary_line", ""))
     return result
 
 
@@ -719,14 +749,39 @@ def ecockpit_status() -> str:
 
 @mcp.tool(
     structured_output=False,
-    description="Read one variable ONLINE from the live PLC (logs in with "
-    ".env PLC credentials, then disconnects). Path is the "
-    "application-relative symbol, e.g. GVLName.Variable.",
+    description="Read ONE variable ONLINE from the live PLC. Path is "
+    "the application-relative symbol, e.g. GVLName.Variable. The "
+    "login session stays OPEN after the read (flag in "
+    "ecockpit_server_status 'plc' section) and is reused by the next "
+    "read - no logout ladder per call. Logout with "
+    "ecockpit_disconnect; any write/deploy logs the session out "
+    "first automatically. For several variables at once use "
+    "ecockpit_read_batch (one login, N values).",
 )
 def ecockpit_read(variable: str, device: str = "") -> str:
     if not variable:
         raise ToolError("variable path is required, e.g. 'GVLName.Variable'")
-    args: dict[str, object] = {"path": variable}
+    args: dict[str, object] = {"path": variable.strip(), "keep": True}
+    if device:
+        args["device"] = device
+    return json.dumps(_run("read", args), indent=2)
+
+
+@mcp.tool(
+    structured_output=False,
+    description="Read SEVERAL variables ONLINE from the live PLC with "
+    "ONE login session (read_batch). variables is a list of "
+    "application-relative paths, e.g. ['GVLMqtt.a', 'GVLMqtt.b']. "
+    "Returns {values: {...}, errors: {...}} - per-variable errors do "
+    "not abort the batch. The login stays OPEN and is reused by the "
+    "next read/read_batch; logout with ecockpit_disconnect.",
+)
+def ecockpit_read_batch(variables: list, device: str = "") -> str:
+    paths = [str(p).strip() for p in variables if str(p).strip()]
+    if not paths:
+        raise ToolError("variables must be a non-empty list, e.g. "
+                        "['GVLName.Variable']")
+    args: dict[str, object] = {"path": paths, "keep": True}
     if device:
         args["device"] = device
     return json.dumps(_run("read", args), indent=2)
@@ -1089,8 +1144,9 @@ async def ecockpit_snapshot(version: str = "", ctx: Context | None = None) -> st
 @mcp.tool(
     structured_output=False,
     description="Log out of the PLC (releases the login that blocks XML "
-    "imports). force=true uses forced_disconnect when a plain "
-    "logout hangs.",
+    "imports, and ends the session a keep-login read left OPEN - "
+    "ecockpit_read/read_batch reuse it until you call this). "
+    "force=true uses forced_disconnect when a plain logout hangs.",
 )
 def ecockpit_disconnect(force: bool = False) -> str:
     return json.dumps(_run("disconnect", {"force": bool(force)}), indent=2)

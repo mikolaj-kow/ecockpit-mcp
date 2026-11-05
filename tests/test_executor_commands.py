@@ -1323,11 +1323,43 @@ def test_cmd_read_names_path_on_pointer_failure(monkeypatch):
         ex, "_online_connect", lambda project, args, prefer_keep=False: (dev, app)
     )
     with pytest.raises(RuntimeError) as ei:
-        ex.cmd_read(None, {"path": "GVLEntities.astEntitiesLight[22].pAutomationCfg"})
+        ex.cmd_read(None, {"path": "GVLEntities.astEntitiesLight[22].pAutomationCfg",
+                           "keep": False})
     assert "pAutomationCfg" in str(ei.value)
     assert "Invalid pointer size" in str(ei.value)
     assert "pointee" in str(ei.value)
-    assert dev.disconnects == 1  # finally still tears the session down
+    assert dev.disconnects == 1  # keep=false: finally tears the session down
+
+
+def test_cmd_read_keep_true_leaves_session_open(monkeypatch):
+    # 2026-11-05: reads KEEP the login open by default (session-scoped
+    # cache in _LOGIN_CACHE) - logout happens via cmd_disconnect, or
+    # implicitly before the next non-keep online command. keep=false
+    # restores the old login+logout-per-read behavior.
+    class FakeDev(object):
+        def __init__(self):
+            self.disconnects = 0
+
+        def disconnect(self):
+            self.disconnects += 1
+
+    class FakeApp(object):
+        def read_value(self, path):
+            return "42"
+
+    dev, app = FakeDev(), FakeApp()
+    monkeypatch.setattr(
+        ex, "_online_connect", lambda project, args, prefer_keep=False: (dev, app)
+    )
+    ex._LOGIN_CACHE.clear()
+    assert ex.cmd_read(None, {"path": "GVL.X"}) == "42"
+    assert dev.disconnects == 0
+    assert ex._LOGIN_CACHE["entry"]["device"] is dev
+    # keep=false clears nothing new but must not cache either
+    ex._LOGIN_CACHE.clear()
+    ex.cmd_read(None, {"path": "GVL.X", "keep": False})
+    assert dev.disconnects == 1
+    assert "entry" not in ex._LOGIN_CACHE
 
 
 def test_cmd_read_non_pointer_failure_keeps_engine_message(monkeypatch):

@@ -394,6 +394,18 @@ PROJECT_ROOT   = _cfg("ECP_PROJECT_ROOT", "")
 ACTIVE_PROJECT = _active_project()
 _apply_active_project(ACTIVE_PROJECT)
 
+# Session login cache: survives per-command execs inside ONE armed relay
+# session (the relay execs executor.py into its own globals, so the
+# guarded fetch below keeps the previous command's entry). Holds the
+# onlineapp/device of a keep-login read so batch and follow-up reads
+# reuse ONE login instead of a full login ladder each time. Single
+# slot: one GUI, one primary project, one login. Cleared by an explicit
+# disconnect and by any non-keep online command (fresh ladder first).
+# A relay re-arm starts a new engine: the cache is empty then and the
+# kept login is reachable only via disconnect (forced_logout).
+_LOGIN_CACHE = globals().get("_LOGIN_CACHE") or {}
+globals()["_LOGIN_CACHE"] = _LOGIN_CACHE
+
 DEFAULT_XML    = os.path.join(PROJECT_ROOT, "plcopensrc") if PROJECT_ROOT else ""
 
 # Appended to every escalated login failure. Worded conditionally on
@@ -2364,6 +2376,16 @@ def _note_plc(ok, detail, device=None):
         log("INFO", "plc-state sidecar write failed: {e}".format(e=exc))
 
 
+def _login_key(project, args):
+    """Identity of a login slot: open project + device name."""
+    try:
+        pp = project.primary_project
+        root = str(getattr(pp, "path", "") or getattr(pp, "project_path", ""))
+    except Exception:
+        root = ""
+    return (root, args.get("device", ""))
+
+
 def _online_connect(project, args, prefer_keep=False):
     """Connect to the PLC (login) and return (device, onlineapp).
 
@@ -2375,7 +2397,28 @@ def _online_connect(project, args, prefer_keep=False):
     changes or downloading. WARNING: even a Try login applies online
     changes (code deltas) when the open project differs from the PLC -
     treat deploying commands as potentially deploying.
+
+    Keep-login protocol (args.keep): a read that logs in leaves the
+    session OPEN and caches it in _LOGIN_CACHE; the next keep-read
+    reuses it (no ladder at all). Any non-keep online command logs the
+    kept session out first so a fresh ladder never collides with a
+    live login. Logout: ecockpit_disconnect (clears the cache too).
     """
+    key = _login_key(project, args)
+    entry = _LOGIN_CACHE.get("entry")
+    keep = bool(args.get("keep"))
+    if entry is not None:
+        if keep and entry.get("key") == key:
+            log("INFO", "reusing kept login session (no ladder)")
+            _note_plc(True, "reused kept login session", entry["device"])
+            return entry["device"], entry["onlineapp"]
+        # Stale slot (different project/device) or a deploying command:
+        # log the kept session out BEFORE a fresh ladder - a second
+        # login while one is live is exactly the modal/wedge scenario.
+        log("INFO", "logging out kept session first ({r})".format(
+            r="project/device changed" if keep else "non-keep command"))
+        _online_disconnect(entry["device"])
+        _LOGIN_CACHE.clear()
     if prefer_keep:
         # LIVE 2026-10-22 (G-27): with a pending change, login(Keep) on
         # this build ATTEMPTS A DOWNLOAD anyway (stub semantics not
@@ -2409,7 +2452,9 @@ def _online_connect(project, args, prefer_keep=False):
         _note_plc(False, "{c}: {m}".format(
             c=type(exc).__name__, m=str(exc)[:160]), device)
         raise
-    _note_plc(True, "logged in via {v}".format(v=via), device)
+    _note_plc(True, "logged in via {v}{k}".format(
+        v=via, k="; login KEPT OPEN (session-scoped, args.keep)"
+        if keep else ""), device)
     return device, onlineapp
 
 
@@ -2506,33 +2551,71 @@ def cmd_status(project):
 
 
 def cmd_read(project, args):
-    """Read one variable online and return its string value."""
-    path = args.get("path", "")
-    if not path:
+    """Read variable(s) online and return their string value(s).
+
+    args.path is one application-relative symbol path, a list of paths,
+    or a dict of {path: label}. A multi-read shares ONE login across
+    all paths. args.keep (default True for reads): the login stays OPEN
+    after the read and is REUSED by the next keep-read - logout only
+    via ecockpit_disconnect, or implicitly before the next non-keep
+    online command (write/download). Set keep=false to force the old
+    login+logout-per-read behavior."""
+    raw = args.get("path", "")
+    if isinstance(raw, dict):
+        paths = list(raw.keys())
+    elif isinstance(raw, list):
+        paths = list(raw)
+    else:
+        paths = [raw]
+    paths = [p.strip() for p in paths if isinstance(p, str) and p.strip()]
+    if not paths:
         raise RuntimeError("read needs args.path, e.g. "
                            "{\"path\": \"GVLName.Variable\"}")
+    keep = bool(args.get("keep", True))
     device, onlineapp = _online_connect(project, args, prefer_keep=True)
     try:
-        value = onlineapp.read_value(path)
-        log("OK", "read {p} = {v}".format(p=path, v=value))
-        return str(value)
-    except Exception as exc:  # StandardError on the IronPython relay
-        # LIVE 2026-10-24: the engine raises 'Invalid pointer size.'
-        # during symbol resolution for POINTER/REFERENCE TO paths
-        # (e.g. stLightEntity.pAutomationCfg) - name the path, or the
-        # failure is undiagnosable once the per-command log rotates.
-        msg = str(exc)
-        hint = ""
-        if "Invalid pointer size" in msg:
-            hint = (" - pointer/REFERENCE-typed symbols cannot be "
-                    "returned by read_value; read the pointee variable "
-                    "or a value-typed member instead")
-        log("ERROR", "read_value failed for '{p}': {m}{h}".format(
-            p=path, m=msg, h=hint))
-        raise RuntimeError("read_value failed for '{p}': {m}{h}".format(
-            p=path, m=msg, h=hint))
+        values = {}
+        errors = {}
+        for p in paths:
+            try:  # StandardError on the IronPython relay
+                values[p] = str(onlineapp.read_value(p))
+                log("OK", "read {p} = {v}".format(p=p, v=values[p]))
+            except Exception as exc:
+                # LIVE 2026-10-24: the engine raises 'Invalid pointer
+                # size.' during symbol resolution for POINTER/REFERENCE
+                # TO paths (e.g. stLightEntity.pAutomationCfg) - name
+                # the path, or the failure is undiagnosable once the
+                # per-command log rotates.
+                msg = str(exc)
+                hint = ""
+                if "Invalid pointer size" in msg:
+                    hint = (" - pointer/REFERENCE-typed symbols cannot "
+                            "be returned by read_value; read the "
+                            "pointee variable or a value-typed member "
+                            "instead")
+                errors[p] = "{m}{h}".format(m=msg, h=hint)
+                log("ERROR", "read_value failed for '{p}': {e}".format(
+                    p=p, e=errors[p]))
+        if len(paths) == 1:
+            if errors:
+                raise RuntimeError(
+                    "read_value failed for '{p}': {m}".format(
+                        p=paths[0], m=errors[paths[0]]))
+            result = values[paths[0]]
+        else:
+            result = json.dumps({"values": values, "errors": errors},
+                                indent=2, sort_keys=True)
+        if keep:
+            _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
+                                     "device": device,
+                                     "onlineapp": onlineapp}
+            _note_plc(True, "login kept open after read "
+                            "(session-scoped; logout via disconnect)",
+                      device)
+        return result
     finally:
-        _online_disconnect(device)
+        if not keep:
+            _online_disconnect(device)
 
 
 def cmd_download(project, args):
@@ -2554,7 +2637,9 @@ def cmd_download(project, args):
 
 
 def cmd_disconnect(project, args):
-    """Explicit logout from the PLC."""
+    """Explicit logout from the PLC. Also drops the kept-login cache so
+    the next read does a fresh ladder instead of reusing a dead session."""
+    _LOGIN_CACHE.clear()
     device = get_device(project, args.get("device", ""))
     if args.get("force"):
         try:

@@ -41,7 +41,7 @@ def isolated_work_dir(monkeypatch, tmp_path):
 
 def test_no_tool_advertises_structured_output():
     tools = srv.mcp._tool_manager._tools
-    assert len(tools) == 54
+    assert len(tools) == 55
     offenders = sorted(
         name for name, tool in tools.items() if tool.output_schema is not None
     )
