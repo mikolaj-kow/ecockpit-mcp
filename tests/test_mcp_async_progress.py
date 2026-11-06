@@ -132,7 +132,7 @@ def test_long_tools_are_async_with_progress_param():
         "ecockpit_plc_rm",
         "ecockpit_plc_fs_ops",
         "ecockpit_upload_source",
-        "ecockpit_download",
+        "download",
         "ecockpit_source_download",
         "ecockpit_symbol_config_variables",
         "ecockpit_symbol_config_options",

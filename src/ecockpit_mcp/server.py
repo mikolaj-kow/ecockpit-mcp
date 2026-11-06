@@ -1341,7 +1341,7 @@ async def ecockpit_upload_source(
     "open project, and starts it. Pass confirm=true, never "
     "without an explicit owner instruction.",
 )
-async def ecockpit_download(
+async def download(
     mode: str = "auto",
     boot: bool = False,
     confirm: bool = False,
@@ -1385,7 +1385,7 @@ async def ecockpit_download(
     "logout with ecockpit_disconnect. Pass confirm=true, never "
     "without an explicit owner instruction.",
 )
-async def ecockpit_download_online(
+async def download_online(
     boot: bool = False,
     confirm: bool = False,
     timeout_s: int = 600,
@@ -1424,7 +1424,7 @@ async def ecockpit_download_online(
     "image (default: skipped). Always a fresh login ladder. Pass "
     "confirm=true, never without an explicit owner instruction.",
 )
-async def ecockpit_download_full(
+async def download_full(
     boot: bool = False,
     confirm: bool = False,
     timeout_s: int = 600,

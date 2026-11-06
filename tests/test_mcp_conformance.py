@@ -180,7 +180,7 @@ async def test_call_tool_offline_status_and_refusal_shapes(monkeypatch, tmp_path
 
         # a refused destructive call is DATA (isError stays false), so
         # agents can read the refusal instead of a protocol exception
-        result = await session.call_tool("ecockpit_download", {})
+        result = await session.call_tool("download", {})
         assert result.is_error is False
         refusal = json.loads(result.content[0].text)
         assert refusal["refused"] is True

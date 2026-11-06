@@ -25,7 +25,7 @@ def test_expected_tools_registered():
         "ecockpit_build",
         "ecockpit_read",
         "ecockpit_write",
-        "ecockpit_download",
+        "download",
         "ecockpit_login",
         "ecockpit_source_download",
         "ecockpit_prepared_values",

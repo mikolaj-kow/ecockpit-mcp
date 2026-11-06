@@ -26,9 +26,9 @@ from ecockpit_mcp import server as srv
 # confirm-gate refusal instead of arg assembly
 GATED_ON_MINIMAL_CALL = (
     "ecockpit_write",
-    "ecockpit_download",
-    "ecockpit_download_online",
-    "ecockpit_download_full",
+    "download",
+    "download_online",
+    "download_full",
     "ecockpit_login",
     "ecockpit_source_download",
     "ecockpit_stop",
