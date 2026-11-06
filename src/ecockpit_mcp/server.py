@@ -1336,14 +1336,16 @@ async def ecockpit_upload_source(
     annotations=ToolAnnotations(
         destructive_hint=True, read_only_hint=False, open_world_hint=True
     ),
-    description="DESTRUCTIVE - requires explicit owner request. Logs into "
-    "the live PLC, replaces the RUNNING application with the "
-    "open project, and starts it. Pass confirm=true, never "
+    description="DESTRUCTIVE - requires explicit owner request. Plain FULL "
+    "download: logs into the live PLC, replaces the RUNNING "
+    "application with the open project, and starts it. Always a "
+    "fresh login ladder; boot=true (default) also updates the boot "
+    "image; logs out afterwards. For a partial deploy (code deltas "
+    "only) use ecockpit_download_online. Pass confirm=true, never "
     "without an explicit owner instruction.",
 )
 async def ecockpit_download(
-    mode: str = "auto",
-    boot: bool = False,
+    boot: bool = True,
     confirm: bool = False,
     timeout_s: int = 600,
     ctx: Context | None = None,
@@ -1353,16 +1355,15 @@ async def ecockpit_download(
             {
                 "ok": False,
                 "refused": True,
-                "error": "download refused - it deploys the open project "
-                "to the PLC (online change or full download per "
-                "mode); call again with confirm=true only on an "
-                "explicit owner request",
+                "error": "download refused - it REPLACES the running PLC "
+                "application (full download + start); call again with "
+                "confirm=true only on an explicit owner request",
             },
             indent=2,
         )
     return json.dumps(
         await _run_async(
-            "download", {"mode": mode, "boot": bool(boot), "confirm": True},
+            "download", {"mode": "full", "boot": bool(boot), "confirm": True},
             timeout_s, ctx,
         ),
         indent=2,
@@ -1405,45 +1406,6 @@ async def ecockpit_download_online(
     return json.dumps(
         await _run_async(
             "download", {"mode": "online", "boot": bool(boot),
-                         "confirm": True},
-            timeout_s, ctx,
-        ),
-        indent=2,
-    )
-
-
-@mcp.tool(
-    structured_output=False,
-    annotations=ToolAnnotations(
-        destructive_hint=True, read_only_hint=False, open_world_hint=True
-    ),
-    description="DESTRUCTIVE - requires explicit owner request. FULL "
-    "deploy: login(OnlineChangeOption.Never) (full download forced), "
-    "replaces the running application entirely, starts it afterwards "
-    "(device.start), then logs out. boot=true also updates the boot "
-    "image (default: skipped). Always a fresh login ladder. Pass "
-    "confirm=true, never without an explicit owner instruction.",
-)
-async def ecockpit_download_full(
-    boot: bool = False,
-    confirm: bool = False,
-    timeout_s: int = 600,
-    ctx: Context | None = None,
-) -> str:
-    if not confirm:
-        return json.dumps(
-            {
-                "ok": False,
-                "refused": True,
-                "error": "download_full refused - it REPLACES the running "
-                "PLC application (full download + start); call again "
-                "with confirm=true only on an explicit owner request",
-            },
-            indent=2,
-        )
-    return json.dumps(
-        await _run_async(
-            "download", {"mode": "full", "boot": bool(boot),
                          "confirm": True},
             timeout_s, ctx,
         ),
