@@ -64,7 +64,7 @@ async def main():
             names = sorted(t.name for t in tools.tools)
             print("[smoke] tools ({}): {}".format(len(names), ", ".join(names)))
 
-            res = await session.call_tool("ecockpit_server_status", {})
+            res = await session.call_tool("server_status", {})
             status = json.loads(res.content[0].text)
             print(
                 "[smoke] armed={} heartbeat_age_s={}".format(
@@ -72,7 +72,7 @@ async def main():
                 )
             )
 
-            res = await session.call_tool("ecockpit_download", {})
+            res = await session.call_tool("download", {})
             refused = json.loads(res.content[0].text)
             print(
                 "[smoke] download refused without confirm: {}".format(
@@ -80,7 +80,7 @@ async def main():
                 )
             )
 
-            res = await session.call_tool("ecockpit_write", {"values": {"GVL.x": True}})
+            res = await session.call_tool("write", {"values": {"GVL.x": True}})
             refused = json.loads(res.content[0].text)
             print(
                 "[smoke] write refused without confirm: {}".format(
@@ -92,7 +92,7 @@ async def main():
                 print("[smoke] server not armed - skipping build test")
                 return
 
-            res = await session.call_tool("ecockpit_clear_messages", {})
+            res = await session.call_tool("clear_messages", {})
             print(
                 "[smoke] clear_messages ok={}".format(
                     json.loads(res.content[0].text).get("ok")
@@ -100,7 +100,7 @@ async def main():
             )
 
             try:
-                res = await session.call_tool("ecockpit_state", {})
+                res = await session.call_tool("state", {})
                 st = json.loads(res.content[0].text)
                 print(
                     "[smoke] state ok={} value={}".format(st.get("ok"), st.get("value"))
@@ -109,8 +109,8 @@ async def main():
                 print(
                     "[smoke] state failed (PLC reachable?): {e}".format(e=str(exc)[:80])
                 )
-            print("[smoke] calling ecockpit_build (this compiles, ~30-60 s)...")
-            res = await session.call_tool("ecockpit_build", {"timeout_s": 900})
+            print("[smoke] calling build (this compiles, ~30-60 s)...")
+            res = await session.call_tool("build", {"timeout_s": 900})
             data = json.loads(res.content[0].text)
             print(
                 "[smoke] build ok={} summary={!r} errors={} warnings={}".format(

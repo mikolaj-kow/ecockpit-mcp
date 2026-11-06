@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """MCP wire-envelope contract: results are TEXT-ONLY, plus the PLC status
-section of ecockpit_server_status.
+section of server_status.
 
 Every tool returns a JSON string with structured_output=False, so the SDK
 must ship exactly one TextContent and NO structuredContent / outputSchema.
@@ -49,7 +49,7 @@ def test_no_tool_advertises_structured_output():
 
 
 def test_wire_result_is_text_only():
-    result = asyncio.run(srv.mcp.call_tool("ecockpit_server_status", {}))
+    result = asyncio.run(srv.mcp.call_tool("server_status", {}))
     assert result.structured_content is None
     assert len(result.content) == 1
     assert isinstance(result.content[0], TextContent)
@@ -59,7 +59,7 @@ def test_wire_result_is_text_only():
 
 
 # ---------------------------------------------------------------------------
-# ecockpit_server_status "plc" section
+# server_status "plc" section
 # ---------------------------------------------------------------------------
 
 
@@ -79,7 +79,7 @@ def test_status_reports_last_attempt_without_probe(tmp_path):
             "detail": "login(Try) failed: Exception: Login failed",
         },
     )
-    payload = json.loads(srv.ecockpit_server_status())
+    payload = json.loads(srv.server_status())
     last = payload["plc"]["last_attempt"]
     assert last["online"] is False
     assert "Login failed" in last["detail"]
@@ -89,7 +89,7 @@ def test_status_reports_last_attempt_without_probe(tmp_path):
 
 
 def test_status_without_sidecar_reports_nulls(tmp_path):
-    payload = json.loads(srv.ecockpit_server_status())
+    payload = json.loads(srv.server_status())
     assert payload["plc"] == {"last_attempt": None, "probe": None}
 
 
@@ -109,7 +109,7 @@ def test_status_probe_online(monkeypatch, tmp_path):
                 "detail": "logged in",
             },
         )
-        payload = json.loads(srv.ecockpit_server_status())
+        payload = json.loads(srv.server_status())
     finally:
         listener.close()
     probe = payload["plc"]["probe"]
@@ -134,7 +134,7 @@ def test_status_probe_offline(monkeypatch, tmp_path):
             "detail": "login failed",
         },
     )
-    payload = json.loads(srv.ecockpit_server_status())
+    payload = json.loads(srv.server_status())
     probe = payload["plc"]["probe"]
     assert probe["online"] is False
     assert probe["target"] == "127.0.0.1:{p}".format(p=port)

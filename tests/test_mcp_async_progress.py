@@ -119,28 +119,28 @@ def test_long_tools_are_async_with_progress_param():
     # take ctx; everything else stays sync so short ops keep their
     # direct-call shape.
     long_tools = (
-        "ecockpit_build",
-        "ecockpit_import",
-        "ecockpit_compile",
-        "ecockpit_rebuild",
-        "ecockpit_export",
-        "ecockpit_snapshot",
-        "ecockpit_system_ui",
-        "ecockpit_plc_ls",
-        "ecockpit_plc_get",
-        "ecockpit_plc_put",
-        "ecockpit_plc_rm",
-        "ecockpit_plc_fs_ops",
-        "ecockpit_upload_source",
+        "build",
+        "importxml",
+        "compile",
+        "rebuild",
+        "export",
+        "snapshot",
+        "system_ui",
+        "plc_ls",
+        "plc_get",
+        "plc_put",
+        "plc_rm",
+        "plc_fs_ops",
+        "upload_source",
         "download",
-        "ecockpit_source_download",
-        "ecockpit_symbol_config_variables",
-        "ecockpit_symbol_config_options",
-        "ecockpit_device_scan",
-        "ecockpit_device_io",
-        "ecockpit_app_control",
-        "ecockpit_project_control",
-        "ecockpit_object_create",
+        "source_download",
+        "symbol_config_variables",
+        "symbol_config_options",
+        "device_scan",
+        "device_io",
+        "app_control",
+        "project_control",
+        "object_create",
     )
     import inspect
 
@@ -149,11 +149,11 @@ def test_long_tools_are_async_with_progress_param():
         assert inspect.iscoroutinefunction(fn), name + " must be async"
         assert "ctx" in inspect.signature(fn).parameters, name
     for name in (
-        "ecockpit_server_status",
-        "ecockpit_read",
-        "ecockpit_write",
-        "ecockpit_state",
-        "ecockpit_device_info",
+        "server_status",
+        "read",
+        "write",
+        "state",
+        "device_info",
     ):
         assert not inspect.iscoroutinefunction(getattr(srv, name)), (
             name + " should stay sync (short op)"
@@ -161,7 +161,7 @@ def test_long_tools_are_async_with_progress_param():
 
 
 def test_snapshot_tool_binds_ctx_not_timeout(fake_work_dir):
-    # LIVE 2026-10-23 regression: ecockpit_snapshot called
+    # LIVE 2026-10-23 regression: snapshot called
     # _run_async("snapshot", args, ctx) positionally, so the Context
     # landed in timeout_s. The command still reached the engine (the
     # dispatch precedes the deadline math) but the wrapper raised
@@ -172,7 +172,7 @@ def test_snapshot_tool_binds_ctx_not_timeout(fake_work_dir):
     engine.start()
     ctx = RecordingCtx()
     try:
-        result = json.loads(asyncio.run(srv.ecockpit_snapshot(ctx=ctx)))
+        result = json.loads(asyncio.run(srv.snapshot(ctx=ctx)))
     finally:
         engine.join()
     assert result["ok"] is True

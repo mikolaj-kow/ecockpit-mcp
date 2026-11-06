@@ -102,7 +102,7 @@ class Config(object):
     port = int(_cfg("ECP_MCP_PORT", "9777"))
     token = _cfg("ECP_MCP_TOKEN", "")
     transport = "http"
-    # CODESYS V3 runtime port probed by ecockpit_server_status's live
+    # CODESYS V3 runtime port probed by server_status's live
     # reachability check (host-side socket only, never touches the engine).
     plc_probe_port = int(_cfg("ECP_PLC_PROBE_PORT", "") or "2455")
 
@@ -214,7 +214,7 @@ class NotArmedError(RuntimeError):
 class CommandTimeoutError(TimeoutError):
     """TimeoutError carrying the command context for the timeout-as-data
     payload (_timeout_result): the id is how a client that gave up
-    waiting matches the eventual result in ecockpit_server_status."""
+    waiting matches the eventual result in server_status."""
 
     def __init__(self, message, cmd_id, cmd, timeout_s):
         super().__init__(message)
@@ -258,7 +258,7 @@ def _plc_probe(ip):
     """Live TCP reachability of the PLC's CODESYS runtime port.
 
     Host-side socket connect ONLY - it never touches e!COCKPIT or the
-    relay, so unlike ecockpit_state it cannot wedge on an engine dialog.
+    relay, so unlike state it cannot wedge on an engine dialog.
     Reachable port proves the device answers on the network; it does not
     prove a login would succeed (see the build's online-change limitation).
     """
@@ -394,7 +394,7 @@ def _log_event(cmd, outcome, detail=""):
 
 _TIMEOUT_HINT = (
     "the engine may STILL be executing this command - a client timeout is "
-    "not an abort. Poll ecockpit_server_status: 'in_flight' shows what the "
+    "not an abort. Poll server_status: 'in_flight' shows what the "
     "engine is doing now and 'last_result' carries the eventual result "
     "(match by id). Do not retry the command."
 )
@@ -404,7 +404,7 @@ def _not_armed_result(cmd):
     """Structured stand-in for a NotArmedError the tool wrappers must
     never let escape: the SDK would hide the message behind
     'Error executing tool <name>' and log a traceback. Same state that
-    ecockpit_server_status reports as armed:false, as refusal-style
+    server_status reports as armed:false, as refusal-style
     data (isError stays false) so agents can read it."""
     age = _heartbeat_age()
     return {
@@ -420,7 +420,7 @@ def _not_armed_result(cmd):
 def _timeout_result(exc):
     """Structured stand-in for a _send_command timeout. Carries the
     command id so a client that gave up waiting can still find the
-    eventual result via ecockpit_server_status (see _TIMEOUT_HINT)."""
+    eventual result via server_status (see _TIMEOUT_HINT)."""
     return {
         "ok": False,
         "error": "timeout",
@@ -574,14 +574,14 @@ mcp = MCPServer(
         "Scripting -> Execute script file -> relay.py). "
         "Build results include the structured compiler diagnostics "
         "(harvest: C-code, severity, POU, line). Destructive operations "
-        "(ecockpit_download, ecockpit_write, ecockpit_stop, "
-        "ecockpit_login, ecockpit_source_download) touch the RUNNING PLC "
+        "(download, write, stop, "
+        "login, source_download) touch the RUNNING PLC "
         "and are confirm-gated - only call them on an explicit owner "
         "request, with confirm=true. Library-repository mutations "
-        "(ecockpit_lib_uninstall, ecockpit_repo_add/remove/update) change "
+        "(lib_uninstall, repo_add/remove/update) change "
         "machine-wide library state and are confirm-gated the same way; "
-        "ecockpit_libs, "
-        "ecockpit_lib_find and ecockpit_repos are read-only. "
+        "libs, "
+        "lib_find and repos are read-only. "
         "Long-running tools (build/import/compile/rebuild, export, "
         "download/login family, symbol config, device scan, project "
         "lifecycle) emit MCP progress notifications (elapsed vs timeout) "
@@ -600,7 +600,7 @@ mcp = MCPServer(
     "login-ladder outcome) and 'plc.probe' (live host-side TCP probe of "
     "the CODESYS runtime port - cannot wedge the engine).",
 )
-def ecockpit_server_status() -> str:
+def server_status() -> str:
     age = _heartbeat_age()
     armed = age <= 12
     info = {
@@ -637,7 +637,7 @@ def ecockpit_server_status() -> str:
     "how many harvest lines come back inline for big "
     "failures.",
 )
-async def ecockpit_build(
+async def build(
     skip_import: bool = False,
     all_messages: bool = False,
     harvest_lines: int = 60,
@@ -664,7 +664,7 @@ async def ecockpit_build(
     description="Re-import every Application.*.xml into the open e!COCKPIT "
     "project and delete stale POUs - no compile. Takes ~15-30 s.",
 )
-async def ecockpit_import(timeout_s: int = 600, ctx: Context | None = None) -> str:
+async def importxml(timeout_s: int = 600, ctx: Context | None = None) -> str:
     return json.dumps(await _run_async("import", {}, timeout_s, ctx), indent=2)
 
 
@@ -677,7 +677,7 @@ async def ecockpit_import(timeout_s: int = 600, ctx: Context | None = None) -> s
     "plcopensrc source tree only when you intentionally want "
     "to update the sources.",
 )
-async def ecockpit_export(
+async def export(
     dir: str = "", timeout_s: int = 600, ctx: Context | None = None
 ) -> str:
     args: dict[str, object] = {"dir": dir} if dir else {}
@@ -691,7 +691,7 @@ async def ecockpit_export(
     "bypasses). harvest_lines (default 60) raises how many "
     "harvest lines come back inline.",
 )
-async def ecockpit_compile(
+async def compile(
     all_messages: bool = False,
     harvest_lines: int = 60,
     timeout_s: int = 900,
@@ -718,7 +718,7 @@ async def ecockpit_compile(
     "harvest_lines (default 60) raises how many harvest lines "
     "come back inline.",
 )
-async def ecockpit_rebuild(
+async def rebuild(
     all_messages: bool = False,
     harvest_lines: int = 60,
     timeout_s: int = 1200,
@@ -743,7 +743,7 @@ async def ecockpit_rebuild(
     "and where it came from (op=use sidecar or .env) - a "
     "drift vs the open primary is visible here. No PLC login.",
 )
-def ecockpit_status() -> str:
+def status() -> str:
     return json.dumps(_run("status", {}), indent=2)
 
 
@@ -752,13 +752,13 @@ def ecockpit_status() -> str:
     description="Read ONE variable ONLINE from the live PLC. Path is "
     "the application-relative symbol, e.g. GVLName.Variable. The "
     "login session stays OPEN after the read (flag in "
-    "ecockpit_server_status 'plc' section) and is reused by the next "
+    "server_status 'plc' section) and is reused by the next "
     "read - no logout ladder per call. Logout with "
-    "ecockpit_disconnect; any write/deploy logs the session out "
+    "disconnect; any write/deploy logs the session out "
     "first automatically. For several variables at once use "
-    "ecockpit_read_batch (one login, N values).",
+    "read_batch (one login, N values).",
 )
-def ecockpit_read(variable: str, device: str = "") -> str:
+def read(variable: str, device: str = "") -> str:
     if not variable:
         raise ToolError("variable path is required, e.g. 'GVLName.Variable'")
     args: dict[str, object] = {"path": variable.strip(), "keep": True}
@@ -774,9 +774,9 @@ def ecockpit_read(variable: str, device: str = "") -> str:
     "application-relative paths, e.g. ['GVLMqtt.a', 'GVLMqtt.b']. "
     "Returns {values: {...}, errors: {...}} - per-variable errors do "
     "not abort the batch. The login stays OPEN and is reused by the "
-    "next read/read_batch; logout with ecockpit_disconnect.",
+    "next read/read_batch; logout with disconnect.",
 )
-def ecockpit_read_batch(variables: list, device: str = "") -> str:
+def read_batch(variables: list, device: str = "") -> str:
     paths = [str(p).strip() for p in variables if str(p).strip()]
     if not paths:
         raise ToolError("variables must be a non-empty list, e.g. "
@@ -805,12 +805,12 @@ def _iec_literal(value):
     "literals: booleans as true/false, numbers as-is, strings "
     "passed through verbatim (quote STRING values yourself, e.g. "
     "\"'hello'\")). force=true FORCES the values (they stay forced "
-    "until ecockpit_unforce_all - and the session then STAYS OPEN: "
+    "until unforce_all - and the session then STAYS OPEN: "
     "a logout with active forces pops a GUI modal, so "
-    "ecockpit_disconnect unfources first). Pass confirm=true, "
+    "disconnect unfources first). Pass confirm=true, "
     "never without an explicit owner instruction.",
 )
-def ecockpit_write(
+def write(
     values: dict,
     device: str = "",
     force: bool = False,
@@ -845,10 +845,10 @@ def ecockpit_write(
     structured_output=False,
     description="Release ALL forced values on the PLC (unforce_all_values, "
     "reuses the kept login session). Safe direction: restores normal "
-    "variable writes; run this before ecockpit_disconnect when forces "
+    "variable writes; run this before disconnect when forces "
     "are active.",
 )
-def ecockpit_unforce_all(device: str = "") -> str:
+def unforce_all(device: str = "") -> str:
     args: dict[str, object] = {"device": device} if device else {}
     return json.dumps(_run("unforce", args), indent=2)
 
@@ -862,7 +862,7 @@ def ecockpit_unforce_all(device: str = "") -> str:
     "server on a GUI dialog (symptom: heartbeat goes stale, "
     "tools report not-armed until the dialog is dismissed).",
 )
-def ecockpit_state(device: str = "") -> str:
+def state(device: str = "") -> str:
     args: dict[str, object] = {"device": device} if device else {}
     return json.dumps(_run("state", args), indent=2)
 
@@ -872,7 +872,7 @@ def ecockpit_state(device: str = "") -> str:
     description="Dump the message-store category map (scripting API "
     "debugging aid) and the active IGNORE_CODES filter list.",
 )
-def ecockpit_messages() -> str:
+def messages() -> str:
     return json.dumps(_run("messages", {}), indent=2)
 
 
@@ -883,7 +883,7 @@ def ecockpit_messages() -> str:
     "that run's diagnostics (no stale messages from earlier "
     "builds or GUI actions).",
 )
-def ecockpit_clear_messages() -> str:
+def clear_messages() -> str:
     return json.dumps(_run("clear_messages", {}), indent=2)
 
 
@@ -911,9 +911,9 @@ def ecockpit_clear_messages() -> str:
     "{action: start|step|absolute, description, items, "
     "unit, item, completed, absolute_progress} - progress "
     "bar chrome. Modal system.ui dialogs and exit live in "
-    "ecockpit_system_ui (separately confirm-gated).",
+    "system_ui (separately confirm-gated).",
 )
-def ecockpit_system(
+def system(
     op: str = "info",
     value: str = "",
     key: str = "",
@@ -1026,14 +1026,14 @@ def ecockpit_system(
     "multi_line) | query_password | query_credentials "
     "(secret values pass through the result file "
     "unencrypted on this host and are never logged). "
-    "Prefer prompt_answers simulation (ecockpit_system) "
+    "Prefer prompt_answers simulation (system) "
     "for headless runs - ui.* dialogs ignore it. op=exit "
     "{code} SHUTS DOWN e!COCKPIT and the armed relay: "
     "every tool goes dark until you re-arm a fresh GUI "
     "session; expect the call to time out (no result file "
     "is written).",
 )
-async def ecockpit_system_ui(
+async def system_ui(
     op: str,
     method: str = "",
     message: str = "",
@@ -1139,7 +1139,7 @@ async def ecockpit_system_ui(
     "ECP_VERSION_POU source XML > dotted number in the "
     "project filename.",
 )
-async def ecockpit_snapshot(version: str = "", ctx: Context | None = None) -> str:
+async def snapshot(version: str = "", ctx: Context | None = None) -> str:
     args: dict[str, object] = {"version": version} if version else {}
     return json.dumps(await _run_async("snapshot", args, ctx=ctx), indent=2)
 
@@ -1148,10 +1148,10 @@ async def ecockpit_snapshot(version: str = "", ctx: Context | None = None) -> st
     structured_output=False,
     description="Log out of the PLC (releases the login that blocks XML "
     "imports, and ends the session a keep-login read left OPEN - "
-    "ecockpit_read/read_batch reuse it until you call this). "
+    "read/read_batch reuse it until you call this). "
     "force=true uses forced_disconnect when a plain logout hangs.",
 )
-def ecockpit_disconnect(force: bool = False) -> str:
+def disconnect(force: bool = False) -> str:
     return json.dumps(_run("disconnect", {"force": bool(force)}), indent=2)
 
 
@@ -1166,7 +1166,7 @@ def ecockpit_disconnect(force: bool = False) -> str:
     "leaves no W/F, so a later logout is modal-free. Pass "
     "confirm=true, never without an explicit owner instruction.",
 )
-def ecockpit_stop(confirm: bool = False, device: str = "", timeout_s: int = 120) -> str:
+def stop(confirm: bool = False, device: str = "", timeout_s: int = 120) -> str:
     if not confirm:
         return json.dumps(
             {
@@ -1192,7 +1192,7 @@ def ecockpit_stop(confirm: bool = False, device: str = "", timeout_s: int = 120)
     "created by online.create_online_device - the "
     "project-tree device object has no file API.",
 )
-async def ecockpit_plc_ls(
+async def plc_ls(
     directory: str = "/",
     device: str = "",
     timeout_s: int = 300,
@@ -1210,7 +1210,7 @@ async def ecockpit_plc_ls(
     "on the PLC). remote is the PLC path, local the host "
     "destination (overwrites).",
 )
-async def ecockpit_plc_get(
+async def plc_get(
     remote: str,
     local: str,
     device: str = "",
@@ -1235,7 +1235,7 @@ async def ecockpit_plc_get(
     "(overwrites). Pass confirm=true, never without an "
     "explicit owner instruction.",
 )
-async def ecockpit_plc_put(
+async def plc_put(
     local: str,
     remote: str,
     device: str = "",
@@ -1278,7 +1278,7 @@ async def ecockpit_plc_put(
     "file on the PLC file system. Pass confirm=true, never "
     "without an explicit owner instruction.",
 )
-async def ecockpit_plc_rm(
+async def plc_rm(
     remote: str,
     device: str = "",
     confirm: bool = False,
@@ -1311,7 +1311,7 @@ async def ecockpit_plc_rm(
     "recover what is actually running). path defaults to "
     "<work dir>/plc_source_upload.projectarchive.",
 )
-async def ecockpit_upload_source(
+async def upload_source(
     path: str = "",
     device: str = "",
     timeout_s: int = 600,
@@ -1327,7 +1327,7 @@ async def ecockpit_upload_source(
 # NREs ("Object reference not set") in EVERY documented save_archive
 # binding (6 forms probed live 2026-10-21/22, INCLUDING with a saved,
 # named project; see docs/SCRIPTENGINE_API.md and the executor's
-# cmd_save_archive ladder). ecockpit_snapshot is the working backup
+# cmd_save_archive ladder). snapshot is the working backup
 # path. Re-add a tool only once the engine is fixed.
 
 
@@ -1382,7 +1382,7 @@ async def download(
     "applied (never a silent full download). No device.start() - an "
     "online change leaves the application running. boot=true also "
     "updates the boot image (default: skipped). Session stays open; "
-    "logout with ecockpit_disconnect. Pass confirm=true, never "
+    "logout with disconnect. Pass confirm=true, never "
     "without an explicit owner instruction.",
 )
 async def download_online(
@@ -1458,7 +1458,7 @@ async def download_full(
     ),
     description="DESTRUCTIVE - requires explicit owner request. Explicit "
     "login with online-change control; the session STAYS "
-    "open (logout with ecockpit_disconnect). option: 'try' = "
+    "open (logout with disconnect). option: 'try' = "
     "apply online changes if possible, else full download; "
     "'force' = online changes or nothing; 'never' = full "
     "download forced; 'auto' = ladder (Try -> Force -> Never "
@@ -1467,7 +1467,7 @@ async def download_full(
     "confirm=true, never without an explicit owner "
     "instruction.",
 )
-def ecockpit_login(
+def login(
     option: str = "try",
     delete_foreign_apps: bool = False,
     device: str = "",
@@ -1504,12 +1504,12 @@ def ecockpit_login(
     ),
     description="DESTRUCTIVE - requires explicit owner request. Write the "
     "SOURCE project to the PLC (source_download) - unlike "
-    "ecockpit_download this ships the sources, not the "
+    "download this ships the sources, not the "
     "compiled application. Saves the open project first (it "
     "NREs on unsaved changes otherwise). Pass confirm=true, "
     "never without an explicit owner instruction.",
 )
-async def ecockpit_source_download(
+async def source_download(
     confirm: bool = False, timeout_s: int = 300, ctx: Context | None = None
 ) -> str:
     if not confirm:
@@ -1540,7 +1540,7 @@ async def ecockpit_source_download(
     "value, plus the list of currently forced variables "
     "(get_forced_expressions). Read-only.",
 )
-def ecockpit_prepared_values(
+def prepared_values(
     expression: str = "", device: str = "", timeout_s: int = 120
 ) -> str:
     args: dict[str, object] = {}
@@ -1566,7 +1566,7 @@ def ecockpit_prepared_values(
     "textual flags). name filters via project.find; "
     "recursive defaults true; limit default 200.",
 )
-def ecockpit_tree(
+def tree(
     op: str = "list",
     name: str = "",
     new_name: str = "",
@@ -1627,7 +1627,7 @@ def ecockpit_tree(
     "Pass confirm=true, never without an explicit owner "
     "instruction.",
 )
-async def ecockpit_object_create(
+async def object_create(
     kind: str,
     name: str = "",
     parent: str = "",
@@ -1692,7 +1692,7 @@ async def ecockpit_object_create(
     "or implementation (ScriptTextDocument). part selects "
     "one; default returns both. Read-only.",
 )
-def ecockpit_textual_read(name: str, part: str = "", timeout_s: int = 120) -> str:
+def textual_read(name: str, part: str = "", timeout_s: int = 120) -> str:
     if not name:
         raise ToolError("name (object name) required")
     args: dict[str, object] = {"op": "read", "name": name}
@@ -1713,7 +1713,7 @@ def ecockpit_textual_read(name: str, part: str = "", timeout_s: int = 120) -> st
     "confirm=true, never without an explicit owner "
     "instruction.",
 )
-def ecockpit_textual_write(
+def textual_write(
     name: str,
     text: str,
     part: str = "implementation",
@@ -1754,7 +1754,7 @@ def ecockpit_textual_write(
     "with kind, priority, interval, watchdog and assigned "
     "POUs. Read-only.",
 )
-def ecockpit_task_config(application: str = "", timeout_s: int = 120) -> str:
+def task_config(application: str = "", timeout_s: int = 120) -> str:
     args: dict[str, object] = {}
     if application:
         args["application"] = application
@@ -1775,7 +1775,7 @@ def ecockpit_task_config(application: str = "", timeout_s: int = 120) -> str:
     "the next build. Pass confirm=true, never without an "
     "explicit owner instruction.",
 )
-def ecockpit_task_create(
+def task_create(
     application: str,
     name: str,
     kind: str = "cyclic",
@@ -1835,7 +1835,7 @@ def ecockpit_task_create(
     "symbol configuration object must exist (ecockpit_"
     "symbol_config_create).",
 )
-async def ecockpit_symbol_config_variables(
+async def symbol_config_variables(
     application: str = "",
     compile: bool = True,
     timeout_s: int = 900,
@@ -1858,7 +1858,7 @@ async def ecockpit_symbol_config_variables(
     "project. Pass confirm=true, never without an explicit "
     "owner instruction.",
 )
-def ecockpit_symbol_config_create(
+def symbol_config_create(
     application: str = "",
     export_comments: bool = False,
     support_opc_ua: bool = True,
@@ -1905,9 +1905,9 @@ def ecockpit_symbol_config_create(
     "the symbol configuration XML schema for THIS release "
     "to a file (default <ECP_PROJECT_ROOT>/plcopensrc-export/"
     "Symbolconfiguration.xsd). The symbol configuration "
-    "object must exist (ecockpit_symbol_config_create).",
+    "object must exist (symbol_config_create).",
 )
-async def ecockpit_symbol_config_options(
+async def symbol_config_options(
     op: str = "config",
     application: str = "",
     content_feature_flags: str = "",
@@ -1980,7 +1980,7 @@ async def ecockpit_symbol_config_options(
     "CODESYS address from an IP via find_address_by_ip. "
     "Read-only.",
 )
-async def ecockpit_device_scan(
+async def device_scan(
     op: str = "gateways",
     gateway: str = "",
     ip: str = "",
@@ -2013,7 +2013,7 @@ async def ecockpit_device_scan(
     "an IP via a gateway (modifies the project device "
     "configuration).",
 )
-def ecockpit_device_comm(
+def device_comm(
     op: str = "get",
     device: str = "",
     gateway: str = "",
@@ -2076,7 +2076,7 @@ def ecockpit_device_comm(
     "enable_diagnosis, show_io_warnings_as_errors; "
     "read-back included.",
 )
-def ecockpit_device_info(
+def device_info(
     op: str = "identification",
     device: str = "",
     enabled: bool = False,
@@ -2168,7 +2168,7 @@ def ecockpit_device_info(
     "confirm}: DESTRUCTIVE - import IO mappings from a CSV "
     "(modifies the IO configuration).",
 )
-async def ecockpit_device_io(
+async def device_io(
     op: str = "mappings",
     device: str = "",
     connector_id: int | None = None,
@@ -2247,7 +2247,7 @@ async def ecockpit_device_io(
     "struct parameters take element. Write requires "
     "confirm=true on an explicit owner request.",
 )
-def ecockpit_device_params(
+def device_params(
     op: str = "list",
     device: str = "",
     name: str = "",
@@ -2311,7 +2311,7 @@ def ecockpit_device_params(
     "(matches what runs on the PLC) and "
     "is_online_change_possible.",
 )
-def ecockpit_app_status(application: str = "", timeout_s: int = 120) -> str:
+def app_status(application: str = "", timeout_s: int = 120) -> str:
     args: dict[str, object] = {"op": "status"}
     if application:
         args["application"] = application
@@ -2333,7 +2333,7 @@ def ecockpit_app_status(application: str = "", timeout_s: int = 120) -> str:
     "modify or touch the PLC/project; pass confirm=true, "
     "never without an explicit owner instruction.",
 )
-async def ecockpit_app_control(
+async def app_control(
     op: str,
     application: str = "",
     path: str = "",
@@ -2391,7 +2391,7 @@ async def ecockpit_app_control(
     "These swap or mutate the GUI's project session or the "
     "executor's active-project config.",
 )
-async def ecockpit_project_control(
+async def project_control(
     op: str,
     path: str = "",
     root: str = "",
@@ -2497,7 +2497,7 @@ async def ecockpit_project_control(
     "deletes recursively). ls needs no confirm; the others "
     "never without an explicit owner instruction.",
 )
-async def ecockpit_plc_fs_ops(
+async def plc_fs_ops(
     op: str,
     remote: str,
     new_name: str = "",
@@ -2606,8 +2606,8 @@ async def ecockpit_resource_textual(name: str) -> str:
 
 @mcp.prompt(
     name="diagnose-failed-build",
-    description="Structured diagnosis pass for a failed ecockpit_build / "
-    "ecockpit_compile / ecockpit_rebuild result. Paste the tool's JSON "
+    description="Structured diagnosis pass for a failed build / "
+    "compile / rebuild result. Paste the tool's JSON "
     "output as build_result (or leave empty for the generic checklist).",
 )
 def diagnose_failed_build(build_result: str = "") -> list:
@@ -2617,21 +2617,21 @@ def diagnose_failed_build(build_result: str = "") -> list:
         "line). Group the entries by C-code before reading anything "
         "else - one root cause usually repeats.\n"
         "2. Check the IGNORE_CODES filter: the result was filtered by "
-        "default. Re-run with all_messages=true (ecockpit_compile or "
-        "ecockpit_build) before concluding an error list is complete - "
+        "default. Re-run with all_messages=true (compile or "
+        "build) before concluding an error list is complete - "
         "a filtered C-code can still be the real cause.\n"
         "3. C0106 'out of global data memory' on grown GVL arrays is an "
-        "incremental-build artifact: use ecockpit_rebuild (scripted "
+        "incremental-build artifact: use rebuild (scripted "
         "Build -> Clean), not another compile.\n"
         "4. Empty harvest but ok=false: the failure is NOT a compile "
         "error. Read log_tail for the import step (XML parse, "
-        "REMOVED_POUS) and check ecockpit_messages for engine-level "
+        "REMOVED_POUS) and check messages for engine-level "
         "messages; a stale message store hides causes - "
-        "ecockpit_clear_messages, then compile again.\n"
+        "clear_messages, then compile again.\n"
         "5. For errors in a specific POU, read the ST source "
         "(ecockpit://project/textual/{name} resource or "
-        "ecockpit_textual_read), fix with ecockpit_textual_write / "
-        "ecockpit_object_create (both confirm-gated - owner request "
+        "textual_read), fix with textual_write / "
+        "object_create (both confirm-gated - owner request "
         "first), then rebuild.\n"
         "6. Report: root-cause C-codes, the POUs/lines involved, whether "
         "IGNORE_CODES filtered anything, and the exact next command you "
@@ -2642,8 +2642,8 @@ def diagnose_failed_build(build_result: str = "") -> list:
         user_text = checklist + "\nFailed build result (JSON):\n" + build_result
     else:
         user_text = (
-            checklist + "\nNo build result was pasted. Run ecockpit_build (or "
-            "ecockpit_compile with all_messages=true) first, then apply "
+            checklist + "\nNo build result was pasted. Run build (or "
+            "compile with all_messages=true) first, then apply "
             "this checklist to its JSON output."
         )
     return [{"role": "user", "content": user_text}]
@@ -2772,7 +2772,7 @@ def _run_http():
     "paged (limit default 200, 0 = unlimited). The result "
     "carries total/offset/count/truncated for walking pages.",
 )
-def ecockpit_libs(
+def libs(
     repo: str = "",
     shadowed: bool = False,
     filter: str = "",
@@ -2808,7 +2808,7 @@ def ecockpit_libs(
     "accepts the bare title ('NETWORK' finds 'NETWORK, 1.3.5.3 "
     "(OSCAT)'). repo narrows the search.",
 )
-def ecockpit_lib_find(
+def lib_find(
     name: str, repo: str = "", exact: bool = False, timeout_s: int = 120
 ) -> str:
     if not name:
@@ -2834,7 +2834,7 @@ def ecockpit_lib_find(
     "confirm only on an explicit owner request). Modifies the "
     "machine-wide library repositories, not the open project.",
 )
-def ecockpit_lib_install(
+def lib_install(
     path: str,
     repo: str = "",
     overwrite: bool = False,
@@ -2875,7 +2875,7 @@ def ecockpit_lib_install(
     "one. Pass confirm=true, never without an explicit owner "
     "instruction.",
 )
-def ecockpit_lib_uninstall(
+def lib_uninstall(
     name: str, repo: str = "", confirm: bool = False, timeout_s: int = 120
 ) -> str:
     if not name:
@@ -2907,7 +2907,7 @@ def ecockpit_lib_uninstall(
     "name, root folder, editable flag (system repositories "
     "are not), and per-repository library count.",
 )
-def ecockpit_repos(timeout_s: int = 120) -> str:
+def repos(timeout_s: int = 120) -> str:
     return json.dumps(_run("repos", {}, timeout_s), indent=2)
 
 
@@ -2923,7 +2923,7 @@ def ecockpit_repos(timeout_s: int = 120) -> str:
     "confirm=true, never without an explicit owner "
     "instruction.",
 )
-def ecockpit_repo_add(
+def repo_add(
     rootfolder: str,
     name: str,
     index: int = -1,
@@ -2970,7 +2970,7 @@ def ecockpit_repo_add(
     "repositories are not removable. Pass confirm=true, never "
     "without an explicit owner instruction.",
 )
-def ecockpit_repo_remove(
+def repo_remove(
     name: str, delete_on_disk: bool = False, confirm: bool = False, timeout_s: int = 120
 ) -> str:
     if not name:
@@ -3009,7 +3009,7 @@ def ecockpit_repo_remove(
     "missing). Pass confirm=true, never without an explicit "
     "owner instruction.",
 )
-def ecockpit_repo_update(
+def repo_update(
     name: str,
     new_name: str = "",
     new_location: str = "",
@@ -3056,7 +3056,7 @@ def ecockpit_repo_update(
     "repository to the end. Reversible settings change - no "
     "confirm needed.",
 )
-def ecockpit_repo_move(name: str, index: int, timeout_s: int = 120) -> str:
+def repo_move(name: str, index: int, timeout_s: int = 120) -> str:
     if not name:
         raise ToolError("name (repository name) required")
     return json.dumps(

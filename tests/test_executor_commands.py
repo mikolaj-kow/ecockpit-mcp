@@ -384,14 +384,14 @@ def test_save_archive_ladder(tmp_path):
 
     # every form fails -> error lists attempts and points at snapshot
     doomed = FakeArchiveProject([nre, nre, nre])
-    with pytest.raises(RuntimeError, match="ecockpit_snapshot"):
+    with pytest.raises(RuntimeError, match="snapshot"):
         ex.cmd_save_archive(doomed, {"path": str(tmp_path / "c.parch")})
     assert len(doomed.calls) == 3
 
     # a form that returns without writing the file is not trusted
     liar = FakeArchiveProject([None])
     liar.save_archive = lambda *a: None
-    with pytest.raises(RuntimeError, match="ecockpit_snapshot"):
+    with pytest.raises(RuntimeError, match="snapshot"):
         ex.cmd_save_archive(liar, {"path": str(tmp_path / "d.parch")})
 
 
