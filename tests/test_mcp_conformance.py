@@ -73,7 +73,7 @@ async def test_tools_list_schemas_and_annotations():
         await session.initialize()
         tools = await session.list_tools()
         names = {t.name for t in tools.tools}
-        assert len(names) == 56
+        assert len(names) == 57
         assert "ecockpit_build" in names
         # conformance invariant: every tool annotated destructiveHint
         # carries the confirm gate in its input schema
