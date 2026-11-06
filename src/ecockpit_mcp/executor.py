@@ -406,6 +406,60 @@ _apply_active_project(ACTIVE_PROJECT)
 _LOGIN_CACHE = globals().get("_LOGIN_CACHE") or {}
 globals()["_LOGIN_CACHE"] = _LOGIN_CACHE
 
+
+# Project-tree mutations refuse while a login is live ("Cannot add an
+# object because it affects a device you are currently logged into").
+# None = the whole command mutates; (arg_key, values) = only when that
+# arg picks a mutating op.
+TREE_MUTATION_SPECS = {
+    "build": None,
+    "import": None,
+    "object_create": None,
+    "task_config": None,
+    "textual": ("part", ("write",)),
+    "symbol_config": ("op", ("create", "config_set")),
+    "project_control": ("op", ("create", "open", "open_archive", "close",
+                               "info_set", "use")),
+}
+_NOT_MUTATION = object()
+
+
+def _logout_kept_for_mutation(cmd):
+    """Log the KEPT session out before a project-tree mutation.
+
+    The engine refuses mutations ('affects a device you are currently
+    logged into') while any login is live - including our keep-login
+    read sessions. Explicit logout first, so the mutation runs on a
+    clean project; the next read does a fresh Keep login (and is G-27
+    refused until the change is synced - correct)."""
+    entry = _LOGIN_CACHE.get("entry")
+    if entry is None:
+        return
+    log("INFO", "{c}: logging out the kept session first (project "
+        "mutation needs no live login)".format(c=cmd))
+    _online_disconnect(entry["device"])
+    _LOGIN_CACHE.clear()
+    try:
+        _note_plc(False, "logged out for project mutation ({c})".format(
+            c=cmd), entry["device"])
+    except Exception:
+        pass
+
+
+def _logout_kept_if_mutation(cmd, args):
+    """Dispatch-side gate: logout the kept session only for the
+    commands/ops that actually mutate the project tree
+    (see TREE_MUTATION_SPECS)."""
+    spec = TREE_MUTATION_SPECS.get(cmd, _NOT_MUTATION)
+    if spec is _NOT_MUTATION:
+        return
+    if spec is None:
+        _logout_kept_for_mutation(cmd)
+        return
+    key, values = spec
+    if str(args.get(key, "")) in values:
+        _logout_kept_for_mutation(cmd)
+
 DEFAULT_XML    = os.path.join(PROJECT_ROOT, "plcopensrc") if PROJECT_ROOT else ""
 
 # Appended to every escalated login failure. Worded conditionally on
@@ -6613,6 +6667,10 @@ def run_command(request):
               "log": LOG_FILE}
     _headless_hardening()
     log("INFO", "command '{c}' (id {i}) starting".format(c=cmd, i=rid or "<direct>"))
+    # A live kept login makes the engine REFUSE project-tree mutations
+    # ("affects a device you are currently logged into") - covered
+    # commands drop the session here, before any engine call.
+    _logout_kept_if_mutation(cmd, args)
 
     try:
         if cmd in ("build", "import", "compile", "rebuild"):
@@ -6810,6 +6868,18 @@ def run_command(request):
         summary["ok"] = False
         summary["errors"] += 1
         result["error"] = traceback.format_exc()
+        # Safety net for mutators not covered by TREE_MUTATION_SPECS:
+        # name the fix instead of a bare engine refusal.
+        if "currently logged into" in result["error"]:
+            hint = (
+                "HINT: the engine refuses project mutations while a login "
+                "is live. The kept keep-login session should have been "
+                "dropped automatically for this command - if it was NOT "
+                "(uncovered mutator), call ecockpit_disconnect and retry; "
+                "the mutation then runs on a clean project.")
+            result["error"] = result["error"] + "\n" + hint
+            log("WARN", "live-login refusal on '{c}' - mutation hint "
+                "appended".format(c=cmd))
         log("ERROR", "command '{c}' failed:\n{tb}".format(
             c=cmd, tb=result["error"]))
 

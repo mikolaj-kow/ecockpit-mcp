@@ -1592,6 +1592,49 @@ def test_download_auto_starts_only_on_full_form(monkeypatch):
     assert dev2.starts == 1
 
 
+def _cached_fake_session(monkeypatch, tmp_path):
+    """Put a fake kept session in the cache; return the fake device."""
+    class FakeDev(object):
+        def __init__(self):
+            self.disconnects = 0
+
+        def forced_disconnect(self):
+            self.disconnects += 1
+
+    dev = FakeDev()
+    ex._LOGIN_CACHE["entry"] = {"key": ex._login_key(None, {}),
+                                "device": dev, "onlineapp": object()}
+    monkeypatch.setattr(ex, "PLC_STATE_FILE",
+                        str(tmp_path / "sidecar.json"))
+    return dev
+
+
+def test_mutation_gate_logs_out_kept_session(monkeypatch, tmp_path):
+    # The engine refuses project-tree mutations while a login is live
+    # ('affects a device you are currently logged into') - the gate
+    # drops the kept session for covered commands.
+    dev = _cached_fake_session(monkeypatch, tmp_path)
+    ex._logout_kept_if_mutation("object_create", {})
+    assert dev.disconnects == 1
+    assert "entry" not in ex._LOGIN_CACHE
+
+
+def test_mutation_gate_spares_read_ops(monkeypatch, tmp_path):
+    # textual part=read and symbol_config op=variables are offline-safe -
+    # the kept session must SURVIVE them.
+    dev = _cached_fake_session(monkeypatch, tmp_path)
+    ex._logout_kept_if_mutation("textual", {"part": "read"})
+    ex._logout_kept_if_mutation("symbol_config", {"op": "variables"})
+    ex._logout_kept_if_mutation("project_control", {"op": "info"})
+    ex._logout_kept_if_mutation("read", {})
+    assert "entry" in ex._LOGIN_CACHE
+    assert dev.disconnects == 0
+    # ...while their mutating twins drop it
+    ex._logout_kept_if_mutation("textual", {"part": "write"})
+    assert "entry" not in ex._LOGIN_CACHE
+    assert dev.disconnects == 1
+
+
 def test_cmd_read_non_pointer_failure_keeps_engine_message(monkeypatch):
     class FakeDev(object):
         def disconnect(self):
