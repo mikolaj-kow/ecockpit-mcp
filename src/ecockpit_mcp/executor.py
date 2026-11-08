@@ -4670,6 +4670,79 @@ def _find_candidates(project, name):
     return found
 
 
+def _name_index(project):
+    """lower-name -> [objects] from ONE recursive walk of the Application
+    subtree. Bulk reads used a recursive project.find per object (256 finds
+    over the whole tree in IronPython) which made chunk-64 reads exceed the
+    server's 120 s textual budget right after a build. Python 2-safe."""
+    index = {}
+
+    def _walk(obj):
+        try:
+            n = obj.get_name()
+        except Exception:
+            return
+        if n:
+            index.setdefault(n.lower(), []).append(obj)
+        try:
+            kids = obj.get_children(False)
+        except Exception:
+            kids = None
+        if kids:
+            for k in kids:
+                _walk(k)
+
+    try:
+        apps = project.find("Application", True) or []
+    except Exception:
+        apps = []
+    for app in apps:
+        _walk(app)
+    if not index:
+        # degenerate fallback: walk everything findable top-level
+        try:
+            for o in (project.get_children(True) or []):
+                _walk(o)
+        except Exception:
+            pass
+    return index
+
+
+def _resolve_indexed(index, name, want_decl):
+    """_find_one/_find_textual_obj semantics against a prebuilt index:
+    'parent/child' filters by the direct parent's name, multiple hits prefer
+    one carrying the requested textual part."""
+    flag = ("has_textual_declaration" if want_decl
+            else "has_textual_implementation")
+    if "/" in name:
+        child_name = name.rsplit("/", 1)[1].strip()
+        parent_want = name.rsplit("/", 1)[0].rsplit("/", 1)[-1].strip()
+        candidates = index.get(child_name.lower(), [])
+        hits = [o for o in candidates
+                if _parent_name(o).lower() == parent_want.lower()]
+    else:
+        hits = index.get(name.lower(), [])
+    if not hits:
+        raise RuntimeError('no object named "{n}" in the '
+                           "project".format(n=name))
+    if len(hits) == 1:
+        return hits[0]
+    for o in hits:
+        try:
+            if getattr(o, flag, False):
+                return o
+        except Exception:
+            pass
+    for o in hits:
+        try:
+            if getattr(o, "has_textual_declaration", False) \
+                    or getattr(o, "has_textual_implementation", False):
+                return o
+        except Exception:
+            pass
+    return hits[0]
+
+
 def _find_textual_obj(project, name, want_decl):
     """Resolve an object for a textual read/write and prefer a hit that
     actually carries the requested textual part: task-configuration program
@@ -4988,11 +5061,12 @@ def cmd_textual(project, args):
         # instead of aborting the batch.
         out = {"objects": [], "cmd": "textual", "errors": 0}
         raw = str(args.get("name", ""))
+        index = _name_index(project)  # one tree walk serves the whole batch
         for one in [n.strip() for n in raw.split(",") if n.strip()]:
             item = {"name": one, "declaration": None,
                     "implementation": None, "error": None}
             try:
-                obj = _find_textual_obj(project, one, True)
+                obj = _resolve_indexed(index, one, True)
                 for p, key in (("declaration", "declaration"),
                                ("implementation", "implementation")):
                     try:
