@@ -30,6 +30,7 @@ import os
 import sys
 import time
 import json
+import threading
 import traceback
 
 
@@ -85,10 +86,23 @@ WORK_DIR = os.environ.get("ECP_WORK_DIR", "") \
 CMD_FILE        = os.path.join(WORK_DIR, "ecockpit_cmd.json")
 RESULT_FILE     = os.path.join(WORK_DIR, "ecockpit_cmd_result.json")
 CURRENT_FILE    = os.path.join(WORK_DIR, "ecockpit_current.json")
+WATCH_HUNG_FILE = os.path.join(WORK_DIR, "ecockpit_cmd_hung.json")
 LEGACY_TRIGGER  = os.path.join(WORK_DIR, "build_trigger")
 OLD_WATCH_STOP  = os.path.join(WORK_DIR, "build_watch.stop")
 STOP_FILE       = os.path.join(WORK_DIR, "ecockpit_server.stop")
 HEARTBEAT_FILE  = os.path.join(WORK_DIR, "ecockpit_watch.heartbeat")
+
+# Keeper thread (one per command): the main loop touches the heartbeat
+# only BETWEEN commands, so a long build stalled it (server_status read
+# "not armed" while the engine was busy) and a WEDGED command - a
+# textual exec blocked on the pipe, 2 live GUI incidents - aged the
+# heartbeat exactly the same, indistinguishable. The thread refreshes
+# the heartbeat while a command runs and, past WATCH_HUNG_S without a
+# result, drops WATCH_HUNG_FILE (id-matched into server_status's
+# in_flight). Reads/writes files only: NO system.* scripting calls from
+# a side thread (those stay on the relay's own thread).
+WATCH_POLL_S    = 5.0
+WATCH_HUNG_S    = 300.0
 
 # The executor is bundled with this script (same directory).
 EXEC_SCRIPT     = os.path.join(SCRIPT_DIR, "executor.py")
@@ -210,6 +224,32 @@ def _load_request(path):
         return None
 
 
+def _watch_command(rid, cmd, stop_event):
+    """Per-command keeper thread (daemon): keep the heartbeat fresh while
+    a command executes and mark a past-threshold command as hung.
+
+    Exits within WATCH_POLL_S of stop_event; the hung marker is this
+    thread's own file (the in-flight marker stays owned by the main
+    thread), removed in finally - and once more at relay startup, so a
+    killed relay cannot leave it behind."""
+    started = time.time()
+    warned = False
+    try:
+        while not stop_event.wait(WATCH_POLL_S):
+            _touch(HEARTBEAT_FILE)
+            if not warned and time.time() - started >= WATCH_HUNG_S:
+                warned = True
+                _atomic_write_json(WATCH_HUNG_FILE, {
+                    "id": rid, "cmd": cmd, "ts": started,
+                    "hung_after_s": WATCH_HUNG_S,
+                    "note": "no result after {s:.0f}s - possible wedge "
+                            "(blocked pipe); send NO further commands, "
+                            "poll server_status, recovery per incident "
+                            "record".format(s=time.time() - started)})
+    finally:
+        _rm(WATCH_HUNG_FILE)
+
+
 def _dispatch(request, counter):
     """Run one command and ALWAYS produce a result file + RESULT= log line."""
     rid = request.get("id", "") or "srv-{n}".format(n=counter)
@@ -224,6 +264,11 @@ def _dispatch(request, counter):
                                           "ts": time.time()})
     except Exception as exc:
         _say("writing in-flight marker failed: {e}".format(e=exc))
+    stop_watching = threading.Event()
+    watcher = threading.Thread(target=_watch_command,
+                               args=(rid, cmd, stop_watching))
+    watcher.setDaemon(True)  # py2.7 API; never blocks engine shutdown
+    watcher.start()
     result = None
     log_file = None
     try:
@@ -264,6 +309,7 @@ def _dispatch(request, counter):
         except Exception as exc:
             _say("writing result file failed: {e}".format(e=exc))
         _rm(CURRENT_FILE)  # command no longer in flight
+        stop_watching.set()  # keeper exits within WATCH_POLL_S, cleans its hung marker
     _say("command #{n} done: {c} -> {r}".format(
         n=counter, c=cmd, r=("OK" if result.get("ok") else "FAILED")))
 
@@ -306,6 +352,8 @@ def main_relay():
     _say("command file: {c}".format(c=CMD_FILE))
     _say("result file : {r}".format(r=RESULT_FILE))
     _say("heartbeat   : {h}".format(h=HEARTBEAT_FILE))
+    _say("keeper      : heartbeat refresh per command + hung marker after "
+         "{s:.0f}s ({f})".format(s=WATCH_HUNG_S, f=WATCH_HUNG_FILE))
     _say("stop file   : {s}".format(s=STOP_FILE))
     _say("legacy trigger accepted: {t}".format(t=LEGACY_TRIGGER))
     _say("executor    : {e} (re-executed per command)".format(e=EXEC_SCRIPT))
@@ -313,6 +361,7 @@ def main_relay():
     # A stale in-flight marker means a previous relay died mid-command;
     # a fresh relay starts with nothing running.
     _rm(CURRENT_FILE)
+    _rm(WATCH_HUNG_FILE)
 
     counter = 0
     start = time.time()

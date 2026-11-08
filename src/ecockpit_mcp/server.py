@@ -128,6 +128,13 @@ class Config(object):
         return os.path.join(self.tmp_dir, "ecockpit_current.json")
 
     @property
+    def hung_file(self):
+        # Written by the relay's keeper thread when a command runs past
+        # the hung threshold (possible wedge, 2 live GUI incidents);
+        # id-matched into server_status's in_flight below.
+        return os.path.join(self.tmp_dir, "ecockpit_cmd_hung.json")
+
+    @property
     def heartbeat_file(self):
         return os.path.join(self.tmp_dir, "ecockpit_watch.heartbeat")
 
@@ -308,6 +315,13 @@ def _in_flight_command():
             try:
                 current["age_s"] = round(time.time() - float(current.get("ts", 0)), 1)
             except (TypeError, ValueError):
+                pass
+            try:  # keeper-thread hung marker (id-matched; absent normally)
+                with open(CFG.hung_file, "r", encoding="utf-8") as fh:
+                    hung = json.load(fh)
+                if isinstance(hung, dict) and hung.get("id") == current.get("id"):
+                    current["hung"] = hung
+            except (OSError, ValueError):
                 pass
             return current
     except Exception:
