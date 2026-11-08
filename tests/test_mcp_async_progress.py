@@ -119,28 +119,28 @@ def test_long_tools_are_async_with_progress_param():
     # take ctx; everything else stays sync so short ops keep their
     # direct-call shape.
     long_tools = (
-        "build",
-        "importxml",
-        "compile",
-        "rebuild",
-        "export",
-        "snapshot",
-        "system_ui",
-        "plc_ls",
-        "plc_get",
-        "plc_put",
-        "plc_rm",
-        "plc_fs_ops",
-        "upload_source",
-        "download",
-        "source_download",
-        "symbol_config_variables",
-        "symbol_config_options",
-        "device_scan",
-        "device_io",
-        "app_control",
-        "project_control",
-        "object_create",
+        "ecockpit_build",
+        "ecockpit_importxml",
+        "ecockpit_compile",
+        "ecockpit_rebuild",
+        "ecockpit_export",
+        "ecockpit_snapshot",
+        "ecockpit_system_ui",
+        "ecockpit_plc_ls",
+        "ecockpit_plc_get",
+        "ecockpit_plc_put",
+        "ecockpit_plc_rm",
+        "ecockpit_plc_fs_ops",
+        "ecockpit_upload_source",
+        "ecockpit_download",
+        "ecockpit_source_download",
+        "ecockpit_symbol_config_variables",
+        "ecockpit_symbol_config_options",
+        "ecockpit_device_scan",
+        "ecockpit_device_io",
+        "ecockpit_app_control",
+        "ecockpit_project_control",
+        "ecockpit_object_create",
     )
     import inspect
 
@@ -149,11 +149,11 @@ def test_long_tools_are_async_with_progress_param():
         assert inspect.iscoroutinefunction(fn), name + " must be async"
         assert "ctx" in inspect.signature(fn).parameters, name
     for name in (
-        "server_status",
-        "read",
-        "write",
-        "state",
-        "device_info",
+        "ecockpit_server_status",
+        "ecockpit_read",
+        "ecockpit_write",
+        "ecockpit_state",
+        "ecockpit_device_info",
     ):
         assert not inspect.iscoroutinefunction(getattr(srv, name)), (
             name + " should stay sync (short op)"
@@ -172,7 +172,7 @@ def test_snapshot_tool_binds_ctx_not_timeout(fake_work_dir):
     engine.start()
     ctx = RecordingCtx()
     try:
-        result = json.loads(asyncio.run(srv.snapshot(ctx=ctx)))
+        result = json.loads(asyncio.run(srv.ecockpit_snapshot(ctx=ctx)))
     finally:
         engine.join()
     assert result["ok"] is True

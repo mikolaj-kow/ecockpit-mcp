@@ -41,7 +41,7 @@ def isolated_work_dir(monkeypatch, tmp_path):
 
 def test_no_tool_advertises_structured_output():
     tools = srv.mcp._tool_manager._tools
-    assert len(tools) == 57
+    assert len(tools) == 57 + len(srv.LEGACY_TOOL_ALIASES)
     offenders = sorted(
         name for name, tool in tools.items() if tool.output_schema is not None
     )
@@ -49,7 +49,7 @@ def test_no_tool_advertises_structured_output():
 
 
 def test_wire_result_is_text_only():
-    result = asyncio.run(srv.mcp.call_tool("server_status", {}))
+    result = asyncio.run(srv.mcp.call_tool("ecockpit_server_status", {}))
     assert result.structured_content is None
     assert len(result.content) == 1
     assert isinstance(result.content[0], TextContent)

@@ -73,8 +73,9 @@ async def test_tools_list_schemas_and_annotations():
         await session.initialize()
         tools = await session.list_tools()
         names = {t.name for t in tools.tools}
-        assert len(names) == 57
-        assert "build" in names
+        assert len(names) == 57 + len(srv.LEGACY_TOOL_ALIASES)
+        assert "ecockpit_build" in names
+        assert "build" in names  # deprecated alias stays registered
         # conformance invariant: every tool annotated destructiveHint
         # carries the confirm gate in its input schema
         destructive = [
@@ -138,7 +139,7 @@ async def test_prompts_list_and_get():
         text = message.content.text
         assert "C0072" in text  # the pasted result is embedded
         assert "IGNORE_CODES" in text  # checklist step 2
-        assert "rebuild" in text  # checklist step 3
+        assert "ecockpit_rebuild" in text  # checklist step 3
 
 
 async def test_unarmed_relay_reads_as_data_not_crash(
@@ -153,7 +154,7 @@ async def test_unarmed_relay_reads_as_data_not_crash(
     monkeypatch.setattr(srv.CFG, "work_dir", str(tmp_path))
     async with conformance_session() as session:
         await session.initialize()
-        for name in ("status", "build"):
+        for name in ("ecockpit_status", "ecockpit_build"):
             result = await session.call_tool(name, {})
             assert result.is_error is False, name
             payload = json.loads(result.content[0].text)
@@ -161,7 +162,7 @@ async def test_unarmed_relay_reads_as_data_not_crash(
             assert payload["error"] == "not_armed", name
             assert "relay.py" in payload["hint"], name
             assert payload["cmd"] == (
-                "status" if name == "status" else "build"
+                "status" if name == "ecockpit_status" else "build"
             ), name
 
 
@@ -173,14 +174,14 @@ async def test_call_tool_offline_status_and_refusal_shapes(monkeypatch, tmp_path
     async with conformance_session() as session:
         await session.initialize()
         # harmless local tool: offline-safe JSON blob
-        result = await session.call_tool("server_status", {})
+        result = await session.call_tool("ecockpit_server_status", {})
         assert result.is_error is False
         status = json.loads(result.content[0].text)
         assert status["armed"] is False
 
         # a refused destructive call is DATA (isError stays false), so
         # agents can read the refusal instead of a protocol exception
-        result = await session.call_tool("download", {})
+        result = await session.call_tool("ecockpit_download", {})
         assert result.is_error is False
         refusal = json.loads(result.content[0].text)
         assert refusal["refused"] is True
@@ -202,7 +203,7 @@ async def test_progress_notification_end_to_end(monkeypatch, fast_not_armed):
     async with conformance_session() as session:
         await session.initialize()
         result = await session.call_tool(
-            "build", {}, progress_callback=on_progress
+            "ecockpit_build", {}, progress_callback=on_progress
         )
     assert result.is_error is False
     assert (1.0, 2.0, "halfway there") in events
@@ -213,6 +214,6 @@ async def test_tool_error_surfaces_as_protocol_error():
         await session.initialize()
         # invalid arguments reach the tool's own validation and come
         # back as a tool error (isError=true), not a crash
-        result = await session.call_tool("read", {"variable": ""})
+        result = await session.call_tool("ecockpit_read", {"variable": ""})
         assert result.is_error is True
         assert "variable path is required" in result.content[0].text
