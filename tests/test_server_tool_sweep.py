@@ -25,42 +25,42 @@ from ecockpit_mcp import server as srv
 # tools whose MINIMAL call (required args only, no confirm) hits the
 # confirm-gate refusal instead of arg assembly
 GATED_ON_MINIMAL_CALL = (
-    "write",
-    "download",
-    "download_online",
-    "download_full",
-    "login",
-    "source_download",
-    "stop",
-    "system_ui",
-    "object_create",
-    "textual_write",
-    "task_create",
-    "symbol_config_create",
-    "lib_uninstall",
-    "repo_add",
-    "repo_remove",
-    "repo_update",
-    "plc_put",
-    "plc_rm",
+    "ecockpit_write",
+    "ecockpit_download",
+    "ecockpit_download_online",
+    "ecockpit_download_full",
+    "ecockpit_login",
+    "ecockpit_source_download",
+    "ecockpit_stop",
+    "ecockpit_system_ui",
+    "ecockpit_object_create",
+    "ecockpit_textual_write",
+    "ecockpit_task_create",
+    "ecockpit_symbol_config_create",
+    "ecockpit_lib_uninstall",
+    "ecockpit_repo_add",
+    "ecockpit_repo_remove",
+    "ecockpit_repo_update",
+    "ecockpit_plc_put",
+    "ecockpit_plc_rm",
 )
 
 # required-arg overrides where the schema alone cannot pick a valid value
 ARG_OVERRIDES = {
-    "plc_fs_ops": {"op": "ls"},
-    "app_control": {"op": "status"},
-    "project_control": {"op": "info"},
-    "symbol_config_options": {"op": "config"},
-    "device_comm": {"op": "get"},
-    "device_info": {"op": "identification"},
-    "device_scan": {"op": "gateways"},
+    "ecockpit_plc_fs_ops": {"op": "ls"},
+    "ecockpit_app_control": {"op": "status"},
+    "ecockpit_project_control": {"op": "info"},
+    "ecockpit_symbol_config_options": {"op": "config"},
+    "ecockpit_device_comm": {"op": "get"},
+    "ecockpit_device_info": {"op": "identification"},
+    "ecockpit_device_scan": {"op": "gateways"},
     # system_ui needs op+method so the confirm=true path reaches
     # arg assembly (without confirm the gate refuses first)
-    "system_ui": {"op": "ui", "method": "info"},
+    "ecockpit_system_ui": {"op": "ui", "method": "info"},
     # repo_update: name alone is not a valid minimal call
-    "repo_update": {"new_name": "y"},
+    "ecockpit_repo_update": {"new_name": "y"},
     # object_create with confirm=true needs kind AND name
-    "object_create": {"kind": "gvl", "name": "NewGVL"},
+    "ecockpit_object_create": {"kind": "gvl", "name": "NewGVL"},
 }
 
 _SAMPLE_VALUES = {
@@ -142,9 +142,12 @@ def isolated_work_dir(monkeypatch, tmp_path):
 
 def test_every_tool_returns_json_and_is_reached(stub_engine):
     tools = srv.mcp._tool_manager._tools
-    assert len(tools) == 57
+    aliases = srv.LEGACY_TOOL_ALIASES
+    canonical = {name: tool for name, tool in tools.items() if name not in aliases}
+    assert len(canonical) == 57
+    assert len(tools) == 57 + len(aliases)
     refused, assembled = [], []
-    for name, tool in sorted(tools.items()):
+    for name, tool in sorted(canonical.items()):
         args = _minimal_args(tool)
         fn = getattr(srv, name)
         payload = json.loads(asyncio.run(_call(fn, args)))
@@ -154,7 +157,7 @@ def test_every_tool_returns_json_and_is_reached(stub_engine):
             assert "confirm=true" in payload["error"], name
         else:
             assembled.append(name)
-            if name == "server_status":
+            if name == "ecockpit_server_status":
                 assert "armed" in payload  # local shape, no engine call
             else:
                 assert payload.get("ok") is True, name
@@ -181,9 +184,22 @@ def test_gated_tools_pass_confirm_to_engine_after_confirm(stub_engine):
         )
 
 
+def test_legacy_aliases_registered_and_bound(stub_engine):
+    # the bare pre-rename names stay callable: each alias is registered
+    # on the MCP server, resolves via getattr, and binds to the SAME
+    # function object as its canonical tool (zero behaviour drift)
+    tools = srv.mcp._tool_manager._tools
+    assert "ecockpit_import" in tools
+    for old, canonical in srv.LEGACY_TOOL_ALIASES.items():
+        assert old in tools, old + " must stay registered"
+        assert tools[old].annotations is tools[canonical].annotations, old
+        assert getattr(srv, old) is getattr(srv, canonical), old
+        assert old != canonical and canonical.startswith("ecockpit_"), old
+
+
 def test_sweep_args_use_schema_types(stub_engine):
     # spot-check the generator honours the schema for a tricky tool
-    tool = srv.mcp._tool_manager._tools["write"]
+    tool = srv.mcp._tool_manager._tools["ecockpit_write"]
     assert _minimal_args(tool) == {"values": {"GVL.x": True}}
-    tool = srv.mcp._tool_manager._tools["plc_fs_ops"]
+    tool = srv.mcp._tool_manager._tools["ecockpit_plc_fs_ops"]
     assert _minimal_args(tool) == {"op": "ls", "remote": "x"}

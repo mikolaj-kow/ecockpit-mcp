@@ -58,13 +58,13 @@ def test_sync_run_converts_timeout_to_data(monkeypatch):
         raise _enriched_timeout()
 
     monkeypatch.setattr(srv, "_send_command", raise_timeout)
-    payload = json.loads(asyncio.run(_call_tool_body("status")))
+    payload = json.loads(asyncio.run(_call_tool_body("ecockpit_status")))
     assert payload["ok"] is False
     assert payload["error"] == "timeout"
     assert payload["cmd_id"] == "20261103-165745-12345"
     assert payload["cmd"] == "download"
     assert payload["timeout_s"] == 300
-    assert "server_status" in payload["hint"]
+    assert "ecockpit_server_status" in payload["hint"]
     assert "TIMEOUT" in payload["summary_line"]
 
 
@@ -73,7 +73,7 @@ def test_sync_run_converts_not_armed_to_data(monkeypatch):
         raise srv.NotArmedError("no fresh heartbeat (age 346 s) - test")
 
     monkeypatch.setattr(srv, "_send_command", raise_not_armed)
-    payload = json.loads(asyncio.run(_call_tool_body("status")))
+    payload = json.loads(asyncio.run(_call_tool_body("ecockpit_status")))
     assert payload["ok"] is False
     assert payload["error"] == "not_armed"
     assert "relay.py" in payload["hint"]
@@ -85,7 +85,7 @@ def test_async_run_converts_timeout_to_data(monkeypatch):
         raise _enriched_timeout()
 
     monkeypatch.setattr(srv, "_send_command_async", raise_timeout)
-    payload = json.loads(asyncio.run(srv.build()))
+    payload = json.loads(asyncio.run(srv.ecockpit_build()))
     assert payload["ok"] is False
     assert payload["error"] == "timeout"
     assert payload["cmd_id"] == "20261103-165745-12345"

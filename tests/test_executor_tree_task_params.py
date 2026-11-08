@@ -532,7 +532,7 @@ def test_device_params_read_offline_online_by_name_and_id(paramsdev):
     with pytest.raises(RuntimeError, match="no parameter named"):
         ex.cmd_device_params(None, {"op": "read", "name": "Board.Ghost"})
     with pytest.raises(ToolError, match="name or id required"):
-        srv.device_params(op="read")
+        srv.ecockpit_device_params(op="read")
 
 
 def test_device_params_write_gate_plain_enum_and_element_target(paramsdev):
@@ -587,7 +587,7 @@ def test_server_tree_task_params_refusals():
     for call in (
         lambda: srv.tree(op="remove", name="Pou_Main"),
         lambda: srv.task_create(application="App", name="T"),
-        lambda: srv.device_params(op="write", name="P", value="1"),
+        lambda: srv.ecockpit_device_params(op="write", name="P", value="1"),
     ):
         out = json.loads(call())
         assert out["refused"] is True
@@ -657,7 +657,7 @@ def test_server_device_params_arg_passthrough(monkeypatch):
         return {"ok": True}
 
     monkeypatch.setattr(srv, "_run", fake_run)
-    srv.device_params(op="read", id=2, online=True, timeout=500)
+    srv.ecockpit_device_params(op="read", id=2, online=True, timeout=500)
     assert captured["cmd"] == "device_params"
     assert captured["args"] == {"op": "read", "timeout": 500, "id": 2, "online": True}
 
@@ -669,6 +669,6 @@ def test_server_device_params_arg_passthrough(monkeypatch):
     assert args["element"] == "value" and args["confirm"] is True
 
     with pytest.raises(ToolError, match="name or id required"):
-        srv.device_params(op="write", value="1")
+        srv.ecockpit_device_params(op="write", value="1")
     with pytest.raises(ToolError, match="value required"):
-        srv.device_params(op="write", name="P")
+        srv.ecockpit_device_params(op="write", name="P")
