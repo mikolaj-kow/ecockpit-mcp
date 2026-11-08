@@ -4641,12 +4641,10 @@ def _parent_name(obj):
         return ""
 
 
-def _find_one(project, name):
-    # "<parent>/<child>" resolves a child object by its own name plus its
-    # direct parent's name - project.find matches bare names only, so this
-    # is how duplicate child names (methods shared across FBs: mStep,
-    # mHandle, ...) address the right instance. Deeper prefixes collapse to
-    # the nearest parent (a/b/c == b/c).
+def _find_candidates(project, name):
+    """All tree hits for *name*: ``parent/child`` resolves children by their
+    own name plus the direct parent's name (project.find matches bare names
+    only); bare names return every hit so the caller can pick."""
     if "/" in name:
         child_name = name.rsplit("/", 1)[1].strip()
         parent_want = name.rsplit("/", 1)[0].rsplit("/", 1)[-1].strip()
@@ -4658,18 +4656,48 @@ def _find_one(project, name):
             parents.append(pname)
             if pname.lower() == parent_want.lower():
                 hits.append(o)
-        if hits:
-            return hits[0]
-        raise RuntimeError(
-            'no object "{c}" with parent "{p}" in the project '
-            '(parents seen: {seen})'.format(c=child_name, p=parent_want,
-                                            seen=", ".join(parents)
-                                            or "none"))
+        if not hits:
+            raise RuntimeError(
+                'no object "{c}" with parent "{p}" in the project '
+                '(parents seen: {seen})'.format(c=child_name, p=parent_want,
+                                                seen=", ".join(parents)
+                                                or "none"))
+        return hits
     found = project.find(name, True)
     if not found:
         raise RuntimeError('no object named "{n}" in the '
                            "project".format(n=name))
+    return found
+
+
+def _find_textual_obj(project, name, want_decl):
+    """Resolve an object for a textual read/write and prefer a hit that
+    actually carries the requested textual part: task-configuration program
+    instances share the POU's name but expose no text (all 19 s4 PROGRAMs
+    were unreachable through found[0] before this)."""
+    flag = ("has_textual_declaration" if want_decl
+            else "has_textual_implementation")
+    found = _find_candidates(project, name)
+    if len(found) == 1:
+        return found[0]
+    for o in found:
+        try:
+            if getattr(o, flag, False):
+                return o
+        except Exception:
+            pass
+    for o in found:
+        try:
+            if getattr(o, "has_textual_declaration", False) \
+                    or getattr(o, "has_textual_implementation", False):
+                return o
+        except Exception:
+            pass
     return found[0]
+
+
+def _find_one(project, name):
+    return _find_candidates(project, name)[0]
 
 
 def _resolve_textual(obj, part):
@@ -4961,10 +4989,10 @@ def cmd_textual(project, args):
         out = {"objects": [], "cmd": "textual", "errors": 0}
         raw = str(args.get("name", ""))
         for one in [n.strip() for n in raw.split(",") if n.strip()]:
-            item: dict = {"name": one, "declaration": None,
-                          "implementation": None, "error": None}
+            item = {"name": one, "declaration": None,
+                    "implementation": None, "error": None}
             try:
-                obj = _find_one(project, one)
+                obj = _find_textual_obj(project, one, True)
                 for p, key in (("declaration", "declaration"),
                                ("implementation", "implementation")):
                     try:
@@ -4980,6 +5008,8 @@ def cmd_textual(project, args):
         return out
     obj = _find_one(project, str(args.get("name", "")))
     if op == "read":
+        want_decl = (args.get("part", "") != "implementation")
+        obj = _find_textual_obj(project, str(args.get("name", "")), want_decl)
         out = {"name": args.get("name")}
         part = args.get("part", "")
         parts = (part,) if part in ("declaration", "implementation") else \
