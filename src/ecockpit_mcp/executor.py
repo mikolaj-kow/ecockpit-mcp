@@ -4627,7 +4627,44 @@ def _obj_summary(obj):
     return out
 
 
+def _parent_name(obj):
+    """Name of the object's tree parent, or "" (scripting objects expose
+    the parent through ``obj.parent``; get_parent is not available in the
+    e!COCKPIT scripting build)."""
+    try:
+        parent = obj.parent
+    except Exception:
+        return ""
+    try:
+        return parent.get_name() or ""
+    except Exception:
+        return ""
+
+
 def _find_one(project, name):
+    # "<parent>/<child>" resolves a child object by its own name plus its
+    # direct parent's name - project.find matches bare names only, so this
+    # is how duplicate child names (methods shared across FBs: mStep,
+    # mHandle, ...) address the right instance. Deeper prefixes collapse to
+    # the nearest parent (a/b/c == b/c).
+    if "/" in name:
+        child_name = name.rsplit("/", 1)[1].strip()
+        parent_want = name.rsplit("/", 1)[0].rsplit("/", 1)[-1].strip()
+        candidates = project.find(child_name, True) or []
+        parents = []
+        hits = []
+        for o in candidates:
+            pname = _parent_name(o)
+            parents.append(pname)
+            if pname.lower() == parent_want.lower():
+                hits.append(o)
+        if hits:
+            return hits[0]
+        raise RuntimeError(
+            'no object "{c}" with parent "{p}" in the project '
+            '(parents seen: {seen})'.format(c=child_name, p=parent_want,
+                                            seen=", ".join(parents)
+                                            or "none"))
     found = project.find(name, True)
     if not found:
         raise RuntimeError('no object named "{n}" in the '
