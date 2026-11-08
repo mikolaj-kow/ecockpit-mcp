@@ -2667,7 +2667,7 @@ def cmd_read(project, args):
             result = values[paths[0]]
         else:
             result = json.dumps({"values": values, "errors": errors},
-                                indent=2, sort_keys=True)
+                                indent=2, sort_keys=True, ensure_ascii=False)
         if keep:
             _LOGIN_CACHE["entry"] = {"key": _login_key(project, args),
                                      "device": device,

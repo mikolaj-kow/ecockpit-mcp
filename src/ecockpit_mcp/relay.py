@@ -190,7 +190,13 @@ def _atomic_write_json(path, obj):
         os.makedirs(d)
     tmp = path + ".tmp"
     with open(tmp, "wb") as fh:
-        fh.write(_to_bytes(json.dumps(obj)))
+        # ensure_ascii=False: IronPython's json encoder, on the ensure_ascii
+        # path, decodes every str as ASCII and dies on the first non-ASCII
+        # char of ST text (U+201A et al.) - the result file never gets
+        # written and the client times out on a COMPLETED command
+        # (2026-11-08, bulk textual SOT check). Raw unicode + _to_bytes
+        # (UTF-8) round-trips byte-exact through the host's json.load.
+        fh.write(_to_bytes(json.dumps(obj, ensure_ascii=False)))
     _rm(path)
     os.rename(tmp, path)
 
