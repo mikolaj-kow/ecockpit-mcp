@@ -4952,6 +4952,32 @@ def cmd_textual(project, args):
     it modifies project code.
     """
     op = args.get("op", "read")
+    if op == "read" and "," in str(args.get("name", "")):
+        # bulk read: a comma-separated name list (CODESYS object names never
+        # contain commas) - one exec() serves every object, so a whole
+        # domain pull is one relay command instead of N. Per-object errors
+        # (missing object, no textual part) land in the item's "error" field
+        # instead of aborting the batch.
+        out = {"objects": [], "cmd": "textual", "errors": 0}
+        raw = str(args.get("name", ""))
+        for one in [n.strip() for n in raw.split(",") if n.strip()]:
+            item: dict = {"name": one, "declaration": None,
+                          "implementation": None, "error": None}
+            try:
+                obj = _find_one(project, one)
+                for p, key in (("declaration", "declaration"),
+                               ("implementation", "implementation")):
+                    try:
+                        item[key] = _resolve_textual(obj, p).text
+                    except Exception as exc:
+                        item["error"] = ("{part}: {msg}".format(
+                            part=p, msg=exc))
+                        out["errors"] += 1
+            except Exception as exc:
+                item["error"] = str(exc)
+                out["errors"] += 1
+            out["objects"].append(item)
+        return out
     obj = _find_one(project, str(args.get("name", "")))
     if op == "read":
         out = {"name": args.get("name")}
