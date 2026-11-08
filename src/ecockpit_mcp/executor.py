@@ -5006,7 +5006,11 @@ def cmd_textual(project, args):
                 out["errors"] += 1
             out["objects"].append(item)
         return out
-    obj = _find_one(project, str(args.get("name", "")))
+    # Both ops resolve through _find_textual_obj: task-configuration
+    # program instances share the POU's name and expose no text, and the
+    # write path resolved through _find_one/found[0] before - a bare
+    # PROGRAM push landed on the binding node and failed with
+    # "has no textual ..." (the read/bulk path got this in 1ef00f3).
     if op == "read":
         want_decl = (args.get("part", "") != "implementation")
         obj = _find_textual_obj(project, str(args.get("name", "")), want_decl)
@@ -5027,6 +5031,8 @@ def cmd_textual(project, args):
         if text is None:
             raise RuntimeError("textual write needs args.text")
         part = args.get("part", "implementation")
+        obj = _find_textual_obj(project, str(args.get("name", "")),
+                                part == "declaration")
         doc = _resolve_textual(obj, part)
         doc.replace(new_text=str(text))
         log("OK", "textual {p} of '{n}' replaced ({c} chars)".format(
