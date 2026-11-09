@@ -585,8 +585,8 @@ def test_device_params_write_element_target_via_device(monkeypatch):
 # --------------------------------------------------------------------------
 def test_server_tree_task_params_refusals():
     for call in (
-        lambda: srv.tree(op="remove", name="Pou_Main"),
-        lambda: srv.task_create(application="App", name="T"),
+        lambda: srv.ecockpit_tree(op="remove", name="Pou_Main"),
+        lambda: srv.ecockpit_task_create(application="App", name="T"),
         lambda: srv.ecockpit_device_params(op="write", name="P", value="1"),
     ):
         out = json.loads(call())
@@ -603,7 +603,7 @@ def test_server_tree_arg_passthrough_and_validation(monkeypatch):
         return {"ok": True}
 
     monkeypatch.setattr(srv, "_run", fake_run)
-    srv.tree(op="list", name="Main", limit=5)
+    srv.ecockpit_tree(op="list", name="Main", limit=5)
     assert captured["cmd"] == "tree"
     assert captured["args"] == {
         "op": "list",
@@ -611,10 +611,10 @@ def test_server_tree_arg_passthrough_and_validation(monkeypatch):
         "recursive": True,
         "limit": 5,
     }
-    srv.tree(op="remove", name="Pou_Main", confirm=True)
+    srv.ecockpit_tree(op="remove", name="Pou_Main", confirm=True)
     assert captured["args"] == {"op": "remove", "name": "Pou_Main", "confirm": True}
     with pytest.raises(ToolError, match="list\\|rename"):
-        srv.tree(op="explode")
+        srv.ecockpit_tree(op="explode")
 
 
 def test_server_task_create_arg_passthrough(monkeypatch):
@@ -626,7 +626,7 @@ def test_server_task_create_arg_passthrough(monkeypatch):
         return {"ok": True}
 
     monkeypatch.setattr(srv, "_run", fake_run)
-    srv.task_create(
+    srv.ecockpit_task_create(
         application="App",
         name="Monitor",
         kind="cyclic",
@@ -645,7 +645,7 @@ def test_server_task_create_arg_passthrough(monkeypatch):
     assert args["confirm"] is True
     assert args["watchdog_enabled"] is False
     with pytest.raises(ToolError, match="name"):
-        srv.task_create(application="App", name="")
+        srv.ecockpit_task_create(application="App", name="")
 
 
 def test_server_device_params_arg_passthrough(monkeypatch):
@@ -661,7 +661,7 @@ def test_server_device_params_arg_passthrough(monkeypatch):
     assert captured["cmd"] == "device_params"
     assert captured["args"] == {"op": "read", "timeout": 500, "id": 2, "online": True}
 
-    srv.device_params(
+    srv.ecockpit_device_params(
         op="write", name="Board.Temp", value="40", element="value", confirm=True
     )
     args = captured["args"]
