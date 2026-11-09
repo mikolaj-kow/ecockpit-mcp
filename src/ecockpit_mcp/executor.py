@@ -99,6 +99,7 @@ imported by plain CPython for offline testing of the pure helpers.
 """
 
 import os
+import ntpath
 import io
 import sys
 import glob
@@ -732,11 +733,14 @@ def _warn_primary_mismatch(project):
         return
     if not p:
         return
-    if os.path.basename(p).lower() != os.path.basename(sidecar_ecp).lower():
+    # Windows paths, always (the engine hands us drive letters) - split
+    # with ntpath so the guard behaves identically when the offline
+    # CPython test run executes on a POSIX host (CI)
+    if ntpath.basename(p).lower() != ntpath.basename(sidecar_ecp).lower():
         log("WARN", "primary project mismatch: open '{o}' vs active-project "
                     "sidecar '{s}' - the import goes into the OPEN project; "
                     "realign with project_control op=open".format(
-                        o=os.path.basename(p), s=os.path.basename(sidecar_ecp)))
+                        o=ntpath.basename(p), s=ntpath.basename(sidecar_ecp)))
 
 
 def flush_log(request_id, cmd, summary):
