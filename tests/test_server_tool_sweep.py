@@ -142,12 +142,9 @@ def isolated_work_dir(monkeypatch, tmp_path):
 
 def test_every_tool_returns_json_and_is_reached(stub_engine):
     tools = srv.mcp._tool_manager._tools
-    aliases = srv.LEGACY_TOOL_ALIASES
-    canonical = {name: tool for name, tool in tools.items() if name not in aliases}
-    assert len(canonical) == 57
-    assert len(tools) == 57 + len(aliases)
+    assert len(tools) == 57
     refused, assembled = [], []
-    for name, tool in sorted(canonical.items()):
+    for name, tool in sorted(tools.items()):
         args = _minimal_args(tool)
         fn = getattr(srv, name)
         payload = json.loads(asyncio.run(_call(fn, args)))
@@ -182,19 +179,6 @@ def test_gated_tools_pass_confirm_to_engine_after_confirm(stub_engine):
         assert last_args and last_args.get("confirm") is True, (
             name + " must forward confirm=true to the engine (sent " + last_cmd + ")"
         )
-
-
-def test_legacy_aliases_registered_and_bound(stub_engine):
-    # the bare pre-rename names stay callable: each alias is registered
-    # on the MCP server, resolves via getattr, and binds to the SAME
-    # function object as its canonical tool (zero behaviour drift)
-    tools = srv.mcp._tool_manager._tools
-    assert "ecockpit_import" in tools
-    for old, canonical in srv.LEGACY_TOOL_ALIASES.items():
-        assert old in tools, old + " must stay registered"
-        assert tools[old].annotations is tools[canonical].annotations, old
-        assert getattr(srv, old) is getattr(srv, canonical), old
-        assert old != canonical and canonical.startswith("ecockpit_"), old
 
 
 def test_sweep_args_use_schema_types(stub_engine):

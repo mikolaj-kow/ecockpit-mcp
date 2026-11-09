@@ -172,11 +172,10 @@ unless the relay is armed):
 
 Every tool name carries the `ecockpit_` prefix (`ecockpit_build`,
 `ecockpit_read`, …) — a readable contract for clients that talk to
-several MCP servers at once. The bare pre-rename names (`build`, `read`,
-`write`, …) stay registered as **deprecated aliases** with the same
-schemas and annotations, so configs written against them keep working
-until they migrate; `ecockpit_import` additionally aliases to
-`ecockpit_importxml`.
+several MCP servers at once. (The bare pre-rename names `build`, `read`,
+`write`, … were deprecated aliases for one release and are gone since
+2026-11-09; configs must use the canonical names. The old
+`ecockpit_import` spelling of `ecockpit_importxml` went with them.)
 
 Security model — bearer token (mandatory off-loopback), loopback
 default, confirm-gated destructive operations, the
@@ -189,7 +188,7 @@ Build & project:
 |---|---|
 | `ecockpit_build(skip_import?, all_messages?, harvest_lines?)` | re-import + cleanup + compile; structured diagnostics (`harvest`: C-code, severity, POU, line) |
 | `ecockpit_rebuild(all_messages?, harvest_lines?)` | FULL rebuild (`app.rebuild()`) — scripted Build → Clean; fixes C0106 on grown GVL arrays |
-| `ecockpit_importxml` / `ecockpit_compile` | halves of build, standalone (`ecockpit_importxml` was `ecockpit_import` before the 2026-11 rename — still available as a deprecated alias) |
+| `ecockpit_importxml` / `ecockpit_compile` | halves of build, standalone (`ecockpit_importxml` was `ecockpit_import` before the 2026-11 rename) |
 | `ecockpit_export(dir?)` | PLCopen XML export to `<dir>/<application>.xml` (single file; defaults to `<project root>/plcopensrc-export`) — string-return fallback if the engine refuses to write |
 | `ecockpit_snapshot(version?)` | project copy to `<snapshots>/<project>_<version>.ecp` — the working backup (no `save_archive` tool: the engine NREs in every binding, see `docs/SCRIPTENGINE_API.md`) |
 | `ecockpit_status` | project/application/device info (no PLC login) |

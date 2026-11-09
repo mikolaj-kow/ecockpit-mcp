@@ -31,8 +31,7 @@ flowchart LR
 - **`server.py`** (host, CPython ≥ 3.10) — the MCP server editors
   connect to. Validates arguments, enforces the confirm-gate refusals,
   routes commands over the file protocol, adds `log_tail` to failures.
-  Exposes 57 tools (canonical names carry the `ecockpit_` prefix; the
-  bare pre-rename names stay registered as deprecated aliases) across
+  Exposes 57 tools (names carry the `ecockpit_` prefix) across
   build/import/export, online I/O, libraries,
   tree/ST authoring, task/symbol config, device scan/comm/params/IO,
   the `system` object, and project lifecycle.

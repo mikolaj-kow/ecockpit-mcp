@@ -41,7 +41,7 @@ def isolated_work_dir(monkeypatch, tmp_path):
 
 def test_no_tool_advertises_structured_output():
     tools = srv.mcp._tool_manager._tools
-    assert len(tools) == 57 + len(srv.LEGACY_TOOL_ALIASES)
+    assert len(tools) == 57
     offenders = sorted(
         name for name, tool in tools.items() if tool.output_schema is not None
     )
@@ -79,7 +79,7 @@ def test_status_reports_last_attempt_without_probe(tmp_path):
             "detail": "login(Try) failed: Exception: Login failed",
         },
     )
-    payload = json.loads(srv.server_status())
+    payload = json.loads(srv.ecockpit_server_status())
     last = payload["plc"]["last_attempt"]
     assert last["online"] is False
     assert "Login failed" in last["detail"]
@@ -89,7 +89,7 @@ def test_status_reports_last_attempt_without_probe(tmp_path):
 
 
 def test_status_without_sidecar_reports_nulls(tmp_path):
-    payload = json.loads(srv.server_status())
+    payload = json.loads(srv.ecockpit_server_status())
     assert payload["plc"] == {"last_attempt": None, "probe": None}
 
 
@@ -109,7 +109,7 @@ def test_status_probe_online(monkeypatch, tmp_path):
                 "detail": "logged in",
             },
         )
-        payload = json.loads(srv.server_status())
+        payload = json.loads(srv.ecockpit_server_status())
     finally:
         listener.close()
     probe = payload["plc"]["probe"]
@@ -134,7 +134,7 @@ def test_status_probe_offline(monkeypatch, tmp_path):
             "detail": "login failed",
         },
     )
-    payload = json.loads(srv.server_status())
+    payload = json.loads(srv.ecockpit_server_status())
     probe = payload["plc"]["probe"]
     assert probe["online"] is False
     assert probe["target"] == "127.0.0.1:{p}".format(p=port)

@@ -1320,11 +1320,15 @@ def test_cmd_read_names_path_on_pointer_failure(monkeypatch):
 
     dev, app = FakeDev(), FakeApp()
     monkeypatch.setattr(
-        ex, "_online_connect", lambda project, args, prefer_keep=False, forms=None: (dev, app)
+        ex,
+        "_online_connect",
+        lambda project, args, prefer_keep=False, forms=None: (dev, app),
     )
     with pytest.raises(RuntimeError) as ei:
-        ex.cmd_read(None, {"path": "GVLEntities.astEntitiesLight[22].pAutomationCfg",
-                           "keep": False})
+        ex.cmd_read(
+            None,
+            {"path": "GVLEntities.astEntitiesLight[22].pAutomationCfg", "keep": False},
+        )
     assert "pAutomationCfg" in str(ei.value)
     assert "Invalid pointer size" in str(ei.value)
     assert "pointee" in str(ei.value)
@@ -1349,10 +1353,11 @@ def test_cmd_read_keep_true_leaves_session_open(monkeypatch, tmp_path):
 
     dev, app = FakeDev(), FakeApp()
     monkeypatch.setattr(
-        ex, "_online_connect", lambda project, args, prefer_keep=False, forms=None: (dev, app)
+        ex,
+        "_online_connect",
+        lambda project, args, prefer_keep=False, forms=None: (dev, app),
     )
-    monkeypatch.setattr(ex, "PLC_STATE_FILE",
-                        str(tmp_path / "sidecar.json"))
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(tmp_path / "sidecar.json"))
     ex._LOGIN_CACHE.clear()
     assert ex.cmd_read(None, {"path": "GVL.X"}) == "42"
     assert dev.disconnects == 0
@@ -1364,9 +1369,7 @@ def test_cmd_read_keep_true_leaves_session_open(monkeypatch, tmp_path):
     assert "entry" not in ex._LOGIN_CACHE
 
 
-def test_disconnect_unforces_active_forces_before_logout(
-    monkeypatch, tmp_path
-):
+def test_disconnect_unforces_active_forces_before_logout(monkeypatch, tmp_path):
     # G-29 v2: a logout with ACTIVE FORCES pops the GUI modal ('delete
     # all currently forced variables?'). cmd_disconnect probes the kept
     # session (NO fresh login cycle), unfources first, then logs out.
@@ -1392,19 +1395,15 @@ def test_disconnect_unforces_active_forces_before_logout(
             self.unforces += 1
 
     dev, app = FakeDev(), FakeApp()
-    ex._LOGIN_CACHE["entry"] = {"key": ("p", ""), "device": dev,
-                                "onlineapp": app}
-    monkeypatch.setattr(ex, "PLC_STATE_FILE",
-                        str(tmp_path / "sidecar.json"))
+    ex._LOGIN_CACHE["entry"] = {"key": ("p", ""), "device": dev, "onlineapp": app}
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(tmp_path / "sidecar.json"))
     ex.cmd_disconnect(None, {})
-    assert app.unforces == 1          # unforce BEFORE logout
-    assert dev.disconnects == 1       # plain logout after a clean unforce
+    assert app.unforces == 1  # unforce BEFORE logout
+    assert dev.disconnects == 1  # plain logout after a clean unforce
     assert "entry" not in ex._LOGIN_CACHE
 
 
-def test_disconnect_force_fallback_when_unforce_fails(
-    monkeypatch, tmp_path
-):
+def test_disconnect_force_fallback_when_unforce_fails(monkeypatch, tmp_path):
     # G-29 v2 droga 2: when unforce_all_values fails, forced_disconnect
     # (modal-free) takes over.
     class FakeDev(object):
@@ -1426,10 +1425,8 @@ def test_disconnect_force_fallback_when_unforce_fails(
             raise Exception("unforce refused")
 
     dev, app = FakeDev(), FakeApp()
-    ex._LOGIN_CACHE["entry"] = {"key": ("p", ""), "device": dev,
-                                "onlineapp": app}
-    monkeypatch.setattr(ex, "PLC_STATE_FILE",
-                        str(tmp_path / "sidecar.json"))
+    ex._LOGIN_CACHE["entry"] = {"key": ("p", ""), "device": dev, "onlineapp": app}
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(tmp_path / "sidecar.json"))
     ex.cmd_disconnect(None, {})
     assert dev.forced_disconnects == 1
 
@@ -1453,10 +1450,8 @@ def test_disconnect_staged_only_is_plain_logout(monkeypatch, tmp_path):
             return ["GVL.staged", "GVL.staged2"]
 
     dev, app = FakeDev(), FakeApp()
-    ex._LOGIN_CACHE["entry"] = {"key": ("p", ""), "device": dev,
-                                "onlineapp": app}
-    monkeypatch.setattr(ex, "PLC_STATE_FILE",
-                        str(tmp_path / "sidecar.json"))
+    ex._LOGIN_CACHE["entry"] = {"key": ("p", ""), "device": dev, "onlineapp": app}
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(tmp_path / "sidecar.json"))
     ex.cmd_disconnect(None, {})
     assert dev.disconnects == 1
 
@@ -1483,10 +1478,11 @@ def test_cmd_write_keeps_session_open(monkeypatch, tmp_path):
 
     dev, app = FakeDev(), FakeApp()
     monkeypatch.setattr(
-        ex, "_online_connect", lambda project, args, prefer_keep=False, forms=None: (dev, app)
+        ex,
+        "_online_connect",
+        lambda project, args, prefer_keep=False, forms=None: (dev, app),
     )
-    monkeypatch.setattr(ex, "PLC_STATE_FILE",
-                        str(tmp_path / "sidecar.json"))
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(tmp_path / "sidecar.json"))
     ex._LOGIN_CACHE.clear()
     out = ex.cmd_write(None, {"values": {"GVL.b": "TRUE"}, "confirm": True})
     assert out == {"GVL.b": "TRUE"}
@@ -1496,6 +1492,7 @@ def test_cmd_write_keeps_session_open(monkeypatch, tmp_path):
 
 def _stub_download_ladder(monkeypatch, via):
     """Stub _online_connect so the fresh-ladder path records `via`."""
+
     class FakeDev(object):
         def __init__(self):
             self.starts = 0
@@ -1524,9 +1521,7 @@ def _stub_download_ladder(monkeypatch, via):
     return dev, app
 
 
-def test_download_online_reuses_session_no_start_no_ladder(
-    monkeypatch, tmp_path
-):
+def test_download_online_reuses_session_no_start_no_ladder(monkeypatch, tmp_path):
     # download_online on a KEPT session: no fresh ladder, no start (an
     # online change leaves the application running), session stays.
     class FakeDev(object):
@@ -1549,24 +1544,25 @@ def test_download_online_reuses_session_no_start_no_ladder(
             self.boots += 1
 
     dev, app = FakeDev(), FakeApp()
-    ex._LOGIN_CACHE["entry"] = {"key": ex._login_key(None, {}),
-                                "device": dev, "onlineapp": app}
-    monkeypatch.setattr(ex, "PLC_STATE_FILE",
-                        str(tmp_path / "sidecar.json"))
+    ex._LOGIN_CACHE["entry"] = {
+        "key": ex._login_key(None, {}),
+        "device": dev,
+        "onlineapp": app,
+    }
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(tmp_path / "sidecar.json"))
     out = ex.cmd_download(None, {"mode": "online", "confirm": True})
     assert out["via"] == "kept session"
     assert out["started"] is False
     assert dev.starts == 0
-    assert app.boots == 0          # boot=false default
-    assert dev.disconnects == 0    # session stays open
+    assert app.boots == 0  # boot=false default
+    assert dev.disconnects == 0  # session stays open
     assert ex._LOGIN_CACHE["entry"]["onlineapp"] is app
 
 
 def test_download_full_fresh_ladder_starts_and_logs_out(monkeypatch):
     # mode=full: always the fresh ladder (Never form), start runs, the
     # session is logged out, boot skipped unless boot=true.
-    dev, app = _stub_download_ladder(
-        monkeypatch, "login(OnlineChangeOption.Never)")
+    dev, app = _stub_download_ladder(monkeypatch, "login(OnlineChangeOption.Never)")
     ex._LOGIN_CACHE.clear()
     out = ex.cmd_download(None, {"mode": "full", "confirm": True})
     assert out["started"] is True
@@ -1580,8 +1576,7 @@ def test_download_full_fresh_ladder_starts_and_logs_out(monkeypatch):
 def test_download_auto_starts_only_on_full_form(monkeypatch):
     # auto over a fresh ladder: start runs ONLY when the deploy went
     # through Never / device.connect (Try = online change = running app).
-    dev, _ = _stub_download_ladder(
-        monkeypatch, "login(OnlineChangeOption.Try)")
+    dev, _ = _stub_download_ladder(monkeypatch, "login(OnlineChangeOption.Try)")
     out = ex.cmd_download(None, {"mode": "auto", "confirm": True})
     assert out["started"] is False
     assert dev.starts == 0
@@ -1594,6 +1589,7 @@ def test_download_auto_starts_only_on_full_form(monkeypatch):
 
 def _cached_fake_session(monkeypatch, tmp_path):
     """Put a fake kept session in the cache; return the fake device."""
+
     class FakeDev(object):
         def __init__(self):
             self.disconnects = 0
@@ -1602,10 +1598,12 @@ def _cached_fake_session(monkeypatch, tmp_path):
             self.disconnects += 1
 
     dev = FakeDev()
-    ex._LOGIN_CACHE["entry"] = {"key": ex._login_key(None, {}),
-                                "device": dev, "onlineapp": object()}
-    monkeypatch.setattr(ex, "PLC_STATE_FILE",
-                        str(tmp_path / "sidecar.json"))
+    ex._LOGIN_CACHE["entry"] = {
+        "key": ex._login_key(None, {}),
+        "device": dev,
+        "onlineapp": object(),
+    }
+    monkeypatch.setattr(ex, "PLC_STATE_FILE", str(tmp_path / "sidecar.json"))
     return dev
 
 
@@ -2034,7 +2032,9 @@ def test_online_connect_notes_success(monkeypatch, tmp_path):
         monkeypatch,
         device,
         types.SimpleNamespace(),
-        lambda oa, dev, prefer_keep=False, engapp=None, forms=None: "login(OnlineChangeOption.Try)",
+        lambda oa, dev, prefer_keep=False, engapp=None, forms=None: (
+            "login(OnlineChangeOption.Try)"
+        ),
     )
 
     got_device, onlineapp = ex._online_connect(

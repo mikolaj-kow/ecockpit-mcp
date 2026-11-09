@@ -397,7 +397,10 @@ def _log_event(cmd, outcome, detail=""):
     Best-effort: a logging failure must never fail the command itself."""
     line = "{ts} {c} -> {o}{d}\n".format(
         ts=time.strftime("%Y-%m-%d %H:%M:%S"),
-        c=cmd, o=outcome, d=" | " + detail if detail else "")
+        c=cmd,
+        o=outcome,
+        d=" | " + detail if detail else "",
+    )
     try:
         os.makedirs(os.path.dirname(CFG.event_log_file), exist_ok=True)
         with open(CFG.event_log_file, "a", encoding="utf-8") as fh:
@@ -468,8 +471,11 @@ def _run(cmd, args=None, timeout_s=None):
         )
     if not result.get("ok"):
         result["log_tail"] = _log_tail(result.get("log", ""), 30)
-    _log_event(cmd, "OK" if result.get("ok") else "FAILED",
-               result.get("error", "") or result.get("summary_line", ""))
+    _log_event(
+        cmd,
+        "OK" if result.get("ok") else "FAILED",
+        result.get("error", "") or result.get("summary_line", ""),
+    )
     return result
 
 
@@ -571,8 +577,11 @@ async def _run_async(cmd, args=None, timeout_s=None, ctx=None, **poll_kwargs):
         )
     if not result.get("ok"):
         result["log_tail"] = _log_tail(result.get("log", ""), 30)
-    _log_event(cmd, "OK" if result.get("ok") else "FAILED",
-               result.get("error", "") or result.get("summary_line", ""))
+    _log_event(
+        cmd,
+        "OK" if result.get("ok") else "FAILED",
+        result.get("error", "") or result.get("summary_line", ""),
+    )
     return result
 
 
@@ -794,8 +803,7 @@ def ecockpit_read(variable: str, device: str = "") -> str:
 def ecockpit_read_batch(variables: list, device: str = "") -> str:
     paths = [str(p).strip() for p in variables if str(p).strip()]
     if not paths:
-        raise ToolError("variables must be a non-empty list, e.g. "
-                        "['GVLName.Variable']")
+        raise ToolError("variables must be a non-empty list, e.g. ['GVLName.Variable']")
     args: dict[str, object] = {"path": paths, "keep": True}
     if device:
         args["device"] = device
@@ -1377,8 +1385,10 @@ async def ecockpit_download(
         )
     return json.dumps(
         await _run_async(
-            "download", {"mode": mode, "boot": bool(boot), "confirm": True},
-            timeout_s, ctx,
+            "download",
+            {"mode": mode, "boot": bool(boot), "confirm": True},
+            timeout_s,
+            ctx,
         ),
         indent=2,
     )
@@ -1419,9 +1429,10 @@ async def ecockpit_download_online(
         )
     return json.dumps(
         await _run_async(
-            "download", {"mode": "online", "boot": bool(boot),
-                         "confirm": True},
-            timeout_s, ctx,
+            "download",
+            {"mode": "online", "boot": bool(boot), "confirm": True},
+            timeout_s,
+            ctx,
         ),
         indent=2,
     )
@@ -1458,9 +1469,10 @@ async def ecockpit_download_full(
         )
     return json.dumps(
         await _run_async(
-            "download", {"mode": "full", "boot": bool(boot),
-                         "confirm": True},
-            timeout_s, ctx,
+            "download",
+            {"mode": "full", "boot": bool(boot), "confirm": True},
+            timeout_s,
+            ctx,
         ),
         indent=2,
     )
@@ -3077,101 +3089,6 @@ def ecockpit_repo_move(name: str, index: int, timeout_s: int = 120) -> str:
     return json.dumps(
         _run("repo_move", {"name": name, "index": int(index)}, timeout_s), indent=2
     )
-
-
-# --------------------------------------------------------------------------
-# Legacy tool-name aliases (bare pre-rename names)
-# --------------------------------------------------------------------------
-# Canonical tool names carry the ecockpit_ prefix (a readable contract for
-# multi-server clients). The bare names from the unprefixed window stay
-# registered as deprecated aliases so existing client configs keep working
-# until they migrate; ecockpit_import additionally maps to
-# ecockpit_importxml (the keyword-safe spelling of the original
-# ecockpit_import). Nothing inside this server calls the aliases - delete
-# the block once the clients are migrated.
-LEGACY_TOOL_ALIASES = {
-    "ecockpit_import": "ecockpit_importxml",
-    "server_status": "ecockpit_server_status",
-    "status": "ecockpit_status",
-    "state": "ecockpit_state",
-    "build": "ecockpit_build",
-    "importxml": "ecockpit_importxml",
-    "compile": "ecockpit_compile",
-    "rebuild": "ecockpit_rebuild",
-    "export": "ecockpit_export",
-    "snapshot": "ecockpit_snapshot",
-    "tree": "ecockpit_tree",
-    "object_create": "ecockpit_object_create",
-    "textual_read": "ecockpit_textual_read",
-    "textual_write": "ecockpit_textual_write",
-    "read": "ecockpit_read",
-    "read_batch": "ecockpit_read_batch",
-    "write": "ecockpit_write",
-    "unforce_all": "ecockpit_unforce_all",
-    "prepared_values": "ecockpit_prepared_values",
-    "messages": "ecockpit_messages",
-    "clear_messages": "ecockpit_clear_messages",
-    "system": "ecockpit_system",
-    "system_ui": "ecockpit_system_ui",
-    "disconnect": "ecockpit_disconnect",
-    "login": "ecockpit_login",
-    "stop": "ecockpit_stop",
-    "download": "ecockpit_download",
-    "download_online": "ecockpit_download_online",
-    "download_full": "ecockpit_download_full",
-    "source_download": "ecockpit_source_download",
-    "upload_source": "ecockpit_upload_source",
-    "app_status": "ecockpit_app_status",
-    "app_control": "ecockpit_app_control",
-    "project_control": "ecockpit_project_control",
-    "device_scan": "ecockpit_device_scan",
-    "device_comm": "ecockpit_device_comm",
-    "device_info": "ecockpit_device_info",
-    "device_io": "ecockpit_device_io",
-    "device_params": "ecockpit_device_params",
-    "plc_ls": "ecockpit_plc_ls",
-    "plc_get": "ecockpit_plc_get",
-    "plc_put": "ecockpit_plc_put",
-    "plc_rm": "ecockpit_plc_rm",
-    "plc_fs_ops": "ecockpit_plc_fs_ops",
-    "libs": "ecockpit_libs",
-    "lib_find": "ecockpit_lib_find",
-    "lib_install": "ecockpit_lib_install",
-    "lib_uninstall": "ecockpit_lib_uninstall",
-    "repos": "ecockpit_repos",
-    "repo_add": "ecockpit_repo_add",
-    "repo_remove": "ecockpit_repo_remove",
-    "repo_update": "ecockpit_repo_update",
-    "repo_move": "ecockpit_repo_move",
-    "task_config": "ecockpit_task_config",
-    "task_create": "ecockpit_task_create",
-    "symbol_config_variables": "ecockpit_symbol_config_variables",
-    "symbol_config_create": "ecockpit_symbol_config_create",
-    "symbol_config_options": "ecockpit_symbol_config_options",
-}
-
-
-def _register_legacy_aliases() -> None:
-    """Re-register every canonical tool under its deprecated alias name."""
-    for old, canonical in LEGACY_TOOL_ALIASES.items():
-        fn = globals()[canonical]
-        globals()[old] = fn  # getattr(server_module, old) keeps working
-        registered = mcp._tool_manager.get_tool(canonical)
-        if registered is None:  # pragma: no cover - registered right above
-            raise RuntimeError("canonical tool missing: " + canonical)
-        mcp.tool(
-            name=old,
-            structured_output=False,
-            annotations=registered.annotations,
-            description="Deprecated alias of "
-            + canonical
-            + " (pre-rename name) - use "
-            + canonical
-            + ".",
-        )(fn)
-
-
-_register_legacy_aliases()
 
 
 def main():
