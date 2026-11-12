@@ -2574,6 +2574,82 @@ def test_textual_refuses_all_shadow_candidates():
         ex.cmd_textual(ShadowPairProject(), {"op": "read", "name": "Prog"})
 
 
+class _FakeTextDoc(object):
+    def __init__(self, text):
+        self.text = text
+
+    def replace(self, new_text):
+        self.text = new_text
+
+
+class _FakeTextualObj(object):
+    """ScriptObject with textual parts: capability flags + documents."""
+
+    def __init__(self, name, guid, decl=None, impl=None):
+        self._name = name
+        self.guid = guid
+        self.has_textual_declaration = decl is not None
+        self.has_textual_implementation = impl is not None
+        self._decl = _FakeTextDoc(decl)
+        self._impl = _FakeTextDoc(impl)
+
+    def __str__(self):
+        return "ScriptObject{Name=%s}" % self._name
+
+    def get_name(self):
+        return self._name
+
+    @property
+    def textual_declaration(self):
+        if not self.has_textual_declaration:
+            raise AttributeError("no textual_declaration")
+        return self._decl
+
+    @property
+    def textual_implementation(self):
+        if not self.has_textual_implementation:
+            raise AttributeError("no textual_implementation")
+        return self._impl
+
+
+def test_textual_read_carries_capability_flags():
+    # 2026-11-12 loader echo: read responses carry
+    # has_textual_declaration / has_textual_implementation so callers
+    # pre-validate part writes locally - a declaration write to an
+    # implementation-only object (ACTION mode) never reaches the GUI.
+    full = _FakeTextualObj("fbFull", "g-full", decl="VAR END_VAR", impl=";")
+    action_like = _FakeTextualObj("mImplOnly", "g-act", impl="(* impl only *)")
+
+    class IndexProject(object):
+        def find(self, name, recursive):
+            return [_FakeTreeObj("Application", children=[full, action_like])]
+
+    # bulk: both parts requested -> any-textual preference resolves the
+    # implementation-only object to itself, flags report the truth
+    out = ex.cmd_textual(IndexProject(), {"op": "read", "name": "fbFull,mImplOnly"})
+    items = {i["name"]: i for i in out["objects"]}
+    assert items["fbFull"]["has_textual_declaration"] is True
+    assert items["fbFull"]["has_textual_implementation"] is True
+    assert items["fbFull"]["declaration"] == "VAR END_VAR"
+    assert items["mImplOnly"]["has_textual_declaration"] is False
+    assert items["mImplOnly"]["has_textual_implementation"] is True
+    assert items["mImplOnly"]["declaration"] is None  # part error, not crash
+    assert "declaration" in items["mImplOnly"]["error"]
+
+    # single read: same flags on the response (impl-only object, so the
+    # part is explicit - a bare read would raise on the missing decl)
+    class SingleProject(object):
+        def find(self, name, recursive):
+            return [action_like]
+
+    out = ex.cmd_textual(
+        SingleProject(), {"op": "read", "name": "mImplOnly", "part": "implementation"}
+    )
+    assert out["has_textual_declaration"] is False
+    assert out["has_textual_implementation"] is True
+    assert out["implementation"] == "(* impl only *)"
+
+
 def test_named_application_or_device_refuse_ambiguity():
     # Explicit application/device names resolve uniquely: found[0] on a
     # colliding name could aim destructive-adjacent ops at the wrong node.

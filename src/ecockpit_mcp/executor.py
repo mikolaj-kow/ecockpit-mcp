@@ -5421,6 +5421,11 @@ def cmd_textual(project, args):
     read is read-only; write replaces the whole part
     (ScriptTextDocument.replace(new_text=...)) and is CONFIRM-GATED -
     it modifies project code.
+
+    Read responses carry has_textual_declaration /
+    has_textual_implementation (2026-11-12 loader echo): callers
+    pre-validate part writes locally - a declaration write to an
+    implementation-only object (the ACTION mode) never reaches the GUI.
     """
     op = args.get("op", "read")
     if op == "read" and "," in str(args.get("name", "")):
@@ -5434,7 +5439,9 @@ def cmd_textual(project, args):
         index = _name_index(project)  # one tree walk serves the whole batch
         for one in [n.strip() for n in raw.split(",") if n.strip()]:
             item = {"name": one, "declaration": None,
-                    "implementation": None, "error": None}
+                    "implementation": None, "error": None,
+                    "has_textual_declaration": None,
+                    "has_textual_implementation": None}
             try:
                 # want_decl=None: the bulk item reads BOTH parts, so the
                 # disambiguation preference is "any textual part" -
@@ -5442,6 +5449,13 @@ def cmd_textual(project, args):
                 # mRecordBinSenPending class) must resolve to themselves
                 # even when a same-named node carries a declaration.
                 obj = _resolve_indexed(index, one, None)
+                # capability flags (2026-11-12 loader echo): the loader
+                # pre-validates part writes locally - a declaration write
+                # to an implementation-only object never reaches the GUI.
+                item["has_textual_declaration"] = bool(
+                    getattr(obj, "has_textual_declaration", False))
+                item["has_textual_implementation"] = bool(
+                    getattr(obj, "has_textual_implementation", False))
                 for p, key in (("declaration", "declaration"),
                                ("implementation", "implementation")):
                     try:
@@ -5463,7 +5477,11 @@ def cmd_textual(project, args):
     if op == "read":
         want_decl = (args.get("part", "") != "implementation")
         obj = _find_textual_obj(project, str(args.get("name", "")), want_decl)
-        out = {"name": args.get("name")}
+        out = {"name": args.get("name"),
+               "has_textual_declaration": bool(
+                   getattr(obj, "has_textual_declaration", False)),
+               "has_textual_implementation": bool(
+                   getattr(obj, "has_textual_implementation", False))}
         part = args.get("part", "")
         parts = (part,) if part in ("declaration", "implementation") else \
             ("declaration", "implementation")
