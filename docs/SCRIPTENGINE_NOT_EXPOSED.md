@@ -42,3 +42,7 @@ task-oriented subset via 54 MCP tools (2026-10-22; plc_fs_ops counts once for it
 `project.get_active_application`, `project/Application.get_build`,
 `application.check_all`, `Application.activate_application`,
 `project.get_name`. See SCRIPTENGINE_API.md for details.
+Also: `EScriptProjects.create` and `EScriptProjects.open` (stub names)
+do not exist in this build; `open_project(path)` works (single-arg),
+`create` has no working name found — scripted project CREATION is not
+possible; open a copied .ecp instead (G-33, live 2026-11-12).

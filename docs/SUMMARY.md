@@ -36,8 +36,7 @@ more). Live results: [TESTING.md](TESTING.md).
 | System / messages | ecockpit_system_ui | ✅ | `system.ui.error/warning/info/prompt/select_many/choose/query_string/query_password/query_credentials/file dialogs` | CONFIRM-GATED: real modal dialogs, wedge hazard (G-08); prompt_answers does NOT cover them (stub) |
 | System / messages | ecockpit_system_ui (op=exit) | ✅ | `system.exit(code)` | DESTRUCTIVE: kills e!COCKPIT + relay; confirm-gated |
 | Project lifecycle | ecockpit_status | ✅ | `projects.primary` / `get_by_path(path)` / `all` | internal (`get_project`) |
-| Project lifecycle | ecockpit_project_control | ✅ | `projects.create(path, primary)` | new project becomes primary |
-| Project lifecycle | ecockpit_project_control | ✅ | `projects.open(path, password, primary, update_flags)` | becomes primary |
+| Project lifecycle | ecockpit_project_control | ✅ | `projects.create(path, primary)` / `projects.open(...)` | G-33 (2026-11-12): the live build has NEITHER name - ladder falls back to `open_project(path)` (single-arg); scripted project CREATION not possible, open a copied .ecp |
 | Project lifecycle | ecockpit_project_control | ✅ | `projects.open_archive(archive, projectpath, overwrite)` | restores an archive |
 | Project lifecycle | — | 🟡 | `projects.convert(path, output_path, converter, primary)` | V2.3 `.pro`/`.lib` converter GUIDs in stub |
 | Project lifecycle | ecockpit_project_control | ✅ | `project.save()` | physical location |
@@ -52,11 +51,11 @@ more). Live results: [TESTING.md](TESTING.md).
 | Project lifecycle | — | 🟡 | `project.compare_to(right, flags)` → differences | 3.5.12.0 |
 | Project lifecycle | — | 🟡 | `project.project_settings.set_sourcedownload(timing, content, compact, device)` / `available_download_content` | 3.5.12.10; configures `download_source` packing |
 | Project lifecycle | — | 🟡 | `project.enable_integrity_check()` / `disable_encryption()` | security-setting change |
-| Tree / objects | ecockpit_tree | ✅ | `project.find(name, recursive)` / `get_children(recursive)` | op=list (read-only) |
+| Tree / objects | ecockpit_tree | ✅ | `project.find(name, recursive)` / `get_children(recursive)` | op=list (read-only) + op=resolve (find-vs-walk candidates + create_* member profiles, G-32) |
 | Tree / objects | ecockpit_tree | ✅ | `obj.get_name()` / `guid` / kind markers | op=list |
 | Tree / objects | ecockpit_tree | ✅ | `obj.rename(new_name)` | op=rename (confirm) |
-| Tree / objects | ecockpit_tree | ✅ | `obj.remove()` | op=remove (confirm; DELETES) |
-| Tree / objects | ecockpit_tree | ✅ | `obj.move(parent, index)` | op=move (confirm) |
+| Tree / objects | ecockpit_tree | ✅ | `obj.remove()` | op=remove (confirm; DELETES; ambiguous names refused, G-32) |
+| Tree / objects | ecockpit_tree | ✅ | `obj.move(parent, index)` | op=move (confirm; ambiguity refused + SILENT LOSS GUARD re-find, G-32 — moving into a structural node destroys the object) |
 | Tree / objects | ecockpit_tree | ✅ | `obj.create_folder(name)` / `project.create_folder(name, view)` | op=folder (confirm) |
 | Tree / objects | — | 🟡 | `obj.get_signature_crc()` | needs a successful build |
 | Tree / objects | — | 🟡 | `obj.build_properties.*` (exclude_from_build, ...) | per-object build exclusion |
@@ -65,7 +64,7 @@ more). Live results: [TESTING.md](TESTING.md).
 | ST authoring | ecockpit_object_create | ✅ | `container.create_gvl(name)` | kind=gvl |
 | ST authoring | ecockpit_object_create | ✅ | `container.create_dut(name, type=DutType.*, baseType)` | kind=dut |
 | ST authoring | ecockpit_object_create | ✅ | `container.create_interface(name, baseInterfaces)` | kind=interface |
-| ST authoring | ecockpit_object_create | ✅ | `pou.create_method/property/action/transition(...)` | kind=method/property/action/transition (needs parent) |
+| ST authoring | ecockpit_object_create | ✅ | `pou.create_method/property/action/transition(...)` | kind=method/property/action/transition (needs parent; container PROBED across same-named nodes — G-32; works on program POUs, live 2026-11-12) |
 | ST authoring | ecockpit_textual_read/write | ✅ | `obj.textual_declaration` / `textual_implementation` → `.text` / `.replace(new_text=...)` | read / confirm-gated whole-part replace |
 | ST authoring | ecockpit_object_create | ✅ | `create_pou(SpecialPouType.*)` (check functions) | kind=special_pou + special_type (engine names the object); forces full recompile, kills online change; confirm |
 | Task config | ecockpit_task_config | ✅ | `app.create_task_configuration()` → `tc.create_task(name)` | inspect (read-only) + create |

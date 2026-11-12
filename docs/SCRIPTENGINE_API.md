@@ -119,6 +119,12 @@ prefers the injected enum globals (`PromptHandling`, `PromptResult`,
 - `save()` — saves at its **physical location** (`path` property).
   Fails with *"Current project is stored with a temporary file-name"* when
   the GUI session holds the project unnamed/unusual.
+- **Project lifecycle OEM names (G-33, live 2026-11-12):** the live
+  `EScriptProjects` has NO `create` and NO `open` (stub names) - it
+  exposes **`open_project(path)`** (single-arg; the primary flag raised
+  "TypeError: expected str, got bool"). `create` has no working name in
+  this build: fresh projects cannot be made via scripting - open a
+  copied .ecp instead. `cmd_project_control` ladders both names.
 - `save_as(path, password=None)` — saves under a **new filename**
   (RETARGETS the open project; password optional, re-encrypts when given).
   Avoid for snapshots — copy the file instead.
@@ -260,12 +266,29 @@ feat/scriptlib-tools:
   is_symbol_config/is_libman/is_textlist/is_imagepool/
   has_textual_declaration/has_textual_implementation` (direct access
   per the gotcha; `getattr`/`dir` unusable). → `ecockpit_tree`.
+  **G-32 (2026-11-12):** the tree carries same-named non-POU
+  structural nodes beside the real POUs and `find` returns them FIRST;
+  destructive ops resolve through `_resolve_unique` (ambiguity refused)
+  and `move` verifies the object still exists afterwards
+  ("SILENT LOSS GUARD" - moving into a structural node silently
+  destroys it). `ecockpit_tree op=resolve name=<n>` dumps the
+  find-vs-walk candidates with summaries, tree parents and create_*
+  member profiles - the first command to run when a name resolves
+  strangely.
 - **ST authoring** (ScriptIecLanguageObjectContainer, 3.5.9.0):
   `create_pou(name, type=PouType.Program|FunctionBlock|Function,
   language=ImplementationLanguages.st, return_type)`,
   `create_gvl(name)`, `create_dut(name, DutType..., baseType)`,
   `create_interface(name, baseInterfaces)`, and on POUs
   `create_method/create_property/create_action/create_transition`.
+  LIVE 2026-11-12 (G-32): the member container lands on REAL POUs of
+  EVERY pou_type - program POUs included (probed live on a program:
+  create_method/create_action/create_property/create_transition all
+  exposed) - "on POUs" in the stub holds literally; program methods
+  are NOT GUI-only. The member kinds must resolve the container by
+  PROBING (executor `_member_container`), never by found[0]: the
+  same-named structural nodes (G-32) lack the members and the bare
+  AttributeError they produce was the finding-A red herring.
   Special POUs (3.5.12.10): `create_pou(SpecialPouType)` — implicit-
   check functions (check_bounds, check_pointer, check_range_unsigned/
   signed, check_div_real_64/32, check_div_int_64/32,

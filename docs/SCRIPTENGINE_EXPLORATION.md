@@ -15,7 +15,10 @@ done + possible), [TESTING.md](TESTING.md) (live results),
    protocol, no MCP needed; paths relative to the repo root):
 
    ```bash
-   WD="src/ecockpit_mcp/tmp"
+   WD="tmp"   # ECP_WORK_DIR from the project .env - the REPO ROOT tmp/,
+              # NOT src/ecockpit_mcp/tmp (2026-11-12: probing the stale
+              # path looked exactly like "relay not armed" - check the
+              # heartbeat's mtime in the ACTIVE work dir first)
    printf '%s\n' '{"id": "probe-1", "cmd": "<command>", "args": {}}' \
        > "$WD/ecockpit_cmd.json"
    # poll "$WD/ecockpit_cmd_result.json" for the matching id
