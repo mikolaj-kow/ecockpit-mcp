@@ -5201,6 +5201,45 @@ def _refind_after_move(project, name, was):
     return _refind_by_guid(project, bare, was.get("guid"))
 
 
+def _root_name_index(project):
+    """lower-name -> [objects] from ONE recursive walk of the PROJECT ROOT
+    (everything: devices, domain/structural nodes, the Application subtree
+    - superset of _name_index).
+
+    Why it exists (2026-11-12 live smoke, scratch project): the saved
+    s4_3.13.2.ecp carries leftover wreck objects (zT0/zT1/zT2 - broken
+    old-enum text from the OOM-dying session) that `project.find` CANNOT
+    see but the root walk lists - the G-32 divergence mirrored: real,
+    destructive-class objects that are LISTABLE but unaddressable. The
+    501-error build cascade they caused (C136 ambiguous eEntitySubType:
+    the wrecks hold pre-rename enum text with the 'log' member) made
+    them impossible to remove through the find-locked resolver."""
+    index = {}
+
+    def _walk(obj):
+        try:
+            n = obj.get_name()
+        except Exception:
+            return
+        if n:
+            index.setdefault(n.lower(), []).append(obj)
+        try:
+            kids = obj.get_children(False)
+        except Exception:
+            kids = None
+        if kids:
+            for k in kids:
+                _walk(k)
+
+    try:
+        top = list(project.get_children(True) or [])
+    except Exception:
+        top = []
+    for o in top:
+        _walk(o)
+    return index
+
+
 def _resolve_unique(project, name, what):
     """Resolve a name to exactly ONE tree object, LOUD when ambiguous.
 
@@ -5213,16 +5252,46 @@ def _resolve_unique(project, name, what):
     the application XML). Destructive ops (move target/source, remove)
     must not resolve that choice silently: refuse and point at the
     parent-qualified form that _find_candidates understands.
-    """
-    candidates = _find_candidates(project, name)
+
+    RESOLVER PASS 2026-11-12 (root-walk extension): when find returns
+    NOTHING, the root walk is consulted before refusing - the zT0/zT1/
+    zT2 wreck class (real, destructive-adjacent objects outside find's
+    coverage) must stay addressable for remove. Walk-only hits resolve
+    uniquely; multiple walk hits still refuse."""
+    try:
+        candidates = _find_candidates(project, name)
+    except RuntimeError as exc:
+        # find-miss ("no object named ...") falls through to the root
+        # walk - the zT-wreck class lives outside find's coverage
+        if "no object" not in str(exc):
+            raise
+        candidates = []
     if len(candidates) > 1:
         raise RuntimeError(
             "tree {w} REFUSED - '{n}' matches {c} objects; name the exact "
             "one with 'Parent/Name' (find returns the non-POU structural "
             "node first and moving into it silently destroys the object; "
-            "tree op=resolve name='{n}' shows the candidates)"
-            .format(w=what, n=name, c=len(candidates)))
-    return candidates[0]
+            "tree op=resolve name='{n}' shows the candidates)".format(
+                w=what, n=name, c=len(candidates)))
+    if candidates:
+        return candidates[0]
+    # find saw nothing - the root walk may still see it (the zT-wreck
+    # class: outside find's coverage, visible only to get_children)
+    index = _root_name_index(project)
+    hits = index.get(name.rsplit("/", 1)[-1].strip().lower(), [])
+    if len(hits) > 1:
+        raise RuntimeError(
+            "tree {w} REFUSED - '{n}' matches {c} objects in the root "
+            "walk (find sees none of them); disambiguate or remove via "
+            "the GUI".format(w=what, n=name, c=len(hits)))
+    if hits:
+        log("OK", "{w}: '{n}' resolved via the ROOT WALK - find does not "
+            "see this object (outside find's coverage)".format(
+                w=what, n=name))
+        return hits[0]
+    raise RuntimeError(
+        "tree {w}: no object named '{n}' in the project (find and the "
+        "root walk both miss)".format(w=what, n=name))
 
 
 _SPECIAL_POU_TYPES = ("check_bounds", "check_pointer",
