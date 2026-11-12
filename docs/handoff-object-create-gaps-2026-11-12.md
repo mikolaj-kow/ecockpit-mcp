@@ -35,6 +35,9 @@ Evidence: `s4/main/tmp/push-sitting.log`, `s4/main/tmp/push-fix.log`,
   (`FUNCTION f : BOOL`) and passes it. REVIEW: consider a clear Python-side
   error in the executor when pou_type=function arrives with empty
   return_type (fail loud instead of the opaque .NET range error).
+  **DONE 2026-11-12**: the executor now refuses `pou_type=function`
+  with an empty/whitespace return_type up front (clear message, unit
+  test `test_object_create_function_requires_return_type`).
 
 ## OPEN (to implement / research)
 

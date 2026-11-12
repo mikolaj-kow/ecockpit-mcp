@@ -4993,6 +4993,17 @@ def cmd_object_create(project, args):
         if pou_type not in pou_types:
             raise RuntimeError("object_create: pou_type must be program, "
                                "functionblock or function")
+        # return_type REQUIRED for functions (2026-11-12 push sitting,
+        # handoff-object-create-gaps review note): create_pou(type=Function)
+        # without it throws the opaque .NET ValueError "Specified argument
+        # was out of the range of valid values" (fMqttPublishResult/
+        # fFindEntity) - fail loud here instead.
+        if pou_type == "function" and not str(
+                args.get("return_type") or "").strip():
+            raise RuntimeError(
+                "object_create: pou_type=function needs return_type "
+                "(e.g. 'BOOL') - create_pou throws an opaque .NET "
+                "ValueError without it (push sitting 2026-11-12)")
         try:
             langs = ImplementationLanguages
         except NameError:
