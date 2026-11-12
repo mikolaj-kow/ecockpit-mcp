@@ -1964,6 +1964,72 @@ def test_object_create_special_pou(monkeypatch):
         )
 
 
+def test_object_create_dut_kind(monkeypatch):
+    # 2026-11-12 push sitting: DutType.Structure was hardcoded, so an ENUM
+    # DUT came out structure-kind with enum text -> C6/C368/C26/C135 cascade
+    # at compile. dut_kind must land on the matching DutType member.
+    class FakeDutType(object):
+        Structure = 1
+        Enumeration = 2
+        Union = 3
+        Alias = 4
+
+    class FakeDut(object):
+        pass
+
+    class FakeDutContainer(object):
+        def __init__(self):
+            self.calls = []
+
+        def create_dut(self, *argv, **kwargs):
+            self.calls.append((argv, kwargs))
+            return FakeDut()
+
+    monkeypatch.setattr(ex, "DutType", FakeDutType)
+    app = FakeDutContainer()
+
+    class RootProject(object):
+        def find(self, name, recursive):
+            return [app]
+
+    monkeypatch.setattr(ex, "get_application", lambda project: app)
+
+    # explicit dut_kind -> the mapped member, base_type still forwarded
+    out = ex.cmd_object_create(
+        RootProject(),
+        {
+            "kind": "dut",
+            "name": "eEntitySubType",
+            "dut_kind": "enumeration",
+            "base_type": "INT",
+            "confirm": True,
+        },
+    )
+    assert app.calls == [(("eEntitySubType",), {"type": 2, "baseType": "INT"})]
+    assert out["kind"] == "dut"
+
+    # omitted dut_kind -> Structure (backward compatible default)
+    app.calls = []
+    ex.cmd_object_create(
+        RootProject(), {"kind": "dut", "name": "sPlain", "confirm": True}
+    )
+    assert app.calls == [(("sPlain",), {"type": 1, "baseType": None})]
+
+    # unknown dut_kind -> loud error listing the known members
+    with pytest.raises(RuntimeError, match="unknown DutType member"):
+        ex.cmd_object_create(
+            RootProject(),
+            {"kind": "dut", "name": "xBad", "dut_kind": "wat", "confirm": True},
+        )
+
+    # no stand-in (None) -> same unknown-member error, not a crash
+    monkeypatch.setattr(ex, "DutType", None)
+    with pytest.raises(RuntimeError, match="unknown DutType member"):
+        ex.cmd_object_create(
+            RootProject(), {"kind": "dut", "name": "xNone", "confirm": True}
+        )
+
+
 # ---------------------------------------------------------------------------
 # PLC connection sidecar (_note_plc + the _online_connect hook)
 # ---------------------------------------------------------------------------
