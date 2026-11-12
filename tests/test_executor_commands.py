@@ -2213,7 +2213,8 @@ def test_tree_move_silent_loss_guard():
             self.hits = hits
 
         def find(self, name, recursive):
-            return list(self.hits)
+            # honor the name filter like the real project.find
+            return [h for h in self.hits if h.get_name() == name]
 
     def do_move(new_parent, new_index=-1):
         proj_moves.append((new_parent, new_index))
@@ -2262,6 +2263,129 @@ def test_tree_move_silent_loss_guard():
     )
     assert out["moved"] is True
     assert out["summary"]["guid"] == "g-obj"
+
+    # qualified source path + successful move: the guard re-finds by the
+    # BARE name (2026-11-12 repro: 'fbBinSenDetect/mCtlFb2' survived its
+    # move into 'Application/MqttSendQueue' but a path-form re-find would
+    # miss it -> false positive)
+    fb1 = _FakeTreeObj("Fb1", guid="g-fb1")
+    obj2 = _FakeTreeObj("mX", guid="g-obj2", parent=fb1)
+
+    class QualifiedProject(object):
+        def __init__(self, hits):
+            self.hits = hits
+
+        def find(self, name, recursive):
+            return [h for h in self.hits if h.get_name() == name]
+
+    proj2 = QualifiedProject([obj2])
+    moved_to = []
+
+    def move_qualified(new_parent, new_index=-1):
+        moved_to.append(new_parent)
+        obj2._parent = new_parent  # the move re-parents (object passed in)
+        proj2.hits = [obj2]
+
+    obj2.move = move_qualified
+    proj2.hits = [obj2, _FakeTreeObj("Prog", guid="g-prog2",
+                                     parent=_FakeTreeObj("Application"))]
+    obj2.move = move_qualified
+    out2 = ex.cmd_tree(
+        proj2,
+        {
+            "op": "move",
+            "name": "Fb1/mX",
+            "new_parent": "Application/Prog",
+            "confirm": True,
+        },
+    )
+    assert out2["moved"] is True
+    assert out2["summary"]["guid"] == "g-obj2"
+
+
+def test_tree_move_ambiguous_names_refused():
+    # 2026-11-12 repro: found[0] for a bare name is the non-POU structural
+    # node (s4 tree carries same-named shadows under domain nodes) and
+    # moving INTO it silently destroyed the object. Destructive ops must
+    # refuse ambiguous names instead of picking found[0].
+    shadow = _FakeTreeObj("Prog", guid="g-shadow", parent=_FakeTreeObj("Lights"))
+    pou = _FakeTreeObj("Prog", guid="g-pou", parent=_FakeTreeObj("Application"))
+    obj = _FakeTreeObj("mX", guid="g-obj")
+
+    def move_never(new_parent, new_index=-1):
+        raise AssertionError("move must not be attempted on ambiguity")
+
+    obj.move = move_never
+
+    class AmbiguousProject(object):
+        def find(self, name, recursive):
+            if name == "mX":
+                return [obj]
+            return [shadow, pou]  # bare 'Prog' -> 2 candidates
+
+    with pytest.raises(RuntimeError, match="move \\(new_parent\\) REFUSED"):
+        ex.cmd_tree(
+            AmbiguousProject(),
+            {"op": "move", "name": "mX", "new_parent": "Prog", "confirm": True},
+        )
+
+    # an ambiguous SOURCE name refuses the same way
+    class AmbiguousSourceProject(object):
+        def find(self, name, recursive):
+            if name == "mX":
+                return [obj, _FakeTreeObj("mX", guid="g-twin")]
+            return [pou]
+
+    with pytest.raises(RuntimeError, match="move \\(source\\) REFUSED"):
+        ex.cmd_tree(
+            AmbiguousSourceProject(),
+            {
+                "op": "move",
+                "name": "mX",
+                "new_parent": "Application/Prog",
+                "confirm": True,
+            },
+        )
+
+    # the parent-qualified target form disambiguates and proceeds
+    class QualifiedOnlyProject(object):
+        def find(self, name, recursive):
+            if name == "mX":
+                return [obj]
+            return [pou]  # 'Prog' resolves to the real POU only
+
+    def move_record(new_parent, new_index=-1):
+        obj._parent = new_parent  # the move re-parents (object passed in)
+
+    obj.move = move_record
+    out = ex.cmd_tree(
+        QualifiedOnlyProject(),
+        {
+            "op": "move",
+            "name": "mX",
+            "new_parent": "Application/Prog",
+            "confirm": True,
+        },
+    )
+    assert out["moved"] is True
+
+
+def test_tree_remove_ambiguous_name_refused():
+    a = _FakeTreeObj("Pou_Main", guid="g1")
+    b = _FakeTreeObj("Pou_Main", guid="g2")
+
+    class AmbiguousProject(object):
+        def find(self, name, recursive):
+            return [a, b]
+
+    def remove_never():
+        raise AssertionError("remove must not be attempted on ambiguity")
+
+    a.remove = remove_never  # noqa: B010 - fake object
+    with pytest.raises(RuntimeError, match="remove REFUSED"):
+        ex.cmd_tree(
+            AmbiguousProject(), {"op": "remove", "name": "Pou_Main", "confirm": True}
+        )
 
 
 def test_tree_resolve_find_walk_divergence():

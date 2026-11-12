@@ -4857,7 +4857,7 @@ def cmd_tree(project, args):
             raise RuntimeError("tree remove REFUSED - requires "
                                "args.confirm=true (it DELETES the object "
                                "from the project)")
-        obj = _find_one(project, str(args.get("name", "")))
+        obj = _resolve_unique(project, str(args.get("name", "")), "remove")
         summary = _obj_summary(obj)
         obj.remove()
         log("OK", "removed object (was: {n})".format(
@@ -4869,8 +4869,10 @@ def cmd_tree(project, args):
             raise RuntimeError("tree move REFUSED - requires "
                                "args.confirm=true (it modifies the "
                                "project)")
-        obj = _find_one(project, str(args.get("name", "")))
-        parent = _find_one(project, str(args.get("new_parent", "")))
+        obj = _resolve_unique(project, str(args.get("name", "")),
+                              "move (source)")
+        parent = _resolve_unique(project, str(args.get("new_parent", "")),
+                                 "move (new_parent)")
         try:
             index = int(args.get("index", -1))
         except (TypeError, ValueError):
@@ -5065,11 +5067,18 @@ def _refind_after_move(project, name, was):
 
     Identity is the pre-move guid when it was readable; without a guid
     any name hit is accepted (guarded - never a bare AttributeError).
-    Returns the object or None; cmd_tree move turns None into a loud
-    RuntimeError (silent data loss, handoff-object-create-gaps #4).
+    The BARE name is used: a parent/child source path would not match
+    after the move (the object legitimately changed parent) and produced
+    guard false positives on successful moves (2026-11-12 repro:
+    'fbBinSenDetect/mCtlFb2' survived its move into
+    'Application/MqttSendQueue' but the path-form re-find missed it).
+    The guid check keeps the bare-name hits exact. Returns the object or
+    None; cmd_tree move turns None into a loud RuntimeError (silent data
+    loss, handoff-object-create-gaps #4).
     """
+    bare = name.rsplit("/", 1)[1].strip() if "/" in name else name.strip()
     try:
-        hits = list(project.find(name, True) or [])
+        hits = list(project.find(bare, True) or [])
     except Exception:
         return None
     want = was.get("guid")
@@ -5082,6 +5091,30 @@ def _refind_after_move(project, name, was):
                 pass
         return None
     return hits[0] if hits else None
+
+
+def _resolve_unique(project, name, what):
+    """_find_one, but LOUD when the name is ambiguous.
+
+    The s4/e!COCKPIT tree carries same-named non-POU structural nodes
+    beside the real POUs ('InputRuntime' the node under 'Lights' AND the
+    program POU under 'Application'; 'MqttSendQueue' under 'MqttPub' AND
+    the FB). find returns the structural node FIRST, so found[0] for a
+    bare name is the shadow - the 2026-11-12 repros moved objects into it
+    and the engine silently destroyed them (find 0, walk 0, absent from
+    the application XML). Destructive ops (move target/source, remove)
+    must not resolve that choice silently: refuse and point at the
+    parent-qualified form that _find_candidates understands.
+    """
+    candidates = _find_candidates(project, name)
+    if len(candidates) > 1:
+        raise RuntimeError(
+            "tree {w} REFUSED - '{n}' matches {c} objects; name the exact "
+            "one with 'Parent/Name' (find returns the non-POU structural "
+            "node first and moving into it silently destroys the object; "
+            "tree op=resolve name='{n}' shows the candidates)"
+            .format(w=what, n=name, c=len(candidates)))
+    return candidates[0]
 
 
 _SPECIAL_POU_TYPES = ("check_bounds", "check_pointer",
@@ -6899,7 +6932,16 @@ def cmd_project_control(project, args):
         path = str(args.get("path", "")).strip()
         if not path:
             raise RuntimeError("project create needs args.path")
-        _projects_global().create(path, True)
+        # OEM naming ladder: the stub documents create(path, primary), the
+        # live e!COCKPIT build exposes create_project on EScriptProjects
+        # (2026-11-12: "'EScriptProjects' object has no attribute
+        # 'create'" - same divergence class as open/open_project, G-22
+        # style stub-vs-live drift).
+        projects = _projects_global()
+        try:
+            projects.create(path, True)
+        except AttributeError:
+            projects.create_project(path, True)
         log("OK", "project created at {p} (primary)".format(p=path))
         return {"created": path, "primary": True}
 
@@ -6913,7 +6955,16 @@ def cmd_project_control(project, args):
         path = str(args.get("path", "")).strip()
         if not path:
             raise RuntimeError("project open needs args.path")
-        opened = _projects_global().open(path, True)
+        # OEM naming ladder (2026-11-12: "'EScriptProjects' object has no
+        # attribute 'open'" - the executor's own startup path uses
+        # e_projects.open_project(PROJECT_FILE), so that name EXISTS live,
+        # single-arg: passing the primary bool raised
+        # "TypeError: expected str, got bool").
+        projects = _projects_global()
+        try:
+            opened = projects.open(path, True)
+        except (AttributeError, TypeError):
+            opened = projects.open_project(path)
         log("OK", "project opened: {p}".format(p=opened.path))
         return {"opened": str(opened.path), "primary": True}
 
