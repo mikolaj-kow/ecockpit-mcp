@@ -4712,12 +4712,61 @@ def _name_index(project):
     return index
 
 
+def _prefer_textual(hits, want_decl):
+    """Shared textual selection ladder (resolver pass 2026-11-12).
+
+    Prefer a hit carrying the requested part (want_decl True/False),
+    then ANY textual part (want_decl=None skips straight to this - the
+    bulk-read form: items carry both parts and implementation-only
+    objects, the ACTION mode, must resolve to themselves). Returns the
+    object or None - callers must refuse on None for ambiguous names,
+    never fall back to found[0]."""
+    if want_decl is not None:
+        flag = ("has_textual_declaration" if want_decl
+                else "has_textual_implementation")
+        for o in hits:
+            try:
+                if getattr(o, flag, False):
+                    return o
+            except Exception:
+                pass
+    for o in hits:
+        try:
+            if getattr(o, "has_textual_declaration", False) \
+                    or getattr(o, "has_textual_implementation", False):
+                return o
+        except Exception:
+            pass
+    return None
+
+
+def _textual_refusal(name, hits):
+    """Refuse a multi-candidate name whose hits carry NO textual part.
+
+    The G-32 trap in its textual form: every hit is a structural shadow
+    (or a markerless node), so found[0] would resolve the write into an
+    object without text and fail later with a misleading part error.
+    The refusal names every candidate with its parent and repr
+    interface markers (#12) so one message classifies the pair."""
+    detail = "; ".join(
+        "{n} (parent {p}){m}".format(
+            n=_short_name(o), p=_parent_name(o) or "?",
+            m=" [{0}]".format(", ".join(_repr_markers(o)))
+            if _repr_markers(o) else "")
+        for o in hits)
+    raise RuntimeError(
+        "textual: '{n}' matched {k} object(s) and none carries textual "
+        "parts - refusing instead of guessing found[0] (candidates: {d}; "
+        "use 'Parent/Name' or tree op=resolve name='{n}')".format(
+            n=name, k=len(hits), d=detail))
+
+
 def _resolve_indexed(index, name, want_decl):
-    """_find_one/_find_textual_obj semantics against a prebuilt index:
-    'parent/child' filters by the direct parent's name, multiple hits prefer
-    one carrying the requested textual part."""
-    flag = ("has_textual_declaration" if want_decl
-            else "has_textual_implementation")
+    """_find_textual_obj semantics against a prebuilt index: 'parent/
+    child' filters by the direct parent's name; multiple hits prefer one
+    carrying textual parts (want_decl=None = any textual part, the
+    bulk-read form). Ambiguous all-shadow names REFUSE (resolver pass
+    2026-11-12) - found[0] is never a selection."""
     if "/" in name:
         child_name = name.rsplit("/", 1)[1].strip()
         parent_want = name.rsplit("/", 1)[0].rsplit("/", 1)[-1].strip()
@@ -4731,50 +4780,27 @@ def _resolve_indexed(index, name, want_decl):
                            "project".format(n=name))
     if len(hits) == 1:
         return hits[0]
-    for o in hits:
-        try:
-            if getattr(o, flag, False):
-                return o
-        except Exception:
-            pass
-    for o in hits:
-        try:
-            if getattr(o, "has_textual_declaration", False) \
-                    or getattr(o, "has_textual_implementation", False):
-                return o
-        except Exception:
-            pass
-    return hits[0]
+    pick = _prefer_textual(hits, want_decl)
+    if pick is not None:
+        return pick
+    _textual_refusal(name, hits)
 
 
 def _find_textual_obj(project, name, want_decl):
     """Resolve an object for a textual read/write and prefer a hit that
     actually carries the requested textual part: task-configuration program
     instances share the POU's name but expose no text (all 19 s4 PROGRAMs
-    were unreachable through found[0] before this)."""
-    flag = ("has_textual_declaration" if want_decl
-            else "has_textual_implementation")
+    were unreachable through found[0] before this). RESOLVER PASS
+    2026-11-12: an ambiguous name whose hits carry NO textual part at
+    all (all G-32 shadows) REFUSES with the candidate list - found[0]
+    is never a selection."""
     found = _find_candidates(project, name)
     if len(found) == 1:
         return found[0]
-    for o in found:
-        try:
-            if getattr(o, flag, False):
-                return o
-        except Exception:
-            pass
-    for o in found:
-        try:
-            if getattr(o, "has_textual_declaration", False) \
-                    or getattr(o, "has_textual_implementation", False):
-                return o
-        except Exception:
-            pass
-    return found[0]
-
-
-def _find_one(project, name):
-    return _find_candidates(project, name)[0]
+    pick = _prefer_textual(found, want_decl)
+    if pick is not None:
+        return pick
+    _textual_refusal(name, found)
 
 
 def _resolve_textual(obj, part):
@@ -4817,11 +4843,19 @@ def cmd_tree(project, args):
                paths diverged on s4 methods), each with summary, tree
                parent and create_* member profile
       rename  {name, new_name, confirm}          -> renames an object
+               (ambiguous names REFUSED - G-32 shadows resolve
+               find-first; the object is re-found under its NEW name
+               with the same guid, verify-after-mutate)
       remove  {name, confirm}                    -> DESTRUCTIVE: deletes
+               (ambiguous names REFUSED; absence re-verified after the
+               call)
       move    {name, new_parent, index?: -1, confirm} -> moves in tree
-               (re-finds the object after the move and FAILS LOUD when
+               (source and target REFUSE ambiguous bare names;
+               re-finds the object after the move and FAILS LOUD when
                absent - silent-loss guard, handoff #4 2026-11-12)
       folder  {parent?, new_name, confirm}       -> creates a folder
+               (an ambiguous parent REFUSES - shadows expose
+               create_folder too, probing cannot disambiguate)
     list is read-only; everything else modifies the project and needs
     args.confirm=true.
     """
@@ -4844,13 +4878,30 @@ def cmd_tree(project, args):
             raise RuntimeError("tree rename REFUSED - requires "
                                "args.confirm=true (it modifies the "
                                "project)")
-        obj = _find_one(project, str(args.get("name", "")))
+        # resolver pass 2026-11-12: rename goes through _resolve_unique -
+        # G-32 shadows resolve find-FIRST under a bare name, so found[0]
+        # would rename the structural node, not the object.
+        obj = _resolve_unique(project, str(args.get("name", "")), "rename")
         new_name = str(args.get("new_name", "")).strip()
         if not new_name:
             raise RuntimeError("tree rename needs args.new_name")
+        was = _obj_summary(obj)
         obj.rename(new_name)
-        log("OK", "renamed to {n}".format(n=new_name))
-        return {"renamed": True, "new_name": new_name}
+        # verify-after-mutate (same invariant as the move guard): the
+        # object must be findable under its NEW name with the SAME guid -
+        # a rename that lands nowhere is the silent-loss class too.
+        still = _refind_by_guid(
+            project, new_name.rsplit("/", 1)[-1].strip(), was.get("guid"))
+        if still is None:
+            raise RuntimeError(
+                "tree rename VERIFY: '{o}' -> '{n}' is not findable "
+                "under the new name after rename() (guid {g}) - the "
+                "engine may have dropped it. Check the GUI before any "
+                "further mutation.".format(
+                    o=was.get("name"), n=new_name, g=was.get("guid")))
+        log("OK", "renamed to {n} (re-found)".format(n=new_name))
+        return {"renamed": True, "new_name": new_name, "was": was,
+                "summary": _obj_summary(still)}
 
     if op == "remove":
         if not args.get("confirm"):
@@ -4859,9 +4910,21 @@ def cmd_tree(project, args):
                                "from the project)")
         obj = _resolve_unique(project, str(args.get("name", "")), "remove")
         summary = _obj_summary(obj)
+        guid = summary.get("guid")
+        bare = str(args.get("name", "")).rsplit("/", 1)[-1].strip()
         obj.remove()
-        log("OK", "removed object (was: {n})".format(
-            n=summary.get("name")))
+        # verify-after-mutate (resolver invariants, 2026-11-12 pass):
+        # remove() must actually remove - a same-named shadow or an
+        # engine hiccup must not read as success. guid-exact when the
+        # guid was readable; name-presence otherwise.
+        if _refind_by_guid(project, bare, guid or None) is not None:
+            raise RuntimeError(
+                "tree remove VERIFY: '{n}' (guid {g}) is still findable "
+                "after remove() - the engine may not have deleted it (or "
+                "another object shares the name). Check the GUI before "
+                "any further mutation.".format(
+                    n=summary.get("name"), g=guid))
+        log("OK", "removed object (was: {n})".format(n=summary.get("name")))
         return {"removed": True, "was": summary}
 
     if op == "move":
@@ -4948,7 +5011,13 @@ def cmd_tree(project, args):
             raise RuntimeError("tree folder needs args.new_name")
         parent_name = str(args.get("parent", "")).strip()
         if parent_name:
-            parent = _find_one(project, parent_name)
+            # resolver pass 2026-11-12: member probing CANNOT disambiguate
+            # a folder parent - G-32 structural shadows expose
+            # create_folder too, so the probe would return the shadow
+            # (find-first) and the folder would land in the wrong node
+            # silently. Ambiguity is refused; use 'Parent/Name'.
+            parent = _resolve_unique(project, parent_name,
+                                     "folder (parent)")
             parent.create_folder(new_name)
         else:
             project.create_folder(new_name)
@@ -4960,20 +5029,20 @@ def cmd_tree(project, args):
                        '"move" or "folder"')
 
 
-def _iecc_container(project, parent_name):
-    """Container for the ScriptIecLanguageObjectContainer create_* calls.
+def _iecc_container(project, parent_name, needed):
+    """Container for the TOP-LEVEL create_* calls (pou/gvl/dut/interface,
+    ScriptIecLanguageObjectContainer stub).
 
     LIVE 2026-10-22 (G-22): EScriptProject has NO create_pou
     ("'EScriptProject' object has no attribute 'create_pou'") - the
     mixin lands on the APPLICATION - so the no-parent default is the
-    application, not the project (falling back to the project keeps
-    offline fakes working)."""
-    if parent_name:
-        return _find_one(project, parent_name)
-    try:
-        return get_application(project)
-    except Exception:
-        return project
+    application, not the project. RESOLVER PASS 2026-11-12: the parent
+    is chosen by _member_container probing for *needed* - never
+    found[0]: G-32 structural shadows resolve find-first and expose none
+    of the create_* members, so a colliding parent name either lands on
+    the real container or refuses with a verdict (the application
+    default is probed the same way)."""
+    return _member_container(project, parent_name, needed)
 
 
 _CREATE_MEMBERS = ("create_pou", "create_gvl", "create_dut",
@@ -5091,6 +5160,29 @@ def _member_container(project, parent_name, needed):
                     for c in probed)))
 
 
+def _refind_by_guid(project, bare, guid):
+    """Re-find one object by its BARE name; the guid keeps the match
+    exact when readable (verify-after-mutate for move/rename/remove -
+    resolver invariants). Without a guid any name hit is accepted
+    (guarded - never a bare AttributeError). Returns the object or
+    None."""
+    try:
+        hits = list(project.find(bare, True) or [])
+    except Exception:
+        return None
+    if not hits:
+        return None
+    if guid:
+        for o in hits:
+            try:
+                if str(o.guid) == guid:
+                    return o
+            except Exception:
+                pass
+        return None
+    return hits[0]
+
+
 def _refind_after_move(project, name, was):
     """Re-find a moved object by name after tree op=move.
 
@@ -5106,24 +5198,11 @@ def _refind_after_move(project, name, was):
     loss, handoff-object-create-gaps #4).
     """
     bare = name.rsplit("/", 1)[1].strip() if "/" in name else name.strip()
-    try:
-        hits = list(project.find(bare, True) or [])
-    except Exception:
-        return None
-    want = was.get("guid")
-    if want:
-        for o in hits:
-            try:
-                if str(o.guid) == want:
-                    return o
-            except Exception:
-                pass
-        return None
-    return hits[0] if hits else None
+    return _refind_by_guid(project, bare, was.get("guid"))
 
 
 def _resolve_unique(project, name, what):
-    """_find_one, but LOUD when the name is ambiguous.
+    """Resolve a name to exactly ONE tree object, LOUD when ambiguous.
 
     The s4/e!COCKPIT tree carries same-named non-POU structural nodes
     beside the real POUs ('InputRuntime' the node under 'Lights' AND the
@@ -5195,8 +5274,7 @@ def cmd_object_create(project, args):
                                "args.special_type (one of: {k})"
                                .format(k=", ".join(_SPECIAL_POU_TYPES)))
         parent_name = str(args.get("parent", "")).strip()
-        container = _iecc_container(
-            project, str(args.get("parent", "")).strip())
+        container = _iecc_container(project, parent_name, "create_pou")
         try:
             member = getattr(SpecialPouType, special)
         except Exception:
@@ -5215,8 +5293,18 @@ def cmd_object_create(project, args):
     if not name:
         raise RuntimeError("object_create needs args.name")
     parent_name = str(args.get("parent", "")).strip()
-    container = _iecc_container(
-        project, str(args.get("parent", "")).strip())
+    # Top-level kinds resolve the container by PROBING the parent for the
+    # create_* member they need (resolver pass 2026-11-12) - a parent
+    # name colliding with a G-32 structural shadow never resolves to
+    # found[0]: the probe skips the shadow (no create_pou/gvl/dut/
+    # interface on it) or refuses with a verdict. Member kinds
+    # (method/property/action/transition) resolve their own container in
+    # their branch (member-container probing, finding A).
+    _top_members = {"pou": "create_pou", "gvl": "create_gvl",
+                    "dut": "create_dut", "interface": "create_interface"}
+    if kind in _top_members:
+        container = _iecc_container(project, parent_name,
+                                    _top_members[kind])
 
     created = None
     if kind == "pou":
@@ -5348,7 +5436,12 @@ def cmd_textual(project, args):
             item = {"name": one, "declaration": None,
                     "implementation": None, "error": None}
             try:
-                obj = _resolve_indexed(index, one, True)
+                # want_decl=None: the bulk item reads BOTH parts, so the
+                # disambiguation preference is "any textual part" -
+                # implementation-only objects (ACTION mode, the
+                # mRecordBinSenPending class) must resolve to themselves
+                # even when a same-named node carries a declaration.
+                obj = _resolve_indexed(index, one, None)
                 for p, key in (("declaration", "declaration"),
                                ("implementation", "implementation")):
                     try:
@@ -5400,10 +5493,12 @@ def cmd_textual(project, args):
 
 def _get_application_obj(project, args):
     """The application ScriptObject (args.application name overrides the
-    first found application)."""
+    first found application). RESOLVER PASS 2026-11-12: an explicit
+    application name resolves uniquely - a bare name colliding with a
+    G-32 shadow refuses instead of found[0]."""
     app_name = str(args.get("application", "")).strip()
     if app_name:
-        return _find_one(project, app_name)
+        return _resolve_unique(project, app_name, "application lookup")
     return get_application(project)
 
 
@@ -5827,10 +5922,12 @@ def cmd_symbol_config(project, args):
 # --------------------------------------------------------------------------
 def _device_obj(project, args):
     """The device ScriptObject (args.device name overrides the first
-    device)."""
+    device). RESOLVER PASS 2026-11-12: an explicit device name resolves
+    uniquely - a bare name colliding with a same-named node refuses
+    instead of found[0] (device ops are destructive-adjacent)."""
     device_name = str(args.get("device", "")).strip()
     if device_name:
-        return _find_one(project, device_name)
+        return _resolve_unique(project, device_name, "device lookup")
     return get_device(project, "")
 
 
