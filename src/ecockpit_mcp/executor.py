@@ -4812,9 +4812,15 @@ def cmd_tree(project, args):
     ops:
       list    {name?: find-filter, recursive?: bool (default true),
                limit?: int (default 200)} -> object summaries
+      resolve {name} -> read-only name-resolution diagnostic: the
+               project.find candidates vs the get_children walk (the two
+               paths diverged on s4 methods), each with summary, tree
+               parent and create_* member profile
       rename  {name, new_name, confirm}          -> renames an object
       remove  {name, confirm}                    -> DESTRUCTIVE: deletes
       move    {name, new_parent, index?: -1, confirm} -> moves in tree
+               (re-finds the object after the move and FAILS LOUD when
+               absent - silent-loss guard, handoff #4 2026-11-12)
       folder  {parent?, new_name, confirm}       -> creates a folder
     list is read-only; everything else modifies the project and needs
     args.confirm=true.
@@ -4869,11 +4875,65 @@ def cmd_tree(project, args):
             index = int(args.get("index", -1))
         except (TypeError, ValueError):
             index = -1
+        # handoff-object-create-gaps #4 (2026-11-12): moving a METHOD into
+        # a PROGRAM parent returned moved:true and the object was then
+        # GONE from the project (find 0 hits, no error) - SILENT LOSS.
+        # The engine relocates it out of the script-addressable tree.
+        # Never trust the bare call: snapshot the identity, move, re-find.
+        was = _obj_summary(obj)
         obj.move(parent, index)
-        log("OK", "moved into {p} at {i}".format(
-            p=args.get("new_parent"), i=index))
+        still = _refind_after_move(project, str(args.get("name", "")), was)
+        if still is None:
+            raise RuntimeError(
+                "tree move SILENT LOSS GUARD: '{n}' (guid {g}) is no "
+                "longer findable after move() into '{p}' - the engine "
+                "relocated it out of the script-addressable tree. The "
+                "move was NOT undone; check the GUI (Add Object dialog "
+                "view) and remove or recreate the object there."
+                .format(n=was.get("name"), g=was.get("guid"),
+                        p=args.get("new_parent")))
+        landed = _parent_name(still)
+        log("OK", "moved into {p} at {i} (re-found: {n})".format(
+            p=args.get("new_parent"), i=index,
+            n=was.get("name")))
         return {"moved": True, "new_parent": args.get("new_parent"),
-                "index": index}
+                "index": index, "found_parent_after_move": landed,
+                "summary": _obj_summary(still)}
+
+    if op == "resolve":
+        # read-only name-resolution diagnostic. The two resolution paths
+        # DIVERGED on s4 methods (2026-11-12 push sitting: the bulk read
+        # resolved InputRuntime/mRecordBinSenPending and read its impl,
+        # while the find-based textual write resolved an object without a
+        # textual declaration - 'object 'Name=...' has no textual...'). Per
+        # candidate: summary + tree parent + create_* member profile
+        # (literal access), so a wrong-node resolution or a missing
+        # member container is visible in ONE command instead of a
+        # truncated 200-char error.
+        name = str(args.get("name", "")).strip()
+        if not name:
+            raise RuntimeError("tree resolve needs args.name")
+
+        def _row(o):
+            return {"summary": _obj_summary(o),
+                    "parent": _parent_name(o),
+                    "members": _member_profile(o)}
+
+        try:
+            found = list(_find_candidates(project, name))
+            find_error = None
+        except Exception as exc:
+            found = []
+            find_error = str(exc)
+        index = _name_index(project)
+        bare = name.rsplit("/", 1)[1].strip() if "/" in name else name
+        out = {"name": name,
+               "find": [_row(o) for o in found],
+               "walk": [_row(o) for o in index.get(bare.lower(), [])],
+               "find_error": find_error}
+        log("OK", "tree resolve '{n}': find={f} walk={w}".format(
+            n=name, f=len(out["find"]), w=len(out["walk"])))
+        return out
 
     if op == "folder":
         if not args.get("confirm"):
@@ -4911,6 +4971,117 @@ def _iecc_container(project, parent_name):
         return get_application(project)
     except Exception:
         return project
+
+
+_CREATE_MEMBERS = ("create_pou", "create_gvl", "create_dut",
+                   "create_interface", "create_method", "create_property",
+                   "create_action", "create_transition", "create_folder")
+
+
+def _member_profile(obj):
+    """Which create_* members one tree object exposes.
+
+    Probed by LITERAL attribute access inside try/except - getattr() is
+    unreliable on the interop wrappers (G-01/G-02, same reason _obj_attr
+    exists), and a bare read binds the method without calling it.
+    Exposed members map to True; members that raise AttributeError are
+    absent from the dict; any other exception maps to the error string.
+    """
+    out = {}
+    for attr in _CREATE_MEMBERS:
+        try:
+            if attr == "create_pou":
+                obj.create_pou
+            elif attr == "create_gvl":
+                obj.create_gvl
+            elif attr == "create_dut":
+                obj.create_dut
+            elif attr == "create_interface":
+                obj.create_interface
+            elif attr == "create_method":
+                obj.create_method
+            elif attr == "create_property":
+                obj.create_property
+            elif attr == "create_action":
+                obj.create_action
+            elif attr == "create_transition":
+                obj.create_transition
+            elif attr == "create_folder":
+                obj.create_folder
+            else:
+                continue
+            out[attr] = True
+        except AttributeError:
+            pass
+        except Exception as exc:
+            out[attr] = str(exc)
+    return out
+
+
+def _member_container(project, parent_name, needed):
+    """Container for the member-container create_* calls (method/property/
+    action/transition - ScriptIecLanguageMemberContainer stub, 3.5.9.0).
+
+    Probes every find-hit for the parent name and returns the first one
+    that actually exposes *needed*. Rationale (2026-11-12 session,
+    handoff-program-method-gap): a PROGRAM name can resolve to more than
+    one tree object and found[0] need not be the hit carrying the member
+    container - the same wrong-node class the textual write path hit
+    (task-configuration program instances share the POU's name). The bare
+    AttributeError from found[0] (finding A) is replaced by this
+    disambiguation; a clear verdict when NO candidate exposes the member.
+    """
+    if parent_name:
+        candidates = list(_find_candidates(project, parent_name))
+    else:
+        try:
+            candidates = [get_application(project)]
+        except Exception:
+            candidates = [project]
+    probed = []
+    for cand in candidates:
+        profile = _member_profile(cand)
+        probed.append({"name": _short_name(cand),
+                       "parent": _parent_name(cand),
+                       "exposes_" + needed: profile.get(needed, False)})
+        if profile.get(needed) is True:
+            return cand
+    raise RuntimeError(
+        "object_create: no candidate for parent '{p}' exposes {m} "
+        "(probed {n} object(s): {detail}). The ScriptLib stub declares "
+        "{m} on ScriptIecLanguageMemberContainer ('available on POUs, "
+        "Interfaces, GVLs, and folders below them'), but methods and "
+        "actions cannot be added to GVLs or Functions - and if the "
+        "parent is a PROGRAM whose every candidate lacks the member, "
+        "creation is GUI-only in this build (Add Object dialog)."
+        .format(p=parent_name or "<application>", m=needed, n=len(probed),
+                detail="; ".join(
+                    "{k}->{v}".format(k=c["name"], v=c["exposes_" + needed])
+                    for c in probed)))
+
+
+def _refind_after_move(project, name, was):
+    """Re-find a moved object by name after tree op=move.
+
+    Identity is the pre-move guid when it was readable; without a guid
+    any name hit is accepted (guarded - never a bare AttributeError).
+    Returns the object or None; cmd_tree move turns None into a loud
+    RuntimeError (silent data loss, handoff-object-create-gaps #4).
+    """
+    try:
+        hits = list(project.find(name, True) or [])
+    except Exception:
+        return None
+    want = was.get("guid")
+    if want:
+        for o in hits:
+            try:
+                if str(o.guid) == want:
+                    return o
+            except Exception:
+                pass
+        return None
+    return hits[0] if hits else None
 
 
 _SPECIAL_POU_TYPES = ("check_bounds", "check_pointer",
@@ -5046,6 +5217,16 @@ def cmd_object_create(project, args):
         if not parent_name:
             raise RuntimeError("object_create {k} needs args.parent (the "
                                "POU to attach to)".format(k=kind))
+        # handoff-program-method-gap finding A (2026-11-12): found[0] for a
+        # PROGRAM parent raised the bare AttributeError
+        # "'ScriptObject' object has no attribute 'create_method'" - the
+        # first find hit need not be the object carrying the member
+        # container. Resolve by probing every candidate for the member
+        # (literal access) and fail with a verdict when none has it.
+        needed = {"method": "create_method", "property": "create_property",
+                  "action": "create_action",
+                  "transition": "create_transition"}[kind]
+        container = _member_container(project, parent_name, needed)
         if kind == "method":
             created = container.create_method(
                 name, return_type=args.get("return_type") or None)

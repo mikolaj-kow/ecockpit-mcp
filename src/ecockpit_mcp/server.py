@@ -1603,9 +1603,9 @@ def ecockpit_tree(
     confirm: bool = False,
     timeout_s: int = 120,
 ) -> str:
-    if op not in ("list", "rename", "remove", "move", "folder"):
-        raise ToolError("op must be list|rename|remove|move|folder")
-    if op != "list" and not confirm:
+    if op not in ("list", "resolve", "rename", "remove", "move", "folder"):
+        raise ToolError("op must be list|resolve|rename|remove|move|folder")
+    if op not in ("list", "resolve") and not confirm:
         return json.dumps(
             {
                 "ok": False,
@@ -1626,7 +1626,7 @@ def ecockpit_tree(
     if op == "list":
         args["recursive"] = bool(recursive)
         args["limit"] = int(limit)
-    if op != "list":
+    if op not in ("list", "resolve"):
         args["confirm"] = True
     return json.dumps(_run("tree", args, timeout_s), indent=2)
 

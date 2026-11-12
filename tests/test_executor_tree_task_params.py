@@ -613,8 +613,11 @@ def test_server_tree_arg_passthrough_and_validation(monkeypatch):
     }
     srv.ecockpit_tree(op="remove", name="Pou_Main", confirm=True)
     assert captured["args"] == {"op": "remove", "name": "Pou_Main", "confirm": True}
-    with pytest.raises(ToolError, match="list\\|rename"):
+    with pytest.raises(ToolError, match="list\\|resolve"):
         srv.ecockpit_tree(op="explode")
+    # resolve rides the read-only path (no confirm gate, like list)
+    srv.ecockpit_tree(op="resolve", name="InputRuntime/mX")
+    assert captured["args"] == {"op": "resolve", "name": "InputRuntime/mX"}
 
 
 def test_server_task_create_arg_passthrough(monkeypatch):
