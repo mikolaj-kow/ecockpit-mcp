@@ -2390,6 +2390,60 @@ def test_tree_remove_ambiguous_name_refused():
         )
 
 
+def test_tree_remove_resolves_via_root_walk_when_find_blind():
+    # 2026-11-12 live smoke (scratch project): the saved s4_3.13.2.ecp
+    # carries wreck objects (zT0/zT1/zT2, broken old-enum text) that
+    # project.find CANNOT see but the root get_children walk lists -
+    # 501-error build cascade (C136 ambiguous eEntitySubType). A find-
+    # locked resolver cannot remove them; _resolve_unique falls back to
+    # the root walk before refusing.
+    wreck = _FakeTreeObj("zT0", guid="g-zt0")
+
+    class FindBlindProject(object):
+        """find returns nothing (the wreck is outside its coverage);
+        the root walk sees it."""
+
+        def find(self, name, recursive):
+            return []
+
+        def get_children(self, recursive=True):
+            return [wreck]
+
+    removed = []
+    wreck.remove = lambda: removed.append(True)
+    out = ex.cmd_tree(
+        FindBlindProject(), {"op": "remove", "name": "zT0", "confirm": True}
+    )
+    assert out["removed"] is True
+    assert out["was"]["guid"] == "g-zt0"
+    assert removed == [True]
+
+    # multiple root-walk hits still refuse (never an implicit pick)
+    w1 = _FakeTreeObj("zT0", guid="g-a")
+    w2 = _FakeTreeObj("zT0", guid="g-b")
+
+    class TwoWreckProject(object):
+        def find(self, name, recursive):
+            return []
+
+        def get_children(self, recursive=True):
+            return [w1, w2]
+
+    with pytest.raises(RuntimeError, match="root walk"):
+        ex.cmd_tree(TwoWreckProject(), {"op": "remove", "name": "zT0", "confirm": True})
+
+    # neither source sees it -> the honest no-object error
+    class EmptyProject(object):
+        def find(self, name, recursive):
+            return []
+
+        def get_children(self, recursive=True):
+            return []
+
+    with pytest.raises(RuntimeError, match="find and the root walk both miss"):
+        ex.cmd_tree(EmptyProject(), {"op": "remove", "name": "zT0", "confirm": True})
+
+
 def test_tree_rename_refuses_ambiguity_and_verifies():
     # Resolver pass 2026-11-12: rename resolves UNIQUELY (found[0] would
     # rename the G-32 shadow under a bare name) and re-finds the object
