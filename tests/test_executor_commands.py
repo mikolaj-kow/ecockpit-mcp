@@ -2120,6 +2120,35 @@ class _FakeTreeObj(object):
         return self._parent
 
 
+class _FakeTextualObj(_FakeTreeObj):
+    """Tree object with textual parts: decl/impl text or None (absent)."""
+
+    def __init__(self, name, guid, decl=None, impl=None, parent=None):
+        _FakeTreeObj.__init__(self, name, guid=guid, parent=parent)
+        self._decl = decl
+        self._impl = impl
+
+    @property
+    def has_textual_declaration(self):
+        return self._decl is not None
+
+    @property
+    def has_textual_implementation(self):
+        return self._impl is not None
+
+    @property
+    def textual_declaration(self):
+        if self._decl is None:
+            raise RuntimeError("has no textual declaration")
+        return types.SimpleNamespace(text=self._decl)
+
+    @property
+    def textual_implementation(self):
+        if self._impl is None:
+            raise RuntimeError("has no textual implementation")
+        return types.SimpleNamespace(text=self._impl)
+
+
 class _FakeMethodPou(object):
     """Tree candidate that DOES expose create_method (the real POU)."""
 
@@ -2613,6 +2642,45 @@ def test_tree_resolve_find_walk_divergence():
     assert all(
         "members" in r and "repr_markers" in r for r in out["find"] + out["walk"]
     )
+
+
+def test_textual_bulk_echoes_part_flags():
+    # loader-echo (2026-11-12 push sitting): the bulk read must carry
+    # has_textual_declaration/implementation per item so the loader can
+    # skip writes for parts the object does not have (implementation-only
+    # objects, the ACTION mode - the sitting's decl writes failed exactly
+    # there and the 200-char truncation hid the reason).
+    impl_only = _FakeTextualObj("mBinSenDrain", "g-impl", impl="IMPL TEXT")
+    full = _FakeTextualObj("mFull", "g-full", decl="DECL TEXT", impl="IMPL2")
+    app = _FakeTreeObj("Application", guid="g-app", children=[impl_only, full])
+
+    class BulkProject(object):
+        def find(self, name, recursive):
+            if name == "Application":
+                return [app]
+            return []
+
+    out = ex.cmd_textual(
+        BulkProject(), {"op": "read", "name": "mBinSenDrain,mFull,nope"}
+    )
+    items = {i["name"]: i for i in out["objects"]}
+    # impl-only: decl flag False (its decl read error is expected data),
+    # impl text present
+    d = items["mBinSenDrain"]
+    assert d["has_textual_declaration"] is False
+    assert d["has_textual_implementation"] is True
+    assert d["implementation"] == "IMPL TEXT"
+    # full method: both flags True, both parts read
+    f = items["mFull"]
+    assert f["has_textual_declaration"] is True
+    assert f["has_textual_implementation"] is True
+    assert f["declaration"] == "DECL TEXT"
+    assert f["implementation"] == "IMPL2"
+    # unresolved object: flags stay None, error set
+    n = items["nope"]
+    assert n["has_textual_declaration"] is None
+    assert n["has_textual_implementation"] is None
+    assert n["error"]
 
 
 def test_repr_markers_classify_tree_objects():

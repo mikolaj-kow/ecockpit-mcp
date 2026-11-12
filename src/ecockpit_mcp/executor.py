@@ -5434,7 +5434,9 @@ def cmd_textual(project, args):
         index = _name_index(project)  # one tree walk serves the whole batch
         for one in [n.strip() for n in raw.split(",") if n.strip()]:
             item = {"name": one, "declaration": None,
-                    "implementation": None, "error": None}
+                    "implementation": None,
+                    "has_textual_declaration": None,
+                    "has_textual_implementation": None, "error": None}
             try:
                 # want_decl=None: the bulk item reads BOTH parts, so the
                 # disambiguation preference is "any textual part" -
@@ -5442,6 +5444,17 @@ def cmd_textual(project, args):
                 # mRecordBinSenPending class) must resolve to themselves
                 # even when a same-named node carries a declaration.
                 obj = _resolve_indexed(index, one, None)
+                # loader-echo (2026-11-12 push sitting): the part flags ride
+                # along so the loader skips writes for parts the object does
+                # not have - the sitting's decl writes failed exactly on
+                # implementation-only objects and the 200-char truncation
+                # hid the reason from the log.
+                for flag in ("has_textual_declaration",
+                             "has_textual_implementation"):
+                    try:
+                        item[flag] = _obj_attr(obj, flag)
+                    except Exception:
+                        pass
                 for p, key in (("declaration", "declaration"),
                                ("implementation", "implementation")):
                     try:
