@@ -2030,6 +2030,65 @@ def test_object_create_dut_kind(monkeypatch):
         )
 
 
+def test_object_create_function_requires_return_type(monkeypatch):
+    # handoff-object-create-gaps review note, 2026-11-12 push sitting:
+    # create_pou(type=Function) WITHOUT return_type throws the opaque
+    # .NET ValueError "Specified argument was out of the range of valid
+    # values" (fMqttPublishResult/fFindEntity) - fail loud instead.
+    class FakePouType(object):
+        Program = 1
+        FunctionBlock = 2
+        Function = 3
+
+    app = FakeSpecialContainer()
+
+    class RootProject(object):
+        def find(self, name, recursive):
+            return [app]
+
+    monkeypatch.setattr(ex, "PouType", FakePouType)
+    monkeypatch.setattr(ex, "get_application", lambda project: app)
+
+    # missing and whitespace-only return_type both refuse
+    with pytest.raises(RuntimeError, match="needs return_type"):
+        ex.cmd_object_create(
+            RootProject(),
+            {"kind": "pou", "pou_type": "function", "name": "fX", "confirm": True},
+        )
+    with pytest.raises(RuntimeError, match="needs return_type"):
+        ex.cmd_object_create(
+            RootProject(),
+            {
+                "kind": "pou",
+                "pou_type": "function",
+                "name": "fX",
+                "return_type": "   ",
+                "confirm": True,
+            },
+        )
+
+    # with return_type the create proceeds and the value lands on create_pou
+    out = ex.cmd_object_create(
+        RootProject(),
+        {
+            "kind": "pou",
+            "pou_type": "function",
+            "name": "fOK",
+            "return_type": "BOOL",
+            "confirm": True,
+        },
+    )
+    assert app.calls[-1][1]["return_type"] == "BOOL"
+    assert out["kind"] == "pou"
+
+    # non-function pou types do NOT need return_type (backward compatible)
+    ex.cmd_object_create(
+        RootProject(),
+        {"kind": "pou", "pou_type": "functionblock", "name": "fbX", "confirm": True},
+    )
+    assert app.calls[-1][1]["type"] == 2  # FakePouType.FunctionBlock
+
+
 # ---------------------------------------------------------------------------
 # PLC connection sidecar (_note_plc + the _online_connect hook)
 # ---------------------------------------------------------------------------
