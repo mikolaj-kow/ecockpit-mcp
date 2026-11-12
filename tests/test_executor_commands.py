@@ -2287,8 +2287,10 @@ def test_tree_move_silent_loss_guard():
         proj2.hits = [obj2]
 
     obj2.move = move_qualified
-    proj2.hits = [obj2, _FakeTreeObj("Prog", guid="g-prog2",
-                                     parent=_FakeTreeObj("Application"))]
+    proj2.hits = [
+        obj2,
+        _FakeTreeObj("Prog", guid="g-prog2", parent=_FakeTreeObj("Application")),
+    ]
     obj2.move = move_qualified
     out2 = ex.cmd_tree(
         proj2,
