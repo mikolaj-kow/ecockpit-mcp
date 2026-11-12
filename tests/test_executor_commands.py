@@ -2090,6 +2090,337 @@ def test_object_create_function_requires_return_type(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Member container resolution + tree move silent-loss guard
+# (handoff-program-method-gap-2026-11-12, findings A + B)
+# ---------------------------------------------------------------------------
+
+
+class _FakeTreeObj(object):
+    """Minimal ScriptObject fake: name, guid, optional parent/children."""
+
+    def __init__(self, name, guid="g", parent=None, children=None):
+        self._name = name
+        self.guid = guid
+        self._parent = parent
+        self._children = children if children is not None else []
+
+    def __str__(self):
+        return "ScriptObject{Name=%s}" % self._name
+
+    def get_name(self):
+        return self._name
+
+    def get_children(self, recursive=False):
+        return list(self._children)
+
+    @property
+    def parent(self):
+        if self._parent is None:
+            raise AttributeError("no parent")
+        return self._parent
+
+
+class _FakeMethodPou(object):
+    """Tree candidate that DOES expose create_method (the real POU)."""
+
+    def __init__(self, name, guid):
+        self._name = name
+        self.guid = guid
+        self.method_calls = []
+
+    def __str__(self):
+        return "ScriptObject{Name=%s}" % self._name
+
+    def get_name(self):
+        return self._name
+
+    def create_method(self, name, return_type=None, language=None):
+        self.method_calls.append((name, return_type))
+        return "created-marker"
+
+
+def test_object_create_method_container_prefers_member():
+    # Finding A (handoff-program-method-gap-2026-11-12): a PROGRAM parent
+    # name resolved to found[0] - the task-config binding node - which has
+    # NO create_method, so the call died with a bare AttributeError while
+    # the real POU hit carries the member container. The create must land
+    # on the candidate that actually exposes the member.
+    pou = _FakeMethodPou("MyProg", "g-pou")
+    binding = _FakeTreeObj("MyProg", guid="g-bind")
+
+    class FindOrderProject(object):
+        def find(self, name, recursive):
+            return [binding, pou]  # binding FIRST - the observed s4 order
+
+    out = ex.cmd_object_create(
+        FindOrderProject(),
+        {
+            "kind": "method",
+            "name": "mNew",
+            "parent": "MyProg",
+            "return_type": "BOOL",
+            "confirm": True,
+        },
+    )
+    assert pou.method_calls == [("mNew", "BOOL")]
+    assert out["created"] == "mNew"
+
+    # single candidate WITH the member (plain FB case) still works
+    fb = _FakeMethodPou("MyFb", "g-fb")
+
+    class SingleProject(object):
+        def find(self, name, recursive):
+            return [fb]
+
+    ex.cmd_object_create(
+        SingleProject(),
+        {"kind": "method", "name": "mX", "parent": "MyFb", "confirm": True},
+    )
+    assert fb.method_calls == [("mX", None)]
+
+
+def test_object_create_method_no_container_clear_error():
+    # Finding A verdict path: NO candidate exposes create_method (GVL or
+    # Function parent, or a program-typed class without the mixin) - the
+    # error must name the member and what was probed, not the bare
+    # AttributeError.
+    a = _FakeTreeObj("MyGvl", guid="g1")
+    b = _FakeTreeObj("MyGvl", guid="g2")
+
+    class FindProject(object):
+        def find(self, name, recursive):
+            return [a, b]
+
+    with pytest.raises(
+        RuntimeError, match="no candidate for parent 'MyGvl' exposes create_method"
+    ):
+        ex.cmd_object_create(
+            FindProject(),
+            {"kind": "method", "name": "mX", "parent": "MyGvl", "confirm": True},
+        )
+
+
+def test_tree_move_silent_loss_guard():
+    # Finding B (handoff-object-create-gaps #4): tree op=move returned
+    # moved:true and the object was then GONE (find 0 hits) - the guard
+    # must re-find and fail loud.
+    obj = _FakeTreeObj("mX", guid="g-obj")
+    parent = _FakeTreeObj("Prog", guid="g-p")
+    proj_moves = []
+
+    class FakeProject(object):
+        def __init__(self, hits):
+            self.hits = hits
+
+        def find(self, name, recursive):
+            # honor the name filter like the real project.find
+            return [h for h in self.hits if h.get_name() == name]
+
+    def do_move(new_parent, new_index=-1):
+        proj_moves.append((new_parent, new_index))
+
+    # loss: find comes back EMPTY after the move -> RuntimeError
+    proj = FakeProject([obj, parent])
+
+    def move_and_lose(new_parent, new_index=-1):
+        do_move(new_parent, new_index)
+        proj.hits = []  # the engine relocates it out of the findable tree
+
+    proj.hits = [obj, parent]
+    obj.move = move_and_lose
+    with pytest.raises(RuntimeError, match="SILENT LOSS GUARD"):
+        ex.cmd_tree(
+            proj,
+            {"op": "move", "name": "mX", "new_parent": "Prog", "confirm": True},
+        )
+    assert proj_moves  # the move WAS attempted; the guard does not undo it
+
+    # guid mismatch (a DIFFERENT object answered the name) -> also loud
+    twin = _FakeTreeObj("mX", guid="g-other")
+
+    def move_and_swap(new_parent, new_index=-1):
+        do_move(new_parent, new_index)
+        proj.hits = [twin]  # only an impostor with a different guid
+
+    proj.hits = [obj, parent]
+    obj.move = move_and_swap
+    with pytest.raises(RuntimeError, match="SILENT LOSS GUARD"):
+        ex.cmd_tree(
+            proj,
+            {"op": "move", "name": "mX", "new_parent": "Prog", "confirm": True},
+        )
+
+    # success: the same guid is still findable -> moved:true + re-found
+    def move_ok(new_parent, new_index=-1):
+        do_move(new_parent, new_index)
+        proj.hits = [obj]  # guid match survives
+
+    proj.hits = [obj, parent]
+    obj.move = move_ok
+    out = ex.cmd_tree(
+        proj,
+        {"op": "move", "name": "mX", "new_parent": "Prog", "confirm": True},
+    )
+    assert out["moved"] is True
+    assert out["summary"]["guid"] == "g-obj"
+
+    # qualified source path + successful move: the guard re-finds by the
+    # BARE name (2026-11-12 repro: 'fbBinSenDetect/mCtlFb2' survived its
+    # move into 'Application/MqttSendQueue' but a path-form re-find would
+    # miss it -> false positive)
+    fb1 = _FakeTreeObj("Fb1", guid="g-fb1")
+    obj2 = _FakeTreeObj("mX", guid="g-obj2", parent=fb1)
+
+    class QualifiedProject(object):
+        def __init__(self, hits):
+            self.hits = hits
+
+        def find(self, name, recursive):
+            return [h for h in self.hits if h.get_name() == name]
+
+    proj2 = QualifiedProject([obj2])
+    moved_to = []
+
+    def move_qualified(new_parent, new_index=-1):
+        moved_to.append(new_parent)
+        obj2._parent = new_parent  # the move re-parents (object passed in)
+        proj2.hits = [obj2]
+
+    obj2.move = move_qualified
+    proj2.hits = [obj2, _FakeTreeObj("Prog", guid="g-prog2",
+                                     parent=_FakeTreeObj("Application"))]
+    obj2.move = move_qualified
+    out2 = ex.cmd_tree(
+        proj2,
+        {
+            "op": "move",
+            "name": "Fb1/mX",
+            "new_parent": "Application/Prog",
+            "confirm": True,
+        },
+    )
+    assert out2["moved"] is True
+    assert out2["summary"]["guid"] == "g-obj2"
+
+
+def test_tree_move_ambiguous_names_refused():
+    # 2026-11-12 repro: found[0] for a bare name is the non-POU structural
+    # node (s4 tree carries same-named shadows under domain nodes) and
+    # moving INTO it silently destroyed the object. Destructive ops must
+    # refuse ambiguous names instead of picking found[0].
+    shadow = _FakeTreeObj("Prog", guid="g-shadow", parent=_FakeTreeObj("Lights"))
+    pou = _FakeTreeObj("Prog", guid="g-pou", parent=_FakeTreeObj("Application"))
+    obj = _FakeTreeObj("mX", guid="g-obj")
+
+    def move_never(new_parent, new_index=-1):
+        raise AssertionError("move must not be attempted on ambiguity")
+
+    obj.move = move_never
+
+    class AmbiguousProject(object):
+        def find(self, name, recursive):
+            if name == "mX":
+                return [obj]
+            return [shadow, pou]  # bare 'Prog' -> 2 candidates
+
+    with pytest.raises(RuntimeError, match="move \\(new_parent\\) REFUSED"):
+        ex.cmd_tree(
+            AmbiguousProject(),
+            {"op": "move", "name": "mX", "new_parent": "Prog", "confirm": True},
+        )
+
+    # an ambiguous SOURCE name refuses the same way
+    class AmbiguousSourceProject(object):
+        def find(self, name, recursive):
+            if name == "mX":
+                return [obj, _FakeTreeObj("mX", guid="g-twin")]
+            return [pou]
+
+    with pytest.raises(RuntimeError, match="move \\(source\\) REFUSED"):
+        ex.cmd_tree(
+            AmbiguousSourceProject(),
+            {
+                "op": "move",
+                "name": "mX",
+                "new_parent": "Application/Prog",
+                "confirm": True,
+            },
+        )
+
+    # the parent-qualified target form disambiguates and proceeds
+    class QualifiedOnlyProject(object):
+        def find(self, name, recursive):
+            if name == "mX":
+                return [obj]
+            return [pou]  # 'Prog' resolves to the real POU only
+
+    def move_record(new_parent, new_index=-1):
+        obj._parent = new_parent  # the move re-parents (object passed in)
+
+    obj.move = move_record
+    out = ex.cmd_tree(
+        QualifiedOnlyProject(),
+        {
+            "op": "move",
+            "name": "mX",
+            "new_parent": "Application/Prog",
+            "confirm": True,
+        },
+    )
+    assert out["moved"] is True
+
+
+def test_tree_remove_ambiguous_name_refused():
+    a = _FakeTreeObj("Pou_Main", guid="g1")
+    b = _FakeTreeObj("Pou_Main", guid="g2")
+
+    class AmbiguousProject(object):
+        def find(self, name, recursive):
+            return [a, b]
+
+    def remove_never():
+        raise AssertionError("remove must not be attempted on ambiguity")
+
+    a.remove = remove_never  # noqa: B010 - fake object
+    with pytest.raises(RuntimeError, match="remove REFUSED"):
+        ex.cmd_tree(
+            AmbiguousProject(), {"op": "remove", "name": "Pou_Main", "confirm": True}
+        )
+
+
+def test_tree_resolve_find_walk_divergence():
+    # 2026-11-12 push sitting: the bulk read (walk index) resolved
+    # InputRuntime/mRecordBinSenPending while the find-based write path
+    # resolved an object WITHOUT textual declaration - the resolve op must
+    # show both candidate lists side by side.
+    real = _FakeTreeObj("mX", guid="g-real")
+    shadow = _FakeTreeObj("mX", guid="g-shadow")
+    app = _FakeTreeObj("Application", guid="g-app", children=[real])
+
+    class DivergentProject(object):
+        def find(self, name, recursive):
+            if name == "Application":
+                return [app]
+            return [shadow]  # find sees the shadow, the walk sees the real one
+
+    out = ex.cmd_tree(DivergentProject(), {"op": "resolve", "name": "mX"})
+    assert out["find_error"] is None
+    assert [r["summary"]["guid"] for r in out["find"]] == ["g-shadow"]
+    assert [r["summary"]["guid"] for r in out["walk"]] == ["g-real"]
+    # member profiles are present per candidate (literal-access probes)
+    assert all("members" in r for r in out["find"] + out["walk"])
+
+    # missing object -> find_error carries the full message (no truncation)
+    class EmptyProject(object):
+        def find(self, name, recursive):
+            return []
+
+    out = ex.cmd_tree(EmptyProject(), {"op": "resolve", "name": "nope"})
+    assert "no object named" in (out["find_error"] or "")
+    assert out["find"] == []
+
+
+# ---------------------------------------------------------------------------
 # PLC connection sidecar (_note_plc + the _online_connect hook)
 # ---------------------------------------------------------------------------
 

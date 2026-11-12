@@ -42,6 +42,11 @@ Evidence: `s4/main/tmp/push-sitting.log`, `s4/main/tmp/push-fix.log`,
 ## OPEN (to implement / research)
 
 ### 3. METHOD creation under a PROGRAM parent is impossible via object_create
+- **RESOLVED 2026-11-12 — see the VERDICT in
+  `handoff-program-method-gap-2026-11-12.md`: creation was never
+  GUI-only; `found[0]` resolved to a same-named non-POU structural
+  node (G-32). Fixed via member-container probing; live-verified on a
+  program parent (create + textual write + build 0E/0W).**
 - `object_create kind=method parent=<PROGRAM>` →
   `AttributeError: 'ScriptObject' object has no attribute 'create_method'`
   (executor.py ~5010: container = the found program ScriptObject; FB
@@ -55,6 +60,14 @@ Evidence: `s4/main/tmp/push-sitting.log`, `s4/main/tmp/push-fix.log`,
 - Repro: any `object_create kind=method parent=<PROGRAM>`.
 
 ### 4. `tree op=move` of a METHOD into a PROGRAM parent: moved:true, object LOST
+- **ROOT-CAUSED + GUARDED 2026-11-12 — see the VERDICT in
+  `handoff-program-method-gap-2026-11-12.md` (G-32): the loss happens
+  when the move TARGET resolves to a same-named non-POU structural
+  node (find returns it first); moving into it silently destroys the
+  object (engine-level, reproduced 3x incl. folder + real FB target).
+  Moves into the real POUs work end-to-end (method -> program POU
+  verified live). Destructive tree ops now refuse ambiguous names;
+  move re-finds by bare name + guid ("SILENT LOSS GUARD").**
 - Created a method under an FB, `tree op=move new_parent=<PROGRAM>` returned
   `moved: true` — then the object is GONE from the project entirely
   (find 0, no parent candidate, no error). **Silent data loss** — at minimum

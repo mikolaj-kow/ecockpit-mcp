@@ -6,6 +6,62 @@ Follow-up on `handoff-object-create-gaps-2026-11-12.md` findings **#3** and
 session to root-cause both, because they are the same underlying question:
 **can a PROGRAM own a script-visible method?**
 
+## VERDICT (2026-11-12 exploration session — both findings ROOT-CAUSED and FIXED)
+
+**One shared root cause: the s4/e!COCKPIT tree carries same-named non-POU
+"structural" nodes beside the real POUs, and `project.find` returns them
+FIRST.** Examples (live probed): `InputRuntime` the node under the domain
+node `Lights` AND the program POU under `Application`;
+`MqttSendQueue` under `MqttPub` AND the FB; `EntitiesConfig` under
+`Config` AND the POU. The structural nodes carry no `is_*` marker, no
+textual parts and expose only `create_folder`. Everything that resolved
+through `_find_one` → `found[0]` picked the shadow:
+
+- **Finding A — SOLVED, not GUI-only.** The AttributeError came from the
+  shadow node, NOT from the program: the real program POU exposes the
+  full member container (`create_method/create_action/create_property/
+  create_transition` — probed live). The stub's "methods will be
+  available on POUs" holds literally; only GVLs/Functions are excluded
+  for methods/actions. FIX (executor `_member_container`): member kinds
+  probe every candidate for the member by literal access and create on
+  the candidate that has it. **LIVE-VERIFIED**: `object_create kind=method
+  parent=InputRuntime` → mReproA created under the program POU, textual
+  declaration written and read back, full build **0E/0W**.
+- **Finding B — engine-level SILENT LOSS on shadow targets; refuse +
+  verify, now both in.** `tree op=move` resolved the target through the
+  same `found[0]`: moving ANY object (method AND folder — reproduced 3x)
+  into a structural node returned `moved:true` and the object was then
+  gone from find, the get_children walk AND the application XML export —
+  genuinely destroyed by the engine (not "moved but unaddressable").
+  Moves into the REAL POUs work end-to-end (method → program POU
+  verified live). FIX: destructive tree ops (`move` source+target,
+  `remove`) REFUSE ambiguous bare names and point at the
+  `Parent/Name` form; the move re-finds by BARE name + guid afterwards
+  and raises `SILENT LOSS GUARD` when absent; success reports
+  `found_parent_after_move`.
+- **Bonus root cause for the push-sitting textual WRITE FAILs** (two
+  `RuntimeError: object 'Nam...` truncations in
+  `s4/main/tmp/push-sitting.log`): the truncation cut exactly before the
+  payload — `object 'Name=...' has no textual declaration`. The live
+  tree shows `mRecordBinSenPending`/`mBinSenDrain`/`mSystemDrain` with
+  **has_textual_declaration=False** — implementation-only objects (the
+  documented ACTION mode), not an addressing bug: the bulk read resolved
+  the same object and its impl fine. No executor change needed; the
+  loader's write-only-drifted-parts fix (s4 repo) already skips those
+  decl writes.
+- **G-33:** `EScriptProjects` in this build has no `create`/`open`
+  (stub names) — `open_project(path)` exists, single-arg; fresh projects
+  cannot be scripted into existence (workaround: copy an .ecp + open).
+  Laddered in `cmd_project_control`.
+
+New gotchas **G-32** (shadow nodes + the loss) and **G-33** (project
+lifecycle names) in SCRIPTENGINE_GOTCHAS.md; live rows in TESTING.md;
+SCRIPTENGINE_API.md tree/ST-authoring/IScriptProject sections updated.
+Repro evidence kept: `tmp/repro-move-loss.ecp` (throwaway copy of
+s4_3.13.1 — the s4 .ecp files were NEVER opened; the GUI session's
+autosave scratch was left untouched) + `tmp/repro-export/Application.xml`
+(the post-loss export proving the objects are gone).
+
 ## Finding A (handoff #3): `object_create kind=method` under a PROGRAM parent
 
 - `object_create kind=method parent=<PROGRAM>` →
