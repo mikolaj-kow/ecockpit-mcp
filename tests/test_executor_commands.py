@@ -2390,6 +2390,206 @@ def test_tree_remove_ambiguous_name_refused():
         )
 
 
+def test_tree_rename_refuses_ambiguity_and_verifies():
+    # Resolver pass 2026-11-12: rename resolves UNIQUELY (found[0] would
+    # rename the G-32 shadow under a bare name) and re-finds the object
+    # under its NEW name with the same guid (verify-after-mutate).
+    shadow = _FakeTreeObj("Prog", guid="g-shadow", parent=_FakeTreeObj("Lights"))
+    pou = _FakeTreeObj("Prog", guid="g-pou", parent=_FakeTreeObj("Application"))
+
+    class AmbiguousProject(object):
+        def find(self, name, recursive):
+            return [shadow, pou]
+
+    with pytest.raises(RuntimeError, match="rename REFUSED"):
+        ex.cmd_tree(
+            AmbiguousProject(),
+            {"op": "rename", "name": "Prog", "new_name": "P2", "confirm": True},
+        )
+
+    obj = _FakeTreeObj("Prog", guid="g-obj")
+
+    class HitProject(object):
+        def __init__(self, hits):
+            self.hits = hits
+
+        def find(self, name, recursive):
+            return [h for h in self.hits if h.get_name() == name]
+
+    # success: re-found under the new name with the SAME guid
+    proj = HitProject([obj])
+
+    def rename_ok(new_name):
+        obj._name = new_name  # noqa: B010 - fake object
+
+    obj.rename = rename_ok
+    out = ex.cmd_tree(
+        proj, {"op": "rename", "name": "Prog", "new_name": "P2", "confirm": True}
+    )
+    assert out["renamed"] is True
+    assert out["summary"]["guid"] == "g-obj"
+    assert out["was"]["name"] == "Prog"
+
+    # verify failure: the object is not findable under the new name
+    obj2 = _FakeTreeObj("Prog", guid="g-obj2")
+    proj2 = HitProject([obj2])  # find() keeps matching the OLD name only
+
+    def rename_lost(new_name):
+        pass  # the engine 'renames' into nowhere
+
+    obj2.rename = rename_lost
+    with pytest.raises(RuntimeError, match="rename VERIFY"):
+        ex.cmd_tree(
+            proj2, {"op": "rename", "name": "Prog", "new_name": "P2", "confirm": True}
+        )
+
+
+def test_tree_remove_verifies_absence():
+    # Resolver pass 2026-11-12: remove() must be re-verified ABSENT - a
+    # same-guid object still findable after remove is a loud failure,
+    # never a silent "removed": True.
+    obj = _FakeTreeObj("Pou_Main", guid="g-1")
+
+    class HitProject(object):
+        def __init__(self, hits):
+            self.hits = hits
+
+        def find(self, name, recursive):
+            return [h for h in self.hits if h.get_name() == name]
+
+    # still findable after remove -> VERIFY failure
+    proj = HitProject([obj])
+
+    def remove_noop():
+        pass  # the engine did not delete
+
+    obj.remove = remove_noop
+    with pytest.raises(RuntimeError, match="remove VERIFY"):
+        ex.cmd_tree(proj, {"op": "remove", "name": "Pou_Main", "confirm": True})
+
+    # genuinely gone -> ok
+    obj2 = _FakeTreeObj("Pou_Main", guid="g-2")
+    proj2 = HitProject([obj2])
+
+    def remove_gone():
+        proj2.hits = []
+
+    obj2.remove = remove_gone
+    out = ex.cmd_tree(proj2, {"op": "remove", "name": "Pou_Main", "confirm": True})
+    assert out["removed"] is True
+    assert out["was"]["guid"] == "g-2"
+
+
+def test_tree_folder_parent_refuses_ambiguity():
+    # Shadows expose create_folder TOO, so member probing cannot
+    # disambiguate a folder parent - the create would land in the wrong
+    # node silently. Ambiguity refuses.
+    shadow = _FakeTreeObj("Lights", guid="g-shadow")
+    folder = _FakeTreeObj("Lights", guid="g-folder")
+
+    class AmbiguousProject(object):
+        def find(self, name, recursive):
+            return [shadow, folder]
+
+    with pytest.raises(RuntimeError, match="folder \\(parent\\) REFUSED"):
+        ex.cmd_tree(
+            AmbiguousProject(),
+            {"op": "folder", "parent": "Lights", "new_name": "F", "confirm": True},
+        )
+
+
+def test_object_create_top_level_parent_probed(monkeypatch):
+    # Resolver pass 2026-11-12: pou/gvl/dut/interface parents are probed
+    # for the create_* member they need (a G-32 shadow under a colliding
+    # name exposes none of them) - the create lands on the real container
+    # or refuses with a verdict, never found[0].
+    class _FakeTopPou(object):
+        def __init__(self, name, guid):
+            self._name = name
+            self.guid = guid
+            self.pou_calls = []
+
+        def __str__(self):
+            return "ScriptObject{Name=%s}" % self._name
+
+        def get_name(self):
+            return self._name
+
+        def create_pou(self, *argv, **kwargs):
+            self.pou_calls.append((argv, kwargs))
+            return _FakeTreeObj("created")
+
+    class FakePouType(object):
+        Program = 1
+        FunctionBlock = 2
+        Function = 3
+
+    shadow = _FakeTreeObj("MyProg", guid="g-shadow")
+    pou = _FakeTopPou("MyProg", "g-pou")
+
+    class FindOrderProject(object):
+        def find(self, name, recursive):
+            return [shadow, pou]  # shadow FIRST - the observed G-32 order
+
+    monkeypatch.setattr(ex, "PouType", FakePouType)
+    out = ex.cmd_object_create(
+        FindOrderProject(),
+        {
+            "kind": "pou",
+            "name": "fbNew",
+            "pou_type": "functionblock",
+            "parent": "MyProg",
+            "confirm": True,
+        },
+    )
+    assert pou.pou_calls and out["created"] == "fbNew"
+
+    # no candidate exposes the member -> verdict refusal
+    class ShadowOnlyProject(object):
+        def find(self, name, recursive):
+            return [_FakeTreeObj("MyGvl", guid="g1"), _FakeTreeObj("MyGvl", guid="g2")]
+
+    with pytest.raises(
+        RuntimeError, match="no candidate for parent 'MyGvl' exposes create_gvl"
+    ):
+        ex.cmd_object_create(
+            ShadowOnlyProject(),
+            {"kind": "gvl", "name": "gNew", "parent": "MyGvl", "confirm": True},
+        )
+
+
+def test_textual_refuses_all_shadow_candidates():
+    # The textual form of the G-32 trap: every hit is a shadow (no
+    # textual parts at all) - resolution must REFUSE with the candidate
+    # list instead of returning found[0] (which used to fail later with
+    # a misleading 'has no textual declaration').
+    a = _FakeTreeObj("Prog", guid="g1")
+    b = _FakeTreeObj("Prog", guid="g2")
+
+    class ShadowPairProject(object):
+        def find(self, name, recursive):
+            return [a, b]
+
+    with pytest.raises(RuntimeError, match="none carries textual parts"):
+        ex.cmd_textual(ShadowPairProject(), {"op": "read", "name": "Prog"})
+
+
+def test_named_application_or_device_refuse_ambiguity():
+    # Explicit application/device names resolve uniquely: found[0] on a
+    # colliding name could aim destructive-adjacent ops at the wrong node.
+    a = _FakeTreeObj("Target", guid="g1")
+    b = _FakeTreeObj("Target", guid="g2")
+
+    class AmbiguousProject(object):
+        def find(self, name, recursive):
+            return [a, b]
+
+    with pytest.raises(RuntimeError, match="application lookup REFUSED"):
+        ex._get_application_obj(AmbiguousProject(), {"application": "Target"})
+    with pytest.raises(RuntimeError, match="device lookup REFUSED"):
+        ex._device_obj(AmbiguousProject(), {"device": "Target"})
+
+
 def test_tree_resolve_find_walk_divergence():
     # 2026-11-12 push sitting: the bulk read (walk index) resolved
     # InputRuntime/mRecordBinSenPending while the find-based write path
