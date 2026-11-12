@@ -1662,6 +1662,7 @@ async def ecockpit_object_create(
     special_type: str = "",
     return_type: str = "",
     base_type: str = "",
+    dut_kind: str = "",
     declaration: str = "",
     implementation: str = "",
     confirm: bool = False,
@@ -1703,6 +1704,8 @@ async def ecockpit_object_create(
         args["return_type"] = return_type
     if base_type:
         args["base_type"] = base_type
+    if dut_kind:
+        args["dut_kind"] = dut_kind
     if declaration:
         args["declaration"] = declaration
     if implementation:

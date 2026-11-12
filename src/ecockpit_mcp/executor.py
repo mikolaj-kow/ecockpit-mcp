@@ -4931,6 +4931,13 @@ def cmd_object_create(project, args):
                    adding a check function FORCES A FULL RECOMPILE and
                    prohibits online change from then on - stub warning),
            "pou_type": "program"|"functionblock"|"function" (pou only),
+           "return_type": for pou_type=function and methods/properties
+                   (loader MUST pass it for functions - without it
+                   create_pou throws ValueError, G84 push sitting
+                   2026-11-12: fMqttPublishResult/fFindEntity),
+           "dut_kind": "structure"|"enumeration"|"union"|"alias"
+                   (dut only; default structure - enumeration REQUIRED
+                   for enum DUTs, G84 push sitting 2026-11-12),
            "base_type"?: (dut/interface/method return),
            "parent"?: object name (container; default the APPLICATION -
                    EScriptProject itself has no create_* live, G-22),
@@ -5001,8 +5008,25 @@ def cmd_object_create(project, args):
     elif kind == "gvl":
         created = container.create_gvl(name)
     elif kind == "dut":
+        # dut_kind (2026-11-12, G84 campaign): DutType.Structure was hardcoded,
+        # so an ENUM DUT created via object_create came out structure-kind with
+        # enum text -> C6/C368/C26/C135 cascade at compile (19 errors on
+        # eEntitySubType during the s4 push sitting). Map dut_kind explicitly;
+        # default stays Structure (backward compatible). Members probed from
+        # DutType itself so OEM API naming differences surface in the error.
+        dut_kind = str(args.get("dut_kind", "")).strip().lower() or "structure"
+        dut_kind_map = {"structure": "Structure", "enumeration": "Enumeration",
+                        "union": "Union", "alias": "Alias"}
+        member = dut_kind_map.get(dut_kind, dut_kind.capitalize())
+        if not hasattr(DutType, member):
+            known = ", ".join(sorted(n for n in dir(DutType)
+                                     if not n.startswith("_")))
+            raise RuntimeError(
+                "object_create: unknown DutType member '{m}' for dut_kind "
+                "'{k}' (DutType members: {known})".format(
+                    m=member, k=dut_kind, known=known))
         created = container.create_dut(
-            name, type=DutType.Structure,
+            name, type=getattr(DutType, member),
             baseType=args.get("base_type") or None)
     elif kind == "interface":
         created = container.create_interface(
