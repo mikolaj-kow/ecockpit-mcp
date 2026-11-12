@@ -2409,8 +2409,37 @@ def test_tree_resolve_find_walk_divergence():
     assert out["find_error"] is None
     assert [r["summary"]["guid"] for r in out["find"]] == ["g-shadow"]
     assert [r["summary"]["guid"] for r in out["walk"]] == ["g-real"]
-    # member profiles are present per candidate (literal-access probes)
-    assert all("members" in r for r in out["find"] + out["walk"])
+    # member profiles + repr interface markers are present per candidate
+    assert all(
+        "members" in r and "repr_markers" in r for r in out["find"] + out["walk"]
+    )
+
+
+def test_repr_markers_classify_tree_objects():
+    # the interop repr lists the CLR interface markers in braces - the
+    # GUI's echo of a 2026-11-12 export run showed
+    # ScriptObject{NoDeviceObject, ..., ScriptTextualDeclarationObject,
+    # ScriptIecLanguageMemberContainer, ...}(Project=115, Name=x)
+    class MarkerObj(object):
+        def __str__(self):
+            return (
+                "ScriptObject{NoDeviceObject, "
+                "ScriptTextualDeclarationObject, "
+                "ScriptIecLanguageMemberContainer}(Project=115, Name=mX)"
+            )
+
+    assert ex._repr_markers(MarkerObj()) == [
+        "NoDeviceObject",
+        "ScriptTextualDeclarationObject",
+        "ScriptIecLanguageMemberContainer",
+    ]
+    assert ex._repr_markers(object()) == []  # no brace list
+
+    class Broken(object):
+        def __str__(self):
+            raise RuntimeError("dead wrapper")
+
+    assert ex._repr_markers(Broken()) == []  # guarded
 
     # missing object -> find_error carries the full message (no truncation)
     class EmptyProject(object):

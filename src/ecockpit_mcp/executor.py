@@ -4919,7 +4919,8 @@ def cmd_tree(project, args):
         def _row(o):
             return {"summary": _obj_summary(o),
                     "parent": _parent_name(o),
-                    "members": _member_profile(o)}
+                    "members": _member_profile(o),
+                    "repr_markers": _repr_markers(o)}
 
         try:
             found = list(_find_candidates(project, name))
@@ -5020,6 +5021,33 @@ def _member_profile(obj):
     return out
 
 
+def _repr_markers(obj):
+    """Classify one tree object by its interop repr's interface flags.
+
+    str(obj) on the wrappers reads like
+    ``ScriptObject{NoDeviceObject, ..., ScriptTextualDeclarationObject,
+    ScriptIecLanguageMemberContainer, ...}(Project=115, Name=x)`` - the
+    brace list is the CLR interface marker set, and it NAMES the
+    member-container carrier (ScriptIecLanguageMemberContainer) and the
+    textual markers (ScriptTextualDeclarationObject/ImplementationObject)
+    directly (observed in the GUI's echo of the 2026-11-12 export run).
+    One guarded string read - cheaper and more explicit than probing
+    every member; _member_profile stays as the call-time ground truth.
+    Returns [] when the repr has no brace list.
+    """
+    try:
+        s = str(obj)
+    except Exception:
+        return []
+    try:
+        start = s.index("{")
+        end = s.index("}", start)
+    except ValueError:
+        return []
+    inner = s[start + 1:end]
+    return [m.strip() for m in inner.split(",") if m.strip()]
+
+
 def _member_container(project, parent_name, needed):
     """Container for the member-container create_* calls (method/property/
     action/transition - ScriptIecLanguageMemberContainer stub, 3.5.9.0).
@@ -5045,6 +5073,7 @@ def _member_container(project, parent_name, needed):
         profile = _member_profile(cand)
         probed.append({"name": _short_name(cand),
                        "parent": _parent_name(cand),
+                       "repr_markers": _repr_markers(cand),
                        "exposes_" + needed: profile.get(needed, False)})
         if profile.get(needed) is True:
             return cand
