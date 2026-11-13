@@ -1491,12 +1491,14 @@ def test_cmd_write_keeps_session_open(monkeypatch, tmp_path):
 
 
 def _stub_download_ladder(monkeypatch, via):
-    """Stub _online_connect so the fresh-ladder path records `via`."""
+    """Stub _online_connect so the fresh-ladder path records `via` and
+    the forms whitelist it was given."""
 
     class FakeDev(object):
         def __init__(self):
             self.starts = 0
             self.disconnects = 0
+            self.forms_seen = []
 
         def start(self):
             self.starts += 1
@@ -1514,6 +1516,7 @@ def _stub_download_ladder(monkeypatch, via):
     dev, app = FakeDev(), FakeApp()
 
     def fake_connect(project, args, prefer_keep=False, forms=None):
+        dev.forms_seen.append(list(forms) if forms else None)
         ex._LOGIN_CACHE["last_via"] = via
         return dev, app
 
@@ -1571,6 +1574,24 @@ def test_download_full_fresh_ladder_starts_and_logs_out(monkeypatch):
     assert dev.starts == 1
     assert dev.disconnects == 1
     assert "entry" not in ex._LOGIN_CACHE
+
+
+def test_download_full_uses_never_exclusively_and_auto_keeps_ladder(monkeypatch):
+    # 2026-11-13, owner-directed (v3.14.0 deploy): mode=full passes
+    # forms=["Never"] ONLY - the Try/Force rungs of the classic ladder
+    # attempt an online change that always fails on this PFC200 build
+    # ("no task gap within 10000 ms") and their failure modal blocks
+    # the scripting thread for the whole transfer. mode=auto keeps the
+    # classic ladder (forms=None).
+    dev, _ = _stub_download_ladder(monkeypatch, "login(OnlineChangeOption.Never)")
+    ex._LOGIN_CACHE.clear()
+    ex.cmd_download(None, {"mode": "full", "confirm": True})
+    assert dev.forms_seen == [["Never"]]
+
+    ex._LOGIN_CACHE.clear()
+    dev2, _ = _stub_download_ladder(monkeypatch, "login(OnlineChangeOption.Try)")
+    ex.cmd_download(None, {"mode": "auto", "confirm": True})
+    assert dev2.forms_seen == [None]
 
 
 def test_download_auto_starts_only_on_full_form(monkeypatch):
@@ -1817,7 +1838,48 @@ def test_login_gap_timeout_still_escalates_when_retry_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="all login forms failed"):
         ex._online_login(online, dev, engapp=EngApp())
     assert online.logins == ["Try", "Try", "Force", "Force", "Never", "Never"]
-    assert dev.connected is True
+
+
+def test_online_login_forms_never_is_exclusive(monkeypatch):
+    # 2026-11-13, owner-directed: forms=["Never"] (the mode=full ladder)
+    # attempts ONLY login(Never) - no Try/Force online-change rungs and
+    # NO device.connect() fallback (forms is not None, so the legacy
+    # fallback never appends). Never failing raises "all login forms
+    # failed" with the single attempt named.
+    class FakeOCO(object):
+        Keep = "Keep"
+        Try = "Try"
+        Force = "Force"
+        Never = "Never"
+
+    monkeypatch.setattr(ex, "OnlineChangeOption", FakeOCO)
+
+    class FakeOnlineApp(object):
+        def __init__(self, fail_times=0):
+            self.logins = []
+            self.fail_times = fail_times
+
+        def login(self, option, delete_foreign_apps):
+            self.logins.append(str(option))
+            if len(self.logins) <= self.fail_times:
+                raise RuntimeError(
+                    "Download failed: Unknown reason. Do you want to "
+                    "continue with the remaining items?"
+                )
+
+    # success: exactly one Never login
+    ok = FakeOnlineApp()
+    dev = FakeConnectDevice()
+    got = ex._online_login(ok, dev, forms=["Never"])
+    assert got == "login(OnlineChangeOption.Never)"
+    assert ok.logins == ["Never"]
+    assert dev.connected is False  # no implicit-download fallback
+
+    # Never failing -> loud refusal naming the single attempt
+    bad = FakeOnlineApp(fail_times=99)
+    with pytest.raises(RuntimeError, match="all login forms failed"):
+        ex._online_login(bad, FakeConnectDevice(), forms=["Never"])
+    assert bad.logins == ["Never"]
 
 
 def test_online_connect_refuses_out_of_sync_readonly(monkeypatch):

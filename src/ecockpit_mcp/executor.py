@@ -2704,9 +2704,13 @@ def cmd_download(project, args):
     device.start() runs ONLY when the deploy went through a FULL form
     (Never / device.connect) - after an online change the application
     is still running. The session stays OPEN.
-    mode="full" - always a fresh ladder with login(Never) (+ legacy
-    device.connect fallback), replaces the running application
-    entirely, then device.start() and logout (today's behavior).
+    mode="full" - always a fresh ladder with login(Never) EXCLUSIVELY
+    (Never forces the full download without touching online change - no
+    Try/Force rungs, no device.connect fallback: on this PFC200 build
+    the online-change rungs always fail "no task gap within 10000 ms"
+    and their failure modal blocks the scripting thread for the whole
+    transfer, 2026-11-13), replaces the running application entirely,
+    then device.start() and logout (today's behavior).
 
     Returns {"via": <form/session>, "boot": bool, "started": bool,
     "mode": mode}."""
@@ -2728,15 +2732,25 @@ def cmd_download(project, args):
         via = "kept session"
         log("INFO", "download on the KEPT session (no ladder)")
     else:
-        # Fresh ladder: full uses Never (+ legacy fallback); online
-        # uses Force strictly; auto uses the classic Try -> Force ->
-        # Never -> connect order. keep=False logs a stale kept session
-        # out first (inside _online_connect).
+        # Fresh ladder: mode="full" is login(Never) EXCLUSIVELY;
+        # mode="online" is Force strictly; mode="auto" uses the classic
+        # Try -> Force -> Never -> connect order. keep=False logs a
+        # stale kept session out first (inside _online_connect).
         dargs = dict(args)
         dargs["keep"] = False
-        device, onlineapp = _online_connect(
-            project, dargs,
-            forms=["Force"] if mode == "online" else None)
+        # Forms per mode (2026-11-13, owner-directed after the v3.14.0
+        # deploy): mode="full" is login(Never) EXCLUSIVELY. Never forces
+        # the full download without attempting an online change; the
+        # Try/Force rungs of the classic ladder only add
+        # guaranteed-failing online-change attempts on this PFC200 build
+        # ("OnlineChange failed, no task gap within 10000 ms",
+        # G-27/G-31 task-gap funnel) whose failure modal ("Download
+        # failed: Unknown reason. Do you want to continue with the
+        # remaining items?") blocks the scripting thread for the whole
+        # ~15-min transfer. The classic ladder stays for mode="auto".
+        forms = ["Force"] if mode == "online" else (
+            ["Never"] if mode == "full" else None)
+        device, onlineapp = _online_connect(project, dargs, forms=forms)
         via = str(_LOGIN_CACHE.get("last_via", ""))
     try:
         if boot:
