@@ -1,8 +1,11 @@
 # Semgrep Community Edition (no SEMGREP_APP_TOKEN, no semgrep.dev account).
-# Advisory: `semgrep scan` exits 0 on findings unless --error is passed, so
-# this job never blocks a PR. Results land in Security -> Code scanning via
-# SARIF upload (free for public repos). To turn it into a hard gate later,
-# append --error to the scan command (triage what's on main first).
+# Blocking gate: `--error` fails the job on any finding. Triaged exceptions
+# belong inline as `# nosemgrep[: rule-id]` with a rationale comment. The
+# SARIF upload still runs on scan failure (!cancelled below), so findings
+# always land in Security -> Code scanning. nosemgrep-suppressed findings
+# DO land in the SARIF (marked with the `suppressions` field), but GitHub
+# ignores that field and imports them as alerts - the filter step drops
+# them pre-upload.
 # Actions are SHA-pinned (full 40-char commit) to satisfy the scanner's own
 # `github-actions-mutable-action-tag` rule; bump by editing the SHA.
 # Schedules, cron and the container image follow the official CE sample:
@@ -42,13 +45,15 @@ jobs:
     steps:
       # Fetch project source with GitHub Actions Checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Text output goes to the job log; a SARIF copy goes to the dashboard.
-      - name: Semgrep CE scan (advisory)
-        run: semgrep scan --config auto --sarif-output=semgrep.sarif
+      # Findings fail the job (--error); the SARIF copy still lands in the
+      # dashboard via the !cancelled() steps below.
+      - name: Semgrep CE scan (blocking gate)
+        run: semgrep scan --config auto --error --sarif-output=semgrep.sarif
       # nosemgrep-suppressed findings DO land in the SARIF (marked with the
       # `suppressions` field), but GitHub ignores that field and imports them
       # as alerts - drop them before upload.
       - name: Drop suppressed findings from SARIF
+        if: ${{ !cancelled() }}
         run: |
           python3 - <<'PY'
           import json
@@ -62,6 +67,7 @@ jobs:
               json.dump(sarif, fh)
           PY
       - name: Upload SARIF to code scanning
+        if: ${{ !cancelled() }}
         uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v3
         with:
           sarif_file: semgrep.sarif
