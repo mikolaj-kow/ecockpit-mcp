@@ -7,3 +7,7 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Semgrep (dependabot-missing-cooldown): wait 7 days before proposing
+    # newly published package versions - fresh releases can be malicious.
+    cooldown:
+      default-days: 7
