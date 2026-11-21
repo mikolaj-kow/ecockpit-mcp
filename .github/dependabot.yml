@@ -1,0 +1,9 @@
+# Keeps the SHA-pinned workflow actions fresh: Dependabot re-pins
+# @<40-char-sha> whenever the tag in the trailing comment (# vX) moves.
+# The semgrep job skips dependabot[bot] PRs; lint/type/build/docs run on them.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
