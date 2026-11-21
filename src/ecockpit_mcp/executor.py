@@ -1933,7 +1933,9 @@ def _export_reporter_base():
     plain base for offline import (the factory is never CALLED offline).
     """
     for name in ("ExportReporter", "IExportReporter"):
-        candidate = globals().get(name)
+        # name iterates a literal tuple - a static lookup of engine-injected
+        # interface names, no external data reaches globals().
+        candidate = globals().get(name)  # nosemgrep: python.lang.security.dangerous-globals-use.dangerous-globals-use
         if candidate is not None:
             return candidate
     return object
@@ -7057,8 +7059,11 @@ def _projects_global():
     e_projects; the stubs document `projects`. Resolve whichever
     exists."""
     for name in ("e_projects", "projects"):
-        if name in globals() and globals()[name] is not None:
-            return globals()[name]
+        # name iterates a literal tuple - the engine injects these globals
+        # into the ScriptEngine namespace, so globals() is the only way to
+        # resolve them; no external data reaches globals().
+        if name in globals() and globals()[name] is not None:  # nosemgrep: python.lang.security.dangerous-globals-use.dangerous-globals-use
+            return globals()[name]  # nosemgrep: python.lang.security.dangerous-globals-use.dangerous-globals-use
     raise RuntimeError("projects root unavailable outside e!COCKPIT")
 
 

@@ -279,13 +279,16 @@ def _dispatch(request, counter):
     log_file = None
     try:
         # Re-exec the executor so live edits apply without re-arming.
+        # Trust boundary: EXEC_SCRIPT is this package's own file, never
+        # client input - MCP requests only carry the cmd string, so the
+        # nosemgrep marks deliberate hot-reload design, not an injection path.
         os.environ["ECP_NO_RUN"] = "1"
         # Tell the executor BEFORE the exec (resolve_config runs at the
         # executor's module level) that the open-primary fallback is
         # deliberate - INFO instead of a warning on every command.
         globals()["RELAY_DISPATCH"] = True
         with open(EXEC_SCRIPT, "r") as _bf:
-            exec(_bf.read(), globals())
+            exec(_bf.read(), globals())  # nosemgrep: python.lang.security.audit.exec-detected.exec-detected
         # Reuse THIS already-open primary project, never a discovered .ecp.
         globals()["PROJECT_FILE"] = ""
         # The executor owns the real log path (REPO_LOG_DIR) - adopt it.
