@@ -45,6 +45,22 @@ jobs:
       # Text output goes to the job log; a SARIF copy goes to the dashboard.
       - name: Semgrep CE scan (advisory)
         run: semgrep scan --config auto --sarif-output=semgrep.sarif
+      # nosemgrep-suppressed findings DO land in the SARIF (marked with the
+      # `suppressions` field), but GitHub ignores that field and imports them
+      # as alerts - drop them before upload.
+      - name: Drop suppressed findings from SARIF
+        run: |
+          python3 - <<'PY'
+          import json
+          with open("semgrep.sarif") as fh:
+              sarif = json.load(fh)
+          for run in sarif.get("runs", []):
+              run["results"] = [
+                  r for r in run.get("results", []) if not r.get("suppressions")
+              ]
+          with open("semgrep.sarif", "w") as fh:
+              json.dump(sarif, fh)
+          PY
       - name: Upload SARIF to code scanning
         uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3
         with:

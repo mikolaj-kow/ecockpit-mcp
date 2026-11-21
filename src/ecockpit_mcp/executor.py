@@ -1932,12 +1932,18 @@ def _export_reporter_base():
     type name. Fall back across both names for robustness, then to a
     plain base for offline import (the factory is never CALLED offline).
     """
-    for name in ("ExportReporter", "IExportReporter"):
-        # name iterates a literal tuple - a static lookup of engine-injected
-        # interface names, no external data reaches globals().
-        candidate = globals().get(name)  # nosemgrep: python.lang.security.dangerous-globals-use.dangerous-globals-use
-        if candidate is not None:
-            return candidate
+    # Bare-name probes of engine-injected script globals (no globals()
+    # indexing): a None stand-in falls through, NameError = never injected.
+    try:
+        if ExportReporter is not None:
+            return ExportReporter
+    except NameError:
+        pass
+    try:
+        if IExportReporter is not None:
+            return IExportReporter
+    except NameError:
+        pass
     return object
 
 
@@ -7056,14 +7062,19 @@ def cmd_app_control(project, args):
 
 def _projects_global():
     """The projects root (IScriptProjects): this live build injects
-    e_projects; the stubs document `projects`. Resolve whichever
-    exists."""
-    for name in ("e_projects", "projects"):
-        # name iterates a literal tuple - the engine injects these globals
-        # into the ScriptEngine namespace, so globals() is the only way to
-        # resolve them; no external data reaches globals().
-        if name in globals() and globals()[name] is not None:  # nosemgrep: python.lang.security.dangerous-globals-use.dangerous-globals-use
-            return globals()[name]  # nosemgrep: python.lang.security.dangerous-globals-use.dangerous-globals-use
+    e_projects; the stubs document `projects`. Probe both as bare
+    names (engine-injected script globals; a None stand-in falls
+    through, NameError = never injected)."""
+    try:
+        if e_projects is not None:
+            return e_projects
+    except NameError:
+        pass
+    try:
+        if projects is not None:
+            return projects
+    except NameError:
+        pass
     raise RuntimeError("projects root unavailable outside e!COCKPIT")
 
 
